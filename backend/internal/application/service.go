@@ -844,8 +844,11 @@ func (as *applicationService) DeleteApplication(ctx context.Context, appID strin
 func (as *applicationService) validateAuthFlowID(
 	ctx context.Context, app *model.ApplicationDTO) *serviceerror.ServiceError {
 	if app.AuthFlowID != "" {
-		isValidFlow := as.flowMgtService.IsValidFlow(ctx, app.AuthFlowID)
-		if !isValidFlow {
+		valid, svcErr := as.flowMgtService.IsValidFlow(ctx, app.AuthFlowID, flowcommon.FlowTypeAuthentication)
+		if svcErr != nil {
+			return svcErr
+		}
+		if !valid {
 			return &ErrorInvalidAuthFlowID
 		}
 	} else {
@@ -866,8 +869,11 @@ func (as *applicationService) validateRegistrationFlowID(
 	logger := log.GetLogger().With(log.String(log.LoggerKeyComponentName, "ApplicationService"))
 
 	if app.RegistrationFlowID != "" {
-		isValidFlow := as.flowMgtService.IsValidFlow(ctx, app.RegistrationFlowID)
-		if !isValidFlow {
+		valid, svcErr := as.flowMgtService.IsValidFlow(ctx, app.RegistrationFlowID, flowcommon.FlowTypeRegistration)
+		if svcErr != nil {
+			return svcErr
+		}
+		if !valid {
 			return &ErrorInvalidRegistrationFlowID
 		}
 	} else {

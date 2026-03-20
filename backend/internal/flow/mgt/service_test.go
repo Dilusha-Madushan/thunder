@@ -992,33 +992,94 @@ func (s *FlowMgtServiceTestSuite) TestGetGraph_StoreError() {
 
 // IsValidFlow tests
 
-func (s *FlowMgtServiceTestSuite) TestIsValidFlow_Success() {
-	s.mockStore.EXPECT().IsFlowExists(mock.Anything, testFlowIDService).Return(true, nil)
+func (s *FlowMgtServiceTestSuite) TestIsValidFlow_ExistenceOnly_Success() {
+	expectedFlow := &CompleteFlowDefinition{
+		ID:       testFlowIDService,
+		FlowType: common.FlowTypeAuthentication,
+	}
+	s.mockStore.EXPECT().GetFlowByID(mock.Anything, testFlowIDService).Return(expectedFlow, nil)
 
-	result := s.service.IsValidFlow(context.Background(), testFlowIDService)
+	result, err := s.service.IsValidFlow(context.Background(), testFlowIDService)
 
+	s.Nil(err)
 	s.True(result)
 }
 
-func (s *FlowMgtServiceTestSuite) TestIsValidFlow_NotFound() {
-	s.mockStore.EXPECT().IsFlowExists(mock.Anything, testFlowIDService).Return(false, nil)
+func (s *FlowMgtServiceTestSuite) TestIsValidFlow_ExistenceOnly_NotFound() {
+	s.mockStore.EXPECT().GetFlowByID(mock.Anything, testFlowIDService).Return(nil, errFlowNotFound)
 
-	result := s.service.IsValidFlow(context.Background(), testFlowIDService)
+	result, err := s.service.IsValidFlow(context.Background(), testFlowIDService)
 
+	s.Nil(err)
 	s.False(result)
 }
 
 func (s *FlowMgtServiceTestSuite) TestIsValidFlow_EmptyID() {
-	result := s.service.IsValidFlow(context.Background(), "")
+	result, err := s.service.IsValidFlow(context.Background(), "")
 
+	s.Nil(err)
 	s.False(result)
 }
 
-func (s *FlowMgtServiceTestSuite) TestIsValidFlow_StoreError() {
-	s.mockStore.EXPECT().IsFlowExists(mock.Anything, testFlowIDService).Return(false, errors.New("db error"))
+func (s *FlowMgtServiceTestSuite) TestIsValidFlow_ExistenceOnly_StoreError() {
+	s.mockStore.EXPECT().GetFlowByID(mock.Anything, testFlowIDService).Return(nil, errors.New("db error"))
 
-	result := s.service.IsValidFlow(context.Background(), testFlowIDService)
+	result, svcErr := s.service.IsValidFlow(context.Background(), testFlowIDService)
 
+	s.NotNil(svcErr)
+	s.Equal(serviceerror.ServerErrorType, svcErr.Type)
+	s.False(result)
+}
+
+func (s *FlowMgtServiceTestSuite) TestIsValidFlow_WithType_Success() {
+	expectedFlow := &CompleteFlowDefinition{
+		ID:       testFlowIDService,
+		FlowType: common.FlowTypeAuthentication,
+	}
+	s.mockStore.EXPECT().GetFlowByID(mock.Anything, testFlowIDService).Return(expectedFlow, nil)
+
+	result, err := s.service.IsValidFlow(context.Background(), testFlowIDService, common.FlowTypeAuthentication)
+
+	s.Nil(err)
+	s.True(result)
+}
+
+func (s *FlowMgtServiceTestSuite) TestIsValidFlow_WithType_TypeMismatch() {
+	expectedFlow := &CompleteFlowDefinition{
+		ID:       testFlowIDService,
+		FlowType: common.FlowTypeAuthentication,
+	}
+	s.mockStore.EXPECT().GetFlowByID(mock.Anything, testFlowIDService).Return(expectedFlow, nil)
+
+	result, err := s.service.IsValidFlow(context.Background(), testFlowIDService, common.FlowTypeRegistration)
+
+	s.Nil(err)
+	s.False(result)
+}
+
+func (s *FlowMgtServiceTestSuite) TestIsValidFlow_WithType_EmptyID() {
+	result, err := s.service.IsValidFlow(context.Background(), "", common.FlowTypeAuthentication)
+
+	s.Nil(err)
+	s.False(result)
+}
+
+func (s *FlowMgtServiceTestSuite) TestIsValidFlow_WithType_NotFound() {
+	s.mockStore.EXPECT().GetFlowByID(mock.Anything, testFlowIDService).Return(nil, errFlowNotFound)
+
+	result, err := s.service.IsValidFlow(context.Background(), testFlowIDService, common.FlowTypeAuthentication)
+
+	s.Nil(err)
+	s.False(result)
+}
+
+func (s *FlowMgtServiceTestSuite) TestIsValidFlow_WithType_StoreError() {
+	s.mockStore.EXPECT().GetFlowByID(mock.Anything, testFlowIDService).Return(nil, errors.New("db error"))
+
+	result, svcErr := s.service.IsValidFlow(context.Background(), testFlowIDService, common.FlowTypeAuthentication)
+
+	s.NotNil(svcErr)
+	s.Equal(serviceerror.ServerErrorType, svcErr.Type)
 	s.False(result)
 }
 

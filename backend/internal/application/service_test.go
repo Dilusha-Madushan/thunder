@@ -729,7 +729,9 @@ func (suite *ServiceTestSuite) TestValidateAuthFlowID_WithValidFlowID() {
 		AuthFlowID: "auth-flow-123",
 	}
 
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-123").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-123", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
 
 	svcErr := service.validateAuthFlowID(context.Background(), app)
 
@@ -744,12 +746,48 @@ func (suite *ServiceTestSuite) TestValidateAuthFlowID_WithInvalidFlowID() {
 		AuthFlowID: "invalid-flow",
 	}
 
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "invalid-flow").Return(false)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "invalid-flow", flowcommon.FlowTypeAuthentication).
+		Return(false, nil)
 
 	svcErr := service.validateAuthFlowID(context.Background(), app)
 
 	assert.NotNil(suite.T(), svcErr)
 	assert.Equal(suite.T(), &ErrorInvalidAuthFlowID, svcErr)
+}
+
+func (suite *ServiceTestSuite) TestValidateAuthFlowID_WithRegistrationFlowType() {
+	service, _, _, mockFlowMgtService := suite.setupTestService()
+
+	app := &model.ApplicationDTO{
+		AuthFlowID: "reg-flow-123",
+	}
+
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-123", flowcommon.FlowTypeAuthentication).
+		Return(false, nil)
+
+	svcErr := service.validateAuthFlowID(context.Background(), app)
+
+	assert.NotNil(suite.T(), svcErr)
+	assert.Equal(suite.T(), &ErrorInvalidAuthFlowID, svcErr)
+}
+
+func (suite *ServiceTestSuite) TestValidateAuthFlowID_StoreError() {
+	service, _, _, mockFlowMgtService := suite.setupTestService()
+
+	app := &model.ApplicationDTO{
+		AuthFlowID: "auth-flow-123",
+	}
+
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-123", flowcommon.FlowTypeAuthentication).
+		Return(false, &serviceerror.InternalServerError)
+
+	svcErr := service.validateAuthFlowID(context.Background(), app)
+
+	assert.NotNil(suite.T(), svcErr)
+	assert.Equal(suite.T(), serviceerror.ServerErrorType, svcErr.Type)
 }
 
 func (suite *ServiceTestSuite) TestValidateAuthFlowID_WithEmptyFlowID_SetsDefault() {
@@ -815,7 +853,9 @@ func (suite *ServiceTestSuite) TestValidateRegistrationFlowID_WithValidFlowID() 
 		RegistrationFlowID: "reg-flow-123",
 	}
 
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-123").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-123", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	svcErr := service.validateRegistrationFlowID(context.Background(), app)
 
@@ -830,12 +870,48 @@ func (suite *ServiceTestSuite) TestValidateRegistrationFlowID_WithInvalidFlowID(
 		RegistrationFlowID: "invalid-reg-flow",
 	}
 
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "invalid-reg-flow").Return(false)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "invalid-reg-flow", flowcommon.FlowTypeRegistration).
+		Return(false, nil)
 
 	svcErr := service.validateRegistrationFlowID(context.Background(), app)
 
 	assert.NotNil(suite.T(), svcErr)
 	assert.Equal(suite.T(), &ErrorInvalidRegistrationFlowID, svcErr)
+}
+
+func (suite *ServiceTestSuite) TestValidateRegistrationFlowID_WithAuthenticationFlowType() {
+	service, _, _, mockFlowMgtService := suite.setupTestService()
+
+	app := &model.ApplicationDTO{
+		RegistrationFlowID: "auth-flow-123",
+	}
+
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-123", flowcommon.FlowTypeRegistration).
+		Return(false, nil)
+
+	svcErr := service.validateRegistrationFlowID(context.Background(), app)
+
+	assert.NotNil(suite.T(), svcErr)
+	assert.Equal(suite.T(), &ErrorInvalidRegistrationFlowID, svcErr)
+}
+
+func (suite *ServiceTestSuite) TestValidateRegistrationFlowID_StoreError() {
+	service, _, _, mockFlowMgtService := suite.setupTestService()
+
+	app := &model.ApplicationDTO{
+		RegistrationFlowID: "reg-flow-123",
+	}
+
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-123", flowcommon.FlowTypeRegistration).
+		Return(false, &serviceerror.InternalServerError)
+
+	svcErr := service.validateRegistrationFlowID(context.Background(), app)
+
+	assert.NotNil(suite.T(), svcErr)
+	assert.Equal(suite.T(), serviceerror.ServerErrorType, svcErr.Type)
 }
 
 func (suite *ServiceTestSuite) TestValidateRegistrationFlowID_WithEmptyFlowID_InfersFromAuthFlow() {
@@ -1669,7 +1745,9 @@ func (suite *ServiceTestSuite) TestValidateApplicationForUpdate_FieldValidationE
 
 			mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 			mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-			mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "valid-auth-flow-id").Return(true)
+			mockFlowMgtService.EXPECT().
+				IsValidFlow(mock.Anything, "valid-auth-flow-id", flowcommon.FlowTypeAuthentication).
+				Return(true, nil)
 			mockFlowMgtService.EXPECT().GetFlow(mock.Anything, "valid-auth-flow-id").Return(
 				&flowmgt.CompleteFlowDefinition{
 					ID:     "valid-auth-flow-id",
@@ -1738,7 +1816,6 @@ func (suite *ServiceTestSuite) TestValidateApplicationForUpdate_Success() {
 	mockFlowMgtService.EXPECT().GetFlow(mock.Anything, "default-flow-id-123").Return(defaultFlow, nil)
 	mockFlowMgtService.EXPECT().GetFlowByHandle(mock.Anything, "default_auth_flow", flowcommon.FlowTypeRegistration).
 		Return(defaultRegFlow, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, mock.Anything).Return(true).Maybe()
 
 	result, inboundAuth, svcErr := service.validateApplicationForUpdate(context.Background(), testServiceAppID, app)
 
@@ -3077,7 +3154,9 @@ func (suite *ServiceTestSuite) TestValidateApplication_InvalidURL() {
 	}
 
 	mockStore.On("GetApplicationByName", mock.Anything, "Test App").Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
 	mockFlowMgtService.EXPECT().GetFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b").Return(
 		&flowmgt.CompleteFlowDefinition{
 			ID:     "edc013d0-e893-4dc0-990c-3e1d203e005b",
@@ -3090,7 +3169,6 @@ func (suite *ServiceTestSuite) TestValidateApplication_InvalidURL() {
 			ID:     "reg_flow_basic",
 			Handle: "basic_auth",
 		}, nil).Maybe()
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, mock.Anything).Return(true).Maybe()
 
 	result, inboundAuth, svcErr := service.ValidateApplication(context.Background(), app)
 
@@ -3121,7 +3199,9 @@ func (suite *ServiceTestSuite) TestValidateApplication_InvalidLogoURL() {
 	}
 
 	mockStore.On("GetApplicationByName", mock.Anything, "Test App").Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
 	mockFlowMgtService.EXPECT().GetFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b").Return(
 		&flowmgt.CompleteFlowDefinition{
 			ID:     "edc013d0-e893-4dc0-990c-3e1d203e005b",
@@ -3134,7 +3214,6 @@ func (suite *ServiceTestSuite) TestValidateApplication_InvalidLogoURL() {
 			ID:     "reg_flow_basic",
 			Handle: "basic_auth",
 		}, nil).Maybe()
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, mock.Anything).Return(true).Maybe()
 
 	result, inboundAuth, svcErr := service.ValidateApplication(context.Background(), app)
 
@@ -3180,8 +3259,12 @@ func (suite *ServiceTestSuite) runCreateApplicationStoreErrorTest() {
 	}
 
 	mockStore.On("GetApplicationByName", mock.Anything, "Test App").Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 	mockCertService.EXPECT().CreateCertificate(mock.Anything, mock.Anything).
 		Return(&cert.Certificate{Type: "JWKS"}, nil)
 	mockStore.On("CreateApplication", mock.MatchedBy(isTxCtx), mock.Anything).Return(errors.New("store error"))
@@ -3316,7 +3399,6 @@ func (suite *ServiceTestSuite) TestUpdateApplication_StoreErrorWhenCheckingClien
 	mockFlowMgtService.EXPECT().GetFlow(mock.Anything, "default-flow-id-123").Return(defaultFlow, nil)
 	mockFlowMgtService.EXPECT().GetFlowByHandle(mock.Anything, "default_auth_flow", flowcommon.FlowTypeRegistration).
 		Return(defaultRegFlow, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, mock.Anything).Return(true).Maybe()
 	// Return an error that's not ApplicationNotFoundError when checking client ID
 	mockStore.On("GetOAuthApplication", mock.Anything, "new-client-id").
 		Return(nil, errors.New("database connection error"))
@@ -3362,8 +3444,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_StoreErrorWithRollback() {
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 	mockCertService.EXPECT().
 		GetCertificateByReference(mock.Anything, cert.CertificateReferenceTypeApplication, testServiceAppID).
 		Return(nil, &cert.ErrorCertificateNotFound)
@@ -3772,7 +3858,9 @@ func (suite *ServiceTestSuite) TestValidateRegistrationFlowID_NoPrefix() {
 	}
 
 	mockStore.On("GetApplicationByName", mock.Anything, "Test App").Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "invalid_flow_id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "invalid_flow_id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
 	mockFlowMgtService.EXPECT().GetFlow(mock.Anything, "invalid_flow_id").Return(&flowmgt.CompleteFlowDefinition{
 		ID:     "invalid_flow_id",
 		Handle: "test_flow",
@@ -3965,10 +4053,14 @@ func (suite *ServiceTestSuite) TestCreateApplication_CertificateValidationError(
 
 	mockStore.On("GetApplicationByName", mock.Anything, "Test App").Return(nil, model.ApplicationNotFoundError)
 	app.AuthFlowID = "auth-flow-id"
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
 
 	app.RegistrationFlowID = "reg-flow-id"
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	result, svcErr := service.CreateApplication(context.Background(), app)
 
@@ -4004,8 +4096,12 @@ func (suite *ServiceTestSuite) TestCreateApplication_CertificateCreationError() 
 	mockFlowMgtService := service.flowMgtService.(*flowmgtmock.FlowMgtServiceInterfaceMock)
 
 	mockStore.On("GetApplicationByName", mock.Anything, "Test App").Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	svcErrExpected := &serviceerror.ServiceError{Type: serviceerror.ServerErrorType}
 	mockCertService.EXPECT().CreateCertificate(mock.Anything, mock.Anything).Return(nil, svcErrExpected)
@@ -4058,8 +4154,12 @@ func (suite *ServiceTestSuite) TestCreateApplication_WithOAuthCertificate_Succes
 	mockStore.On("GetApplicationByName", mock.Anything, "Test OAuth Cert App").
 		Return(nil, model.ApplicationNotFoundError)
 	mockStore.On("GetOAuthApplication", mock.Anything, testClientID).Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	// App certificate creation (nil app cert -> none type returned)
 	mockCertService.EXPECT().CreateCertificate(mock.Anything, mock.MatchedBy(func(c *cert.Certificate) bool {
@@ -4122,8 +4222,12 @@ func (suite *ServiceTestSuite) TestCreateApplication_OAuthCertificateValidationE
 	mockStore.On("GetApplicationByName", mock.Anything, "Test OAuth Cert App").
 		Return(nil, model.ApplicationNotFoundError)
 	mockStore.On("GetOAuthApplication", mock.Anything, testClientID).Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	result, svcErr := service.CreateApplication(context.Background(), app)
 
@@ -4173,8 +4277,12 @@ func (suite *ServiceTestSuite) TestCreateApplication_OAuthCertificateCreationErr
 	mockStore.On("GetApplicationByName", mock.Anything, "Test OAuth Cert App").
 		Return(nil, model.ApplicationNotFoundError)
 	mockStore.On("GetOAuthApplication", mock.Anything, testClientID).Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	svcErrExpected := &serviceerror.ServiceError{Type: serviceerror.ServerErrorType}
 	mockCertService.EXPECT().CreateCertificate(mock.Anything, mock.Anything).Return(nil, svcErrExpected)
@@ -4227,8 +4335,12 @@ func (suite *ServiceTestSuite) TestCreateApplication_StoreErrorWithOAuthCertRoll
 	mockStore.On("GetApplicationByName", mock.Anything, "Test OAuth Cert App").
 		Return(nil, model.ApplicationNotFoundError)
 	mockStore.On("GetOAuthApplication", mock.Anything, testClientID).Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	// OAuth cert creation succeeds
 	mockCertService.EXPECT().CreateCertificate(mock.Anything, mock.Anything).
@@ -4289,8 +4401,12 @@ func (suite *ServiceTestSuite) TestCreateApplication_StoreErrorWithBothAppAndOAu
 	mockStore.On("GetApplicationByName", mock.Anything, "Test App With Both Certs").
 		Return(nil, model.ApplicationNotFoundError)
 	mockStore.On("GetOAuthApplication", mock.Anything, testClientID).Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	// Both app cert and OAuth cert creation succeed
 	mockCertService.EXPECT().CreateCertificate(mock.Anything, mock.MatchedBy(func(c *cert.Certificate) bool {
@@ -4410,8 +4526,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_MetadataUpdate() {
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "default-auth-flow").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "default-reg-flow").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "default-auth-flow", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "default-reg-flow", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 	// Mock certificate service to return no certificate (nil, nil)
 	mockCertService.On("GetCertificateByReference", mock.Anything, cert.CertificateReferenceTypeApplication,
 		testServiceAppID).Return(nil, nil)
@@ -4476,8 +4596,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_AppCertificateUpdateError()
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 	// GetCertificateByReference returns a server error → updateApplicationCertificate fails
 	mockCertService.EXPECT().
 		GetCertificateByReference(mock.Anything, cert.CertificateReferenceTypeApplication, testServiceAppID).
@@ -4775,8 +4899,12 @@ func (suite *ServiceTestSuite) runCreateApplicationConsentSyncFailsTest() {
 	// IsEnabled is called in validateConsentConfig and again before sync.
 	mockConsentService.On("IsEnabled").Return(true)
 	mockStore.On("GetApplicationByName", mock.Anything, "Consent App").Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 	mockStore.On("CreateApplication", mock.MatchedBy(isTxCtx), mock.Anything).Return(nil)
 	// Consent sync fails: ValidateConsentElements returns an I18n error.
 	mockConsentService.On("ValidateConsentElements", mock.Anything, "default", mock.Anything).
@@ -4814,8 +4942,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_ConsentEnabled_LoginConsent
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, "app123").Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, "app123").Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 	mockCertService.EXPECT().
 		GetCertificateByReference(mock.Anything, cert.CertificateReferenceTypeApplication, "app123").
 		Return(nil, nil)
@@ -4862,8 +4994,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_ConsentSyncFails_Compensate
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, "app123").Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, "app123").Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 	mockCertService.EXPECT().
 		GetCertificateByReference(mock.Anything, cert.CertificateReferenceTypeApplication, "app123").
 		Return(nil, nil)
@@ -4907,8 +5043,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_ConsentServiceDisabled_Skip
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, "app123").Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, "app123").Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 	mockCertService.EXPECT().
 		GetCertificateByReference(mock.Anything, cert.CertificateReferenceTypeApplication, "app123").
 		Return(nil, nil)
@@ -4954,8 +5094,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_StoreFails_RollbackCertFail
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, "app123").Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, "app123").Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 	// updateApplicationCertificate: get existing cert, then delete it (no new cert in app)
 	mockCertService.EXPECT().
 		GetCertificateByReference(mock.Anything, cert.CertificateReferenceTypeApplication, "app123").
@@ -5007,8 +5151,12 @@ func (suite *ServiceTestSuite) TestCreateApplication_ConsentSyncFails_WithCert_C
 	mockConsentService.On("IsEnabled").Return(true)
 	mockStore.On("GetApplicationByName", mock.Anything, "Consent App With Cert").
 		Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "edc013d0-e893-4dc0-990c-3e1d203e005b", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "80024fb3-29ed-4c33-aa48-8aee5e96d522", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 	// Certificate is created successfully during app creation
 	mockCertService.EXPECT().
 		CreateCertificate(mock.Anything, mock.Anything).
@@ -5138,8 +5286,12 @@ func (suite *ServiceTestSuite) runCreateApplicationOAuthCertValidationErrorTest(
 	mockStore.On("GetApplicationByName", mock.Anything, "Test App With Cert").
 		Return(nil, model.ApplicationNotFoundError)
 	mockStore.On("GetOAuthApplication", mock.Anything, testClientID).Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	result, svcErr := service.CreateApplication(context.Background(), app)
 
@@ -5193,8 +5345,12 @@ func (suite *ServiceTestSuite) TestCreateApplication_OAuthCertCreationError_With
 	mockStore.On("GetApplicationByName", mock.Anything, "Test App With Cert").
 		Return(nil, model.ApplicationNotFoundError)
 	mockStore.On("GetOAuthApplication", mock.Anything, testClientID).Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	// App cert creation succeeds
 	mockCertService.EXPECT().CreateCertificate(mock.Anything, mock.MatchedBy(func(c *cert.Certificate) bool {
@@ -5259,8 +5415,12 @@ func (suite *ServiceTestSuite) TestCreateApplication_OAuthCertCreationError_With
 	mockStore.On("GetApplicationByName", mock.Anything, "Test App With Cert").
 		Return(nil, model.ApplicationNotFoundError)
 	mockStore.On("GetOAuthApplication", mock.Anything, testClientID).Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	// App cert creation succeeds
 	mockCertService.EXPECT().CreateCertificate(mock.Anything, mock.MatchedBy(func(c *cert.Certificate) bool {
@@ -5340,8 +5500,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_WithOAuthConfig_Success() {
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
 	mockStore.On("GetApplicationByName", mock.Anything, "Test App Updated").Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	// Mock certificate service for app cert
 	mockCertService.EXPECT().
@@ -5419,8 +5583,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_AddOAuthConfig_Success() {
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 	mockStore.On("GetOAuthApplication", mock.Anything, "new-client-id").Return(nil, model.ApplicationNotFoundError)
 
 	// Mock certificate service for app cert
@@ -5507,8 +5675,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_UpdateOAuthClientID_Success
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 	mockStore.On("GetOAuthApplication", mock.Anything, "new-client-id").Return(nil, model.ApplicationNotFoundError)
 
 	// Mock certificate service for app cert
@@ -5598,8 +5770,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_WithOAuthCertificate_Succes
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	// Mock certificate service for app cert
 	mockCertService.EXPECT().
@@ -5700,8 +5876,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_UpdateOAuthCertificate_Succ
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	// Mock certificate service for app cert
 	mockCertService.EXPECT().
@@ -5802,8 +5982,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_OAuthClientIDConflict() {
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	// Mock that another app already has this client ID
 	conflictingOAuthApp := &model.OAuthAppConfigProcessedDTO{
@@ -5874,8 +6058,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_OAuthInvalidRedirectURI() {
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	result, svcErr := service.UpdateApplication(context.Background(), testServiceAppID, updatedApp)
 
@@ -5944,8 +6132,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_OAuthCertUpdateError() {
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	// Mock certificate service for app cert
 	mockCertService.EXPECT().
@@ -6031,8 +6223,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_OAuthStoreErrorWithRollback
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	// Mock certificate service for app cert
 	mockCertService.EXPECT().
@@ -6139,8 +6335,12 @@ func (suite *ServiceTestSuite) TestUpdateApplication_OAuthTokenConfigUpdate() {
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "reg-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(true, nil)
 
 	// Mock certificate service for app cert
 	mockCertService.EXPECT().
@@ -6284,7 +6484,9 @@ func (suite *ServiceTestSuite) TestValidateApplication_ErrorFromValidateAuthFlow
 	}
 
 	mockStore.On("GetApplicationByName", mock.Anything, "Test App").Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "invalid-flow-id").Return(false)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "invalid-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(false, nil)
 
 	result, inboundAuth, svcErr := service.ValidateApplication(context.Background(), app)
 
@@ -6316,8 +6518,12 @@ func (suite *ServiceTestSuite) TestValidateApplication_ErrorFromValidateRegistra
 	}
 
 	mockStore.On("GetApplicationByName", mock.Anything, "Test App").Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "valid-auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "invalid-reg-flow-id").Return(false)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "valid-auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "invalid-reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(false, nil)
 
 	result, inboundAuth, svcErr := service.ValidateApplication(context.Background(), app)
 
@@ -6392,7 +6598,9 @@ func (suite *ServiceTestSuite) TestValidateApplication_ErrorFromValidateDesignID
 			}
 
 			mockStore.On("GetApplicationByName", mock.Anything, "Test App").Return(nil, model.ApplicationNotFoundError)
-			mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "valid-auth-flow-id").Return(true)
+			mockFlowMgtService.EXPECT().
+				IsValidFlow(mock.Anything, "valid-auth-flow-id", flowcommon.FlowTypeAuthentication).
+				Return(true, nil)
 			mockFlowMgtService.EXPECT().GetFlow(mock.Anything, "valid-auth-flow-id").
 				Return(&flowmgt.CompleteFlowDefinition{
 					ID:     "valid-auth-flow-id",
@@ -6449,7 +6657,9 @@ func (suite *ServiceTestSuite) TestValidateApplication_ErrorFromValidateAllowedU
 	}
 
 	mockStore.On("GetApplicationByName", mock.Anything, "Test App").Return(nil, model.ApplicationNotFoundError)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "valid-auth-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "valid-auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
 	mockFlowMgtService.EXPECT().GetFlow(mock.Anything, "valid-auth-flow-id").Return(&flowmgt.CompleteFlowDefinition{
 		ID:     "valid-auth-flow-id",
 		Handle: "basic_auth",
@@ -6503,7 +6713,9 @@ func (suite *ServiceTestSuite) TestValidateApplicationForUpdate_ErrorFromValidat
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "invalid-flow-id").Return(false)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "invalid-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(false, nil)
 
 	result, inboundAuth, svcErr := service.validateApplicationForUpdate(context.Background(), testServiceAppID, app)
 
@@ -6541,8 +6753,12 @@ func (suite *ServiceTestSuite) TestValidateApplicationForUpdate_ErrorFromValidat
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "valid-auth-flow-id").Return(true)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "invalid-reg-flow-id").Return(false)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "valid-auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "invalid-reg-flow-id", flowcommon.FlowTypeRegistration).
+		Return(false, nil)
 
 	result, inboundAuth, svcErr := service.validateApplicationForUpdate(context.Background(), testServiceAppID, app)
 
@@ -6595,7 +6811,9 @@ func (suite *ServiceTestSuite) TestValidateApplicationForUpdate_ErrorFromValidat
 
 	mockStore.On("IsApplicationDeclarative", mock.Anything, testServiceAppID).Return(false)
 	mockStore.On("GetApplicationByID", mock.Anything, testServiceAppID).Return(existingApp, nil)
-	mockFlowMgtService.EXPECT().IsValidFlow(mock.Anything, "valid-auth-flow-id").Return(true)
+	mockFlowMgtService.EXPECT().
+		IsValidFlow(mock.Anything, "valid-auth-flow-id", flowcommon.FlowTypeAuthentication).
+		Return(true, nil)
 	mockFlowMgtService.EXPECT().GetFlow(mock.Anything, "valid-auth-flow-id").Return(&flowmgt.CompleteFlowDefinition{
 		ID:     "valid-auth-flow-id",
 		Handle: "basic_auth",

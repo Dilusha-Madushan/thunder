@@ -462,20 +462,39 @@ func (_c *FlowMgtServiceInterfaceMock_GetGraph_Call) RunAndReturn(run func(ctx c
 }
 
 // IsValidFlow provides a mock function for the type FlowMgtServiceInterfaceMock
-func (_mock *FlowMgtServiceInterfaceMock) IsValidFlow(ctx context.Context, flowID string) bool {
-	ret := _mock.Called(ctx, flowID)
+func (_mock *FlowMgtServiceInterfaceMock) IsValidFlow(ctx context.Context, flowID string, flowType ...common.FlowType) (bool, *serviceerror.ServiceError) {
+	// common.FlowType
+	_va := make([]interface{}, len(flowType))
+	for _i := range flowType {
+		_va[_i] = flowType[_i]
+	}
+	var _ca []interface{}
+	_ca = append(_ca, ctx, flowID)
+	_ca = append(_ca, _va...)
+	ret := _mock.Called(_ca...)
 
 	if len(ret) == 0 {
 		panic("no return value specified for IsValidFlow")
 	}
 
 	var r0 bool
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) bool); ok {
-		r0 = returnFunc(ctx, flowID)
+	var r1 *serviceerror.ServiceError
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, ...common.FlowType) (bool, *serviceerror.ServiceError)); ok {
+		return returnFunc(ctx, flowID, flowType...)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, ...common.FlowType) bool); ok {
+		r0 = returnFunc(ctx, flowID, flowType...)
 	} else {
 		r0 = ret.Get(0).(bool)
 	}
-	return r0
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, ...common.FlowType) *serviceerror.ServiceError); ok {
+		r1 = returnFunc(ctx, flowID, flowType...)
+	} else {
+		if ret.Get(1) != nil {
+			r1 = ret.Get(1).(*serviceerror.ServiceError)
+		}
+	}
+	return r0, r1
 }
 
 // FlowMgtServiceInterfaceMock_IsValidFlow_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'IsValidFlow'
@@ -486,11 +505,13 @@ type FlowMgtServiceInterfaceMock_IsValidFlow_Call struct {
 // IsValidFlow is a helper method to define mock.On call
 //   - ctx context.Context
 //   - flowID string
-func (_e *FlowMgtServiceInterfaceMock_Expecter) IsValidFlow(ctx interface{}, flowID interface{}) *FlowMgtServiceInterfaceMock_IsValidFlow_Call {
-	return &FlowMgtServiceInterfaceMock_IsValidFlow_Call{Call: _e.mock.On("IsValidFlow", ctx, flowID)}
+//   - flowType ...common.FlowType
+func (_e *FlowMgtServiceInterfaceMock_Expecter) IsValidFlow(ctx interface{}, flowID interface{}, flowType ...interface{}) *FlowMgtServiceInterfaceMock_IsValidFlow_Call {
+	return &FlowMgtServiceInterfaceMock_IsValidFlow_Call{Call: _e.mock.On("IsValidFlow",
+		append([]interface{}{ctx, flowID}, flowType...)...)}
 }
 
-func (_c *FlowMgtServiceInterfaceMock_IsValidFlow_Call) Run(run func(ctx context.Context, flowID string)) *FlowMgtServiceInterfaceMock_IsValidFlow_Call {
+func (_c *FlowMgtServiceInterfaceMock_IsValidFlow_Call) Run(run func(ctx context.Context, flowID string, flowType ...common.FlowType)) *FlowMgtServiceInterfaceMock_IsValidFlow_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -500,20 +521,29 @@ func (_c *FlowMgtServiceInterfaceMock_IsValidFlow_Call) Run(run func(ctx context
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
+		var arg2 []common.FlowType
+		variadicArgs := make([]common.FlowType, len(args)-2)
+		for i, a := range args[2:] {
+			if a != nil {
+				variadicArgs[i] = a.(common.FlowType)
+			}
+		}
+		arg2 = variadicArgs
 		run(
 			arg0,
 			arg1,
+			arg2...,
 		)
 	})
 	return _c
 }
 
-func (_c *FlowMgtServiceInterfaceMock_IsValidFlow_Call) Return(b bool) *FlowMgtServiceInterfaceMock_IsValidFlow_Call {
-	_c.Call.Return(b)
+func (_c *FlowMgtServiceInterfaceMock_IsValidFlow_Call) Return(b bool, serviceError *serviceerror.ServiceError) *FlowMgtServiceInterfaceMock_IsValidFlow_Call {
+	_c.Call.Return(b, serviceError)
 	return _c
 }
 
-func (_c *FlowMgtServiceInterfaceMock_IsValidFlow_Call) RunAndReturn(run func(ctx context.Context, flowID string) bool) *FlowMgtServiceInterfaceMock_IsValidFlow_Call {
+func (_c *FlowMgtServiceInterfaceMock_IsValidFlow_Call) RunAndReturn(run func(ctx context.Context, flowID string, flowType ...common.FlowType) (bool, *serviceerror.ServiceError)) *FlowMgtServiceInterfaceMock_IsValidFlow_Call {
 	_c.Call.Return(run)
 	return _c
 }
