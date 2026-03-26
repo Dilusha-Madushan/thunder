@@ -117,7 +117,7 @@ func (s *flowExecService) Execute(ctx context.Context,
 			return nil, loadErr
 		}
 	} else {
-		context, loadErr = s.loadPrevContext(ctx, flowID, action, inputs, logger)
+		context, loadErr = s.loadPrevContext(ctx, flowID, action, inputs, verbose, logger)
 		if loadErr != nil {
 			logger.Error("Failed to load previous flow context",
 				log.String("flowID", flowID),
@@ -241,12 +241,13 @@ func (s *flowExecService) getFlowExpirySeconds(flowType common.FlowType) int64 {
 
 // loadPrevContext retrieves the flow context from the store based on the given details.
 func (s *flowExecService) loadPrevContext(ctx context.Context, flowID, action string,
-	inputs map[string]string, logger *log.Logger) (*EngineContext, *serviceerror.ServiceError) {
+	inputs map[string]string, verbose bool, logger *log.Logger) (*EngineContext, *serviceerror.ServiceError) {
 	engineCtx, err := s.loadContextFromStore(ctx, flowID, logger)
 	if err != nil {
 		return nil, err
 	}
 
+	engineCtx.Verbose = engineCtx.Verbose || verbose
 	prepareContext(engineCtx, action, inputs)
 	return engineCtx, nil
 }
