@@ -74,6 +74,9 @@ const (
 	TwilioPropKeySenderID = "sender_id"
 )
 
+// SMSMaxLength is the maximum character count for a single SMS message (GSM-7 encoding).
+const SMSMaxLength = 160
+
 const (
 	// CustomPropKeyURL is the property key for the custom URL.
 	CustomPropKeyURL = "url"

@@ -98,7 +98,7 @@ func Initialize(
 	reg.RegisterExecutor(ExecutorNameOUResolver, newOUResolverExecutor(flowFactory, ouService))
 	reg.RegisterExecutor(ExecutorNameAttributeUniquenessValidator, newAttributeUniquenessValidator(
 		flowFactory, userSchemaService, userProvider))
-	reg.RegisterExecutor(ExecutorNameSMSExecutor, newSMSExecutor(flowFactory, smsSenderService))
+	reg.RegisterExecutor(ExecutorNameSMSExecutor, newSMSExecutor(flowFactory, smsSenderService, templateService))
 
 	return reg
 }

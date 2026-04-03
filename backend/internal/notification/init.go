@@ -26,11 +26,13 @@ import (
 	"github.com/asgardeo/thunder/internal/system/jose/jwt"
 	"github.com/asgardeo/thunder/internal/system/log"
 	"github.com/asgardeo/thunder/internal/system/middleware"
+	"github.com/asgardeo/thunder/internal/system/template"
 	"github.com/asgardeo/thunder/internal/system/transaction"
 )
 
 // Initialize creates and configures the notification service components.
-func Initialize(mux *http.ServeMux, jwtService jwt.JWTServiceInterface) (
+func Initialize(mux *http.ServeMux, jwtService jwt.JWTServiceInterface,
+	templateService template.TemplateServiceInterface) (
 	NotificationSenderMgtSvcInterface, OTPServiceInterface, SMSSenderServiceInterface,
 	declarativeresource.ResourceExporter, error) {
 	var notificationStore notificationStoreInterface
@@ -55,7 +57,7 @@ func Initialize(mux *http.ServeMux, jwtService jwt.JWTServiceInterface) (
 		}
 	}
 
-	otpService := newOTPService(mgtService, jwtService)
+	otpService := newOTPService(mgtService, jwtService, templateService)
 	smsSenderService := newSMSSenderService(mgtService)
 	handler := newMessageNotificationSenderHandler(mgtService, otpService)
 	registerRoutes(mux, handler)

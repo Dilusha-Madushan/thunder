@@ -18,8 +18,15 @@
 
 package template
 
-// TemplateType represents the type of template (e.g., email).
+// TemplateType represents the type of template.
 type TemplateType string
+
+const (
+	// TemplateTypeEmail represents an email template.
+	TemplateTypeEmail TemplateType = "email"
+	// TemplateTypeSMS represents an SMS template.
+	TemplateTypeSMS TemplateType = "sms"
+)
 
 // ScenarioType represents the scenario for which a template is used.
 type ScenarioType string
@@ -29,12 +36,18 @@ const (
 	ScenarioUserInvite ScenarioType = "USER_INVITE"
 	// ScenarioSelfRegistration represents the self-registration via invite link scenario.
 	ScenarioSelfRegistration ScenarioType = "SELF_REGISTRATION"
+	// ScenarioSMSOTP represents the SMS OTP verification scenario.
+	ScenarioSMSOTP ScenarioType = "SMS_OTP"
+	// ScenarioSMSInvite represents the SMS invite notification scenario.
+	ScenarioSMSInvite ScenarioType = "SMS_INVITE"
 )
 
 // supportedScenarios contains all valid scenario types.
 var supportedScenarios = map[ScenarioType]bool{
 	ScenarioUserInvite:       true,
 	ScenarioSelfRegistration: true,
+	ScenarioSMSOTP:           true,
+	ScenarioSMSInvite:        true,
 }
 
 // IsValidScenario checks if the given scenario type is supported.

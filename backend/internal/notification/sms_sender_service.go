@@ -23,6 +23,7 @@ import (
 
 	"github.com/asgardeo/thunder/internal/notification/common"
 	"github.com/asgardeo/thunder/internal/system/error/serviceerror"
+	"github.com/asgardeo/thunder/internal/system/log"
 )
 
 // SMSSenderServiceInterface defines the interface for sending SMS messages.
@@ -47,6 +48,13 @@ func newSMSSenderService(senderMgtService NotificationSenderMgtSvcInterface) SMS
 // SendSMS looks up the sender by ID, obtains the appropriate message client, and sends the SMS.
 func (s *smsSenderService) SendSMS(ctx context.Context, senderID string, recipient string,
 	body string) *serviceerror.ServiceError {
+	logger := log.GetLogger().With(log.String(log.LoggerKeyComponentName, "SMSSenderService"))
+
+	if len([]rune(body)) > common.SMSMaxLength {
+		logger.Warn("SMS body exceeds single message limit",
+			log.Int("length", len([]rune(body))), log.Int("limit", common.SMSMaxLength))
+	}
+
 	sender, svcErr := s.senderMgtService.GetSender(ctx, senderID)
 	if svcErr != nil {
 		return svcErr

@@ -30,6 +30,7 @@ import (
 	"github.com/asgardeo/thunder/internal/system/config"
 	declarativeresource "github.com/asgardeo/thunder/internal/system/declarative_resource"
 	"github.com/asgardeo/thunder/tests/mocks/jose/jwtmock"
+	"github.com/asgardeo/thunder/tests/mocks/templatemock"
 )
 
 const (
@@ -38,8 +39,9 @@ const (
 
 type InitTestSuite struct {
 	suite.Suite
-	mockJWTService *jwtmock.JWTServiceInterfaceMock
-	mux            *http.ServeMux
+	mockJWTService      *jwtmock.JWTServiceInterfaceMock
+	mockTemplateService *templatemock.TemplateServiceInterfaceMock
+	mux                 *http.ServeMux
 }
 
 func TestInitTestSuite(t *testing.T) {
@@ -73,6 +75,7 @@ func (suite *InitTestSuite) SetupSuite() {
 
 func (suite *InitTestSuite) SetupTest() {
 	suite.mockJWTService = jwtmock.NewJWTServiceInterfaceMock(suite.T())
+	suite.mockTemplateService = templatemock.NewTemplateServiceInterfaceMock(suite.T())
 	suite.mux = http.NewServeMux()
 }
 
@@ -81,7 +84,7 @@ func (suite *InitTestSuite) TearDownSuite() {
 }
 
 func (suite *InitTestSuite) TestInitialize() {
-	mgtService, otpService, _, _, err := Initialize(suite.mux, suite.mockJWTService)
+	mgtService, otpService, _, _, err := Initialize(suite.mux, suite.mockJWTService, suite.mockTemplateService)
 	suite.NoError(err)
 
 	suite.NotNil(mgtService)
@@ -215,7 +218,7 @@ properties:
 }
 
 func (suite *InitTestSuite) TestRegisterRoutes_ListEndpoint() {
-	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService)
+	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService, suite.mockTemplateService)
 	suite.NoError(err)
 
 	req := httptest.NewRequest(http.MethodGet, "/notification-senders/message", nil)
@@ -227,7 +230,7 @@ func (suite *InitTestSuite) TestRegisterRoutes_ListEndpoint() {
 }
 
 func (suite *InitTestSuite) TestRegisterRoutes_CreateEndpoint() {
-	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService)
+	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService, suite.mockTemplateService)
 	suite.NoError(err)
 
 	req := httptest.NewRequest(http.MethodPost, "/notification-senders/message", nil)
@@ -239,7 +242,7 @@ func (suite *InitTestSuite) TestRegisterRoutes_CreateEndpoint() {
 }
 
 func (suite *InitTestSuite) TestRegisterRoutes_GetByIDEndpoint() {
-	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService)
+	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService, suite.mockTemplateService)
 	suite.NoError(err)
 
 	req := httptest.NewRequest(http.MethodGet, "/notification-senders/message/test-id", nil)
@@ -251,7 +254,7 @@ func (suite *InitTestSuite) TestRegisterRoutes_GetByIDEndpoint() {
 }
 
 func (suite *InitTestSuite) TestRegisterRoutes_UpdateEndpoint() {
-	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService)
+	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService, suite.mockTemplateService)
 	suite.NoError(err)
 
 	req := httptest.NewRequest(http.MethodPut, "/notification-senders/message/test-id", nil)
@@ -263,7 +266,7 @@ func (suite *InitTestSuite) TestRegisterRoutes_UpdateEndpoint() {
 }
 
 func (suite *InitTestSuite) TestRegisterRoutes_DeleteEndpoint() {
-	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService)
+	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService, suite.mockTemplateService)
 	suite.NoError(err)
 
 	req := httptest.NewRequest(http.MethodDelete, "/notification-senders/message/test-id", nil)
@@ -275,7 +278,7 @@ func (suite *InitTestSuite) TestRegisterRoutes_DeleteEndpoint() {
 }
 
 func (suite *InitTestSuite) TestRegisterRoutes_SendOTPEndpoint() {
-	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService)
+	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService, suite.mockTemplateService)
 	suite.NoError(err)
 
 	req := httptest.NewRequest(http.MethodPost, "/notification-senders/otp/send", nil)
@@ -287,7 +290,7 @@ func (suite *InitTestSuite) TestRegisterRoutes_SendOTPEndpoint() {
 }
 
 func (suite *InitTestSuite) TestRegisterRoutes_VerifyOTPEndpoint() {
-	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService)
+	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService, suite.mockTemplateService)
 	suite.NoError(err)
 
 	req := httptest.NewRequest(http.MethodPost, "/notification-senders/otp/verify", nil)
@@ -299,7 +302,7 @@ func (suite *InitTestSuite) TestRegisterRoutes_VerifyOTPEndpoint() {
 }
 
 func (suite *InitTestSuite) TestRegisterRoutes_CORSPreflight() {
-	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService)
+	_, _, _, _, err := Initialize(suite.mux, suite.mockJWTService, suite.mockTemplateService)
 	suite.NoError(err)
 
 	paths := []string{
@@ -512,7 +515,7 @@ func (suite *InitTestSuite) TestInitialize_WithDeclarativeResourcesEnabled_Inval
 	mux := http.NewServeMux()
 
 	// Initialize should return an error due to invalid YAML
-	_, _, _, _, err = Initialize(mux, suite.mockJWTService)
+	_, _, _, _, err = Initialize(mux, suite.mockJWTService, suite.mockTemplateService)
 	suite.Error(err)
 	suite.Contains(err.Error(), "failed to load notification sender resources")
 
@@ -590,7 +593,7 @@ properties:
 	mux := http.NewServeMux()
 
 	// Initialize should return an error due to validation failure
-	_, _, _, _, err = Initialize(mux, suite.mockJWTService)
+	_, _, _, _, err = Initialize(mux, suite.mockJWTService, suite.mockTemplateService)
 	suite.Error(err)
 	suite.Contains(err.Error(), "failed to load notification sender resources")
 

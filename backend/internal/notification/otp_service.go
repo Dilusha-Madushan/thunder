@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strconv"
 	"time"
 
 	"github.com/asgardeo/thunder/internal/notification/common"
@@ -32,6 +33,7 @@ import (
 	"github.com/asgardeo/thunder/internal/system/error/serviceerror"
 	"github.com/asgardeo/thunder/internal/system/jose/jwt"
 	"github.com/asgardeo/thunder/internal/system/log"
+	"github.com/asgardeo/thunder/internal/system/template"
 )
 
 // otpUseOnlyNumericChars indicates whether to use only numeric characters for OTP generation.
@@ -48,15 +50,17 @@ type otpService struct {
 	jwtService       jwt.JWTServiceInterface
 	senderMgtService NotificationSenderMgtSvcInterface
 	clientProvider   notificationClientProviderInterface
+	templateService  template.TemplateServiceInterface
 }
 
 // newOTPService returns a new instance of OTPServiceInterface.
 func newOTPService(notifSenderSvc NotificationSenderMgtSvcInterface,
-	jwtSvc jwt.JWTServiceInterface) OTPServiceInterface {
+	jwtSvc jwt.JWTServiceInterface, templateSvc template.TemplateServiceInterface) OTPServiceInterface {
 	return &otpService{
 		jwtService:       jwtSvc,
 		senderMgtService: notifSenderSvc,
 		clientProvider:   newNotificationClientProvider(),
+		templateService:  templateSvc,
 	}
 }
 
@@ -94,7 +98,7 @@ func (s *otpService) SendOTP(
 	// Send OTP based on channel
 	switch common.ChannelType(otpDTO.Channel) {
 	case common.ChannelTypeSMS:
-		if svcErr := s.sendSMSOTP(otpDTO.Recipient, otp.Value, *sender, logger); svcErr != nil {
+		if svcErr := s.sendSMSOTP(ctx, otpDTO.Recipient, otp.Value, *sender, logger); svcErr != nil {
 			return nil, svcErr
 		}
 	default:
@@ -248,28 +252,37 @@ func (s *otpService) getOTPValidityPeriodInMillis() int64 {
 }
 
 // sendSMSOTP sends an SMS OTP to the recipient.
-func (s *otpService) sendSMSOTP(recipient, otp string, sender common.NotificationSenderDTO,
+func (s *otpService) sendSMSOTP(ctx context.Context, recipient, otp string, sender common.NotificationSenderDTO,
 	logger *log.Logger) *serviceerror.ServiceError {
-	// TODO: This needs to be configured as a property
-	message := fmt.Sprintf("Your verification code is: %s. This code will expire in 2 minutes.", otp)
-
-	smsData := common.SMSData{
-		To:   recipient,
-		Body: message,
+	if s.templateService == nil {
+		return &ErrorInternalServerError
 	}
 
-	// Get message client using existing pattern
-	client, svcErr := s.clientProvider.GetMessageClient(sender)
+	expiryMinutes := s.getOTPValidityPeriodInMillis() / 60000
+	rendered, svcErr := s.templateService.Render(ctx, template.ScenarioSMSOTP, template.TemplateData{
+		"otp":        otp,
+		"expiryTime": strconv.FormatInt(expiryMinutes, 10),
+	})
 	if svcErr != nil {
-		return svcErr
+		logger.Error("Failed to render SMS OTP template", log.String("errorCode", svcErr.Code))
+		return &ErrorInternalServerError
+	}
+
+	if len([]rune(rendered.Body)) > common.SMSMaxLength {
+		logger.Warn("SMS body exceeds single message limit",
+			log.Int("length", len([]rune(rendered.Body))), log.Int("limit", common.SMSMaxLength))
+	}
+
+	client, svcErr2 := s.clientProvider.GetMessageClient(sender)
+	if svcErr2 != nil {
+		return svcErr2
 	}
 	if client == nil {
 		logger.Error("Message client is nil", log.String("provider", string(sender.Provider)))
 		return &ErrorInternalServerError
 	}
 
-	err := client.SendSMS(smsData)
-	if err != nil {
+	if err := client.SendSMS(common.SMSData{To: recipient, Body: rendered.Body}); err != nil {
 		logger.Error("Failed to send SMS", log.Error(err))
 		return &ErrorInternalServerError
 	}

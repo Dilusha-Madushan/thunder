@@ -144,6 +144,52 @@ func (suite *TemplateDeclarativeResourceTestSuite) TestValidateTemplateDTO_Unsup
 	}
 }
 
+func (suite *TemplateDeclarativeResourceTestSuite) TestValidateTemplateDTO_SMSWithoutSubject() {
+	dto := &TemplateDTO{
+		ID:       "sms-otp",
+		Scenario: ScenarioSMSOTP,
+		Type:     TemplateTypeSMS,
+		Body:     "Your code is {{ctx(otp)}}",
+	}
+	err := validateTemplateDTO(dto)
+	suite.NoError(err)
+}
+
+func (suite *TemplateDeclarativeResourceTestSuite) TestLoadDeclarativeResources_WithSMSTemplateFile() {
+	tempDir := suite.T().TempDir()
+	testConfig := &config.Config{}
+	config.ResetThunderRuntime()
+	err := config.InitializeThunderRuntime(tempDir, testConfig)
+	suite.NoError(err)
+
+	runtime := config.GetThunderRuntime()
+	resourceDir := filepath.Join(runtime.ThunderHome, "repository", "resources", "templates")
+	err = os.MkdirAll(resourceDir, 0o750)
+	suite.NoError(err)
+
+	yamlData := []byte(`id: sms-otp
+displayName: SMS OTP
+scenario: SMS_OTP
+type: sms
+body: "Your code is {{ctx(otp)}}. Expires in {{ctx(expiryTime)}} minutes."
+`)
+	err = os.WriteFile(filepath.Join(resourceDir, "sms_otp.yaml"), yamlData, 0o600)
+	suite.NoError(err)
+
+	genericStore := declarativeresource.NewGenericFileBasedStoreForTest(entity.KeyTypeTemplate)
+	store := &templateFileBasedStore{
+		GenericFileBasedStore: genericStore,
+	}
+	err = loadDeclarativeResources(store)
+	suite.NoError(err)
+
+	tmpl, err := store.GetTemplate(context.Background(), "sms-otp")
+	suite.NoError(err)
+	suite.Equal("sms-otp", tmpl.ID)
+	suite.Equal(ScenarioSMSOTP, tmpl.Scenario)
+	suite.Empty(tmpl.Subject)
+}
+
 func (suite *TemplateDeclarativeResourceTestSuite) TestLoadDeclarativeResources_Integration() {
 	tempDir := suite.T().TempDir()
 	testConfig := &config.Config{}

@@ -27,20 +27,23 @@ import (
 	"github.com/asgardeo/thunder/internal/notification"
 	"github.com/asgardeo/thunder/internal/system/error/serviceerror"
 	"github.com/asgardeo/thunder/internal/system/log"
+	"github.com/asgardeo/thunder/internal/system/template"
 )
 
-// smsExecutor sends an SMS message using the configured sender and message body from node properties.
+// smsExecutor sends an SMS message using the configured sender and a template-rendered message body.
 // When smsSenderService is nil, it completes as a no-op with smsSent=false.
 type smsExecutor struct {
 	core.ExecutorInterface
 	logger           *log.Logger
 	smsSenderService notification.SMSSenderServiceInterface
+	templateService  template.TemplateServiceInterface
 }
 
 // newSMSExecutor creates a new instance of smsExecutor.
 // smsSenderService may be nil if no SMS provider is configured; the executor completes as a no-op in that case.
 func newSMSExecutor(flowFactory core.FlowFactoryInterface,
-	smsSenderService notification.SMSSenderServiceInterface) *smsExecutor {
+	smsSenderService notification.SMSSenderServiceInterface,
+	templateService template.TemplateServiceInterface) *smsExecutor {
 	logger := log.GetLogger().With(log.String(log.LoggerKeyComponentName, "SMSExecutor"))
 	base := flowFactory.CreateExecutor(
 		ExecutorNameSMSExecutor,
@@ -54,6 +57,7 @@ func newSMSExecutor(flowFactory core.FlowFactoryInterface,
 		ExecutorInterface: base,
 		logger:            logger,
 		smsSenderService:  smsSenderService,
+		templateService:   templateService,
 	}
 }
 
@@ -67,7 +71,7 @@ func (e *smsExecutor) Execute(ctx *core.NodeContext) (*common.ExecutorResponse, 
 	}
 }
 
-// executeSend resolves the recipient, sender ID, and message body from node properties, then sends the SMS.
+// executeSend resolves the recipient, sender ID, and renders the SMS template, then sends the SMS.
 // If the SMS sender service is not configured, it completes without sending (no-op).
 func (e *smsExecutor) executeSend(ctx *core.NodeContext) (*common.ExecutorResponse, error) {
 	logger := e.logger.With(log.String(log.LoggerKeyFlowID, ctx.FlowID))
@@ -85,6 +89,10 @@ func (e *smsExecutor) executeSend(ctx *core.NodeContext) (*common.ExecutorRespon
 		return execResp, nil
 	}
 
+	if e.templateService == nil {
+		return nil, errors.New("template service is not configured")
+	}
+
 	recipient := resolveRecipientMobile(ctx)
 	if recipient == "" {
 		logger.Debug("SMS recipient not found in user inputs or runtime data")
@@ -98,15 +106,40 @@ func (e *smsExecutor) executeSend(ctx *core.NodeContext) (*common.ExecutorRespon
 		return nil, fmt.Errorf("senderId is not configured in node properties: %w", err)
 	}
 
-	// TODO: Replace smsDefaultMessage with a proper template-based message body in a future PR.
-	svcErr := e.smsSenderService.SendSMS(ctx.Context, senderID, recipient, smsDefaultMessage)
+	var scenario template.ScenarioType
+	if tmplProp, ok := ctx.NodeProperties[propertyKeySMSTemplate]; ok {
+		tmplStr, ok := tmplProp.(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid type for %s: expected string, got %T with value %v",
+				propertyKeySMSTemplate, tmplProp, tmplProp)
+		}
+		if tmplStr == "" {
+			scenario = template.ScenarioSMSInvite
+		} else {
+			scenario = template.ScenarioType(tmplStr)
+		}
+	} else {
+		scenario = template.ScenarioSMSInvite
+	}
+
+	templateData := template.TemplateData{
+		"inviteLink": ctx.RuntimeData[common.RuntimeKeyInviteLink],
+		"appName":    ctx.Application.Name,
+	}
+
+	rendered, svcErr := e.templateService.Render(ctx.Context, scenario, templateData)
 	if svcErr != nil {
-		if svcErr.Type == serviceerror.ClientErrorType {
+		return nil, fmt.Errorf("failed to render SMS template: %s", svcErr.Code)
+	}
+
+	smsSvcErr := e.smsSenderService.SendSMS(ctx.Context, senderID, recipient, rendered.Body)
+	if smsSvcErr != nil {
+		if smsSvcErr.Type == serviceerror.ClientErrorType {
 			execResp.Status = common.ExecFailure
-			execResp.FailureReason = svcErr.ErrorDescription
+			execResp.FailureReason = smsSvcErr.ErrorDescription
 			return execResp, nil
 		}
-		return nil, fmt.Errorf("SMS send failed: %s", svcErr.ErrorDescription)
+		return nil, fmt.Errorf("SMS send failed: %s", smsSvcErr.ErrorDescription)
 	}
 
 	logger.Debug("SMS sent successfully", log.String("recipient", log.MaskString(recipient)))

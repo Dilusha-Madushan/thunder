@@ -35,16 +35,20 @@ import (
 	"github.com/asgardeo/thunder/internal/system/cmodels"
 	"github.com/asgardeo/thunder/internal/system/config"
 	"github.com/asgardeo/thunder/internal/system/crypto/hash"
+	"github.com/asgardeo/thunder/internal/system/error/serviceerror"
 	"github.com/asgardeo/thunder/internal/system/log"
+	"github.com/asgardeo/thunder/internal/system/template"
 	"github.com/asgardeo/thunder/tests/mocks/jose/jwtmock"
 	"github.com/asgardeo/thunder/tests/mocks/notification/messagemock"
+	"github.com/asgardeo/thunder/tests/mocks/templatemock"
 )
 
 type OTPServiceTestSuite struct {
 	suite.Suite
-	mockJWTService    *jwtmock.JWTServiceInterfaceMock
-	mockSenderService *NotificationSenderMgtSvcInterfaceMock
-	service           *otpService
+	mockJWTService      *jwtmock.JWTServiceInterfaceMock
+	mockSenderService   *NotificationSenderMgtSvcInterfaceMock
+	mockTemplateService *templatemock.TemplateServiceInterfaceMock
+	service             *otpService
 }
 
 func TestOTPServiceTestSuite(t *testing.T) {
@@ -72,10 +76,12 @@ func (suite *OTPServiceTestSuite) SetupSuite() {
 func (suite *OTPServiceTestSuite) SetupTest() {
 	suite.mockJWTService = jwtmock.NewJWTServiceInterfaceMock(suite.T())
 	suite.mockSenderService = NewNotificationSenderMgtSvcInterfaceMock(suite.T())
+	suite.mockTemplateService = templatemock.NewTemplateServiceInterfaceMock(suite.T())
 	suite.service = &otpService{
 		jwtService:       suite.mockJWTService,
 		senderMgtService: suite.mockSenderService,
 		clientProvider:   newNotificationClientProvider(),
+		templateService:  suite.mockTemplateService,
 	}
 }
 
@@ -313,6 +319,9 @@ func (suite *OTPServiceTestSuite) TestSendOTP_Success() {
 	sender := suite.getValidSender()
 	suite.mockSenderService.On("GetSender", mock.Anything, "sender-123").Return(sender, nil).Once()
 
+	suite.mockTemplateService.On("Render", mock.Anything, template.ScenarioSMSOTP, mock.Anything).
+		Return(&template.RenderedTemplate{Body: "Your code is 123456. Expires in 2 minutes."}, nil).Once()
+
 	mm := messagemock.NewMessageClientInterfaceMock(suite.T())
 	mm.EXPECT().SendSMS(mock.Anything).Return(nil).Once()
 	cp := newNotificationClientProviderInterfaceMock(suite.T())
@@ -337,6 +346,9 @@ func (suite *OTPServiceTestSuite) TestSendOTP_SendSMSError() {
 	sender := suite.getValidSender()
 	suite.mockSenderService.On("GetSender", mock.Anything, "sender-123").Return(sender, nil).Once()
 
+	suite.mockTemplateService.On("Render", mock.Anything, template.ScenarioSMSOTP, mock.Anything).
+		Return(&template.RenderedTemplate{Body: "Your code is 123456."}, nil).Once()
+
 	mm := messagemock.NewMessageClientInterfaceMock(suite.T())
 	mm.EXPECT().SendSMS(mock.Anything).Return(errors.New("send failed")).Once()
 	cp := newNotificationClientProviderInterfaceMock(suite.T())
@@ -357,6 +369,9 @@ func (suite *OTPServiceTestSuite) TestSendOTP_GenerateJWTError() {
 	}
 	sender := suite.getValidSender()
 	suite.mockSenderService.On("GetSender", mock.Anything, "sender-123").Return(sender, nil).Once()
+
+	suite.mockTemplateService.On("Render", mock.Anything, template.ScenarioSMSOTP, mock.Anything).
+		Return(&template.RenderedTemplate{Body: "Your code is 123456."}, nil).Once()
 
 	mm := messagemock.NewMessageClientInterfaceMock(suite.T())
 	mm.EXPECT().SendSMS(mock.Anything).Return(nil).Once()
@@ -446,7 +461,9 @@ func (suite *OTPServiceTestSuite) TestSendOTP_ClientProviderError() {
 	sender := suite.getValidSender()
 	suite.mockSenderService.On("GetSender", mock.Anything, "sender-123").Return(sender, nil).Once()
 
-	// client provider returns a service error
+	suite.mockTemplateService.On("Render", mock.Anything, template.ScenarioSMSOTP, mock.Anything).
+		Return(&template.RenderedTemplate{Body: "Your code is 123456."}, nil).Once()
+
 	cp := newNotificationClientProviderInterfaceMock(suite.T())
 	cp.EXPECT().GetMessageClient(mock.Anything).Return(nil, &ErrorInternalServerError).Once()
 	suite.service.clientProvider = cp
@@ -466,6 +483,9 @@ func (suite *OTPServiceTestSuite) TestSendOTP_ClientProviderNilClient() {
 
 	sender := suite.getValidSender()
 	suite.mockSenderService.On("GetSender", mock.Anything, "sender-123").Return(sender, nil).Once()
+
+	suite.mockTemplateService.On("Render", mock.Anything, template.ScenarioSMSOTP, mock.Anything).
+		Return(&template.RenderedTemplate{Body: "Your code is 123456."}, nil).Once()
 
 	cp := newNotificationClientProviderInterfaceMock(suite.T())
 	cp.EXPECT().GetMessageClient(mock.Anything).Return(nil, nil).Once()
@@ -584,8 +604,48 @@ func (suite *OTPServiceTestSuite) TestVerifyOTP_UnmarshalError() {
 }
 
 func (suite *OTPServiceTestSuite) TestNewOTPService_Constructors() {
-	svc := newOTPService(suite.mockSenderService, suite.mockJWTService)
+	svc := newOTPService(suite.mockSenderService, suite.mockJWTService, suite.mockTemplateService)
 	suite.NotNil(svc)
+}
+
+func (suite *OTPServiceTestSuite) TestSendOTP_TemplateRenderError() {
+	req := common.SendOTPDTO{
+		Recipient: "+15559876543",
+		SenderID:  "sender-123",
+		Channel:   "sms",
+	}
+
+	sender := suite.getValidSender()
+	suite.mockSenderService.On("GetSender", mock.Anything, "sender-123").Return(sender, nil).Once()
+
+	templateErr := &serviceerror.I18nServiceError{
+		Code: "TMP-1001",
+	}
+	suite.mockTemplateService.On("Render", mock.Anything, template.ScenarioSMSOTP, mock.Anything).
+		Return(nil, templateErr).Once()
+
+	res, err := suite.service.SendOTP(context.Background(), req)
+	suite.Nil(res)
+	suite.NotNil(err)
+	suite.Equal(ErrorInternalServerError.Code, err.Code)
+}
+
+func (suite *OTPServiceTestSuite) TestSendOTP_NilTemplateService() {
+	req := common.SendOTPDTO{
+		Recipient: "+15559876543",
+		SenderID:  "sender-123",
+		Channel:   "sms",
+	}
+
+	sender := suite.getValidSender()
+	suite.mockSenderService.On("GetSender", mock.Anything, "sender-123").Return(sender, nil).Once()
+
+	suite.service.templateService = nil
+
+	res, err := suite.service.SendOTP(context.Background(), req)
+	suite.Nil(res)
+	suite.NotNil(err)
+	suite.Equal(ErrorInternalServerError.Code, err.Code)
 }
 
 func (suite *OTPServiceTestSuite) TestVerifyAndDecode_Success() {

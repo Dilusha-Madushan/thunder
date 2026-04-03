@@ -1,0 +1,5 @@
+id: "sms-invite"
+displayName: "SMS Invite Notification"
+scenario: "SMS_INVITE"
+type: "sms"
+body: "You have a pending notification from {{ctx(appName)}}. Visit: {{ctx(inviteLink)}}"
