@@ -19,6 +19,7 @@
 import { Route, BrowserRouter as Router, Routes, useLocation } from 'react-router-dom';
 import HomePage from './pages/HomePage';
 import LoginPage from './pages/LoginPage';
+import InvitePage from './pages/InvitePage';
 import AuthProvider from './contexts/AuthProvider';
 import useAuth from './hooks/useAuth';
 import './App.css';
@@ -30,6 +31,7 @@ const App = () => {
   return (
     <Routes>
       <Route path="/" element={token ? <HomePage /> : <LoginPage />} key={location.key} />
+      <Route path="/gate/invite" element={<InvitePage />} />
     </Routes>
   );
 };

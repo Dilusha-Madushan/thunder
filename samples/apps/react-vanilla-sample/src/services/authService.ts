@@ -227,7 +227,7 @@ const { applicationID, flowEndpoint } = config;
  * @param {string} flowType - The type of flow to initiate. Defaults to 'LOGIN'.
  * @returns {Promise<object>} - A promise that resolves to the response data from the server.
  */
-export const initiateNativeAuthFlow = async (flowType: 'LOGIN' | 'REGISTRATION' = 'LOGIN') => {
+export const initiateNativeAuthFlow = async (flowType: 'LOGIN' | 'REGISTRATION' | 'RECOVERY' = 'LOGIN') => {
     const headers = {
         'Content-Type': 'application/json'
     };
@@ -238,6 +238,8 @@ export const initiateNativeAuthFlow = async (flowType: 'LOGIN' | 'REGISTRATION' 
 
     if (flowType === 'REGISTRATION') {
         data.flowType = 'REGISTRATION';
+    } else if (flowType === 'RECOVERY') {
+        data.flowType = 'RECOVERY';
     } else {
         data.flowType = 'AUTHENTICATION';
     }
@@ -250,7 +252,7 @@ export const initiateNativeAuthFlow = async (flowType: 'LOGIN' | 'REGISTRATION' 
 
     if (!response.ok) {
         const errorData = await response.json().catch(() => ({})) as { message?: { defaultValue?: string } };
-        const flowTypeName = flowType === 'REGISTRATION' ? 'registration' : 'authentication';
+        const flowTypeName = flowType === 'REGISTRATION' ? 'registration' : flowType === 'RECOVERY' ? 'recovery' : 'authentication';
         const message = response.status === 400
             ? `Error initiating native ${flowTypeName} request.`
             : errorData?.message?.defaultValue || 'Server error occurred.';
