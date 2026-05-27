@@ -869,6 +869,7 @@ inboundAuthConfig:
         - http://localhost:5173
       grantTypes:
         - authorization_code
+        - urn:ietf:params:oauth:grant-type:token-exchange
       responseTypes:
         - code
       tokenEndpointAuthMethod: none
@@ -1350,7 +1351,7 @@ nodes:
               required: true
               placeholder: "{{ t(signin:forms.credentials.fields.password.placeholder) }}"
             - type: ACTION
-              id: action_001
+              id: action_signin
               label: "{{ t(signin:forms.credentials.actions.submit.label) }}"
               variant: PRIMARY
               eventType: SUBMIT

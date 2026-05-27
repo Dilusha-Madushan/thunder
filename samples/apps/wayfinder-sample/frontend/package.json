@@ -13,14 +13,14 @@
     "react-router": "6.30.4"
   },
   "dependencies": {
-    "@thunderid/react": "0.0.5",
+    "@thunderid/react": "workspace:^",
     "lucide-react": "^0.511.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "6.30.4"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^5.0.4",
+    "@vitejs/plugin-react": "catalog:",
     "vite": "npm:rolldown-vite@^7.1.14"
   }
 }
