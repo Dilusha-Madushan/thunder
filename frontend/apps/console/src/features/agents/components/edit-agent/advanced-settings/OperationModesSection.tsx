@@ -98,7 +98,7 @@ export default function OperationModesSection({
             <Alert severity="info" sx={{mb: 1.5}}>
               {t(
                 'agents:edit.advanced.oauthAccess.grantTypes.hint',
-                'The greyed-out grants unlock once you turn on Delegated mode in the Flows tab.',
+                'The greyed-out grants unlock once you turn on Delegated mode at the top of this tab.',
               )}
             </Alert>
             <Select

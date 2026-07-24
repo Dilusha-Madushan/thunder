@@ -174,4 +174,107 @@ describe('EditAdvancedSettings', () => {
     // No OAuth2 entry to merge into; should still call with an empty array
     expect(mockOnFieldChange).toHaveBeenCalledWith('inboundAuthConfig', []);
   });
+
+  describe('Delegated mode toggle', () => {
+    it('shows the toggle checked when Delegated mode is on', () => {
+      render(
+        <EditAdvancedSettings
+          agent={mockAgent}
+          editedAgent={{}}
+          oauth2Config={{grantTypes: ['authorization_code'], responseTypes: ['code']}}
+          onFieldChange={mockOnFieldChange}
+        />,
+      );
+
+      expect(screen.getByRole('switch', {name: 'Delegated mode'})).toBeChecked();
+    });
+
+    it('shows the toggle unchecked when Delegated mode is off', () => {
+      render(
+        <EditAdvancedSettings
+          agent={mockAgent}
+          editedAgent={{}}
+          oauth2Config={{grantTypes: ['client_credentials'], responseTypes: []}}
+          onFieldChange={mockOnFieldChange}
+        />,
+      );
+
+      expect(screen.getByRole('switch', {name: 'Delegated mode'})).not.toBeChecked();
+    });
+
+    it('turns on Delegated mode by adding authorization_code and requiring PKCE', async () => {
+      const user = userEvent.setup();
+      render(
+        <EditAdvancedSettings
+          agent={{
+            ...mockAgent,
+            inboundAuthConfig: [{type: 'oauth2', config: {grantTypes: ['client_credentials'], responseTypes: []}}],
+          }}
+          editedAgent={{}}
+          oauth2Config={{grantTypes: ['client_credentials'], responseTypes: []}}
+          onFieldChange={mockOnFieldChange}
+        />,
+      );
+
+      await user.click(screen.getByRole('switch', {name: 'Delegated mode'}));
+
+      expect(mockOnFieldChange).toHaveBeenCalledWith(
+        'inboundAuthConfig',
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'oauth2',
+            config: expect.objectContaining({
+              grantTypes: expect.arrayContaining(['client_credentials', 'authorization_code']) as string[],
+              pkceRequired: true,
+            }) as Record<string, unknown>,
+          }),
+        ]) as AgentInboundAuthConfig[],
+      );
+    });
+
+    it('turns off Delegated mode by dropping the delegated-only grants', async () => {
+      const user = userEvent.setup();
+      render(
+        <EditAdvancedSettings
+          agent={{
+            ...mockAgent,
+            inboundAuthConfig: [
+              {
+                type: 'oauth2',
+                config: {grantTypes: ['client_credentials', 'authorization_code'], responseTypes: ['code']},
+              },
+            ],
+          }}
+          editedAgent={{}}
+          oauth2Config={{grantTypes: ['client_credentials', 'authorization_code'], responseTypes: ['code']}}
+          onFieldChange={mockOnFieldChange}
+        />,
+      );
+
+      await user.click(screen.getByRole('switch', {name: 'Delegated mode'}));
+
+      expect(mockOnFieldChange).toHaveBeenCalledWith(
+        'inboundAuthConfig',
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'oauth2',
+            config: expect.objectContaining({grantTypes: ['client_credentials']}) as Record<string, unknown>,
+          }),
+        ]) as AgentInboundAuthConfig[],
+      );
+    });
+
+    it('disables the toggle for read-only agents', () => {
+      render(
+        <EditAdvancedSettings
+          agent={{...mockAgent, isReadOnly: true}}
+          editedAgent={{}}
+          oauth2Config={{grantTypes: ['authorization_code'], responseTypes: ['code']}}
+          onFieldChange={mockOnFieldChange}
+        />,
+      );
+
+      expect(screen.getByRole('switch', {name: 'Delegated mode'})).toBeDisabled();
+    });
+  });
 });

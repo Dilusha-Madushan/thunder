@@ -1172,11 +1172,11 @@ const translations = {
     'edit.flows.allowedUserTypes.placeholder': 'Select or add user types',
     'edit.flows.allowedUserTypes.hint': 'Only these user types can authenticate or register through this agent.',
     'edit.flows.allowedUserTypes.required': 'Select at least one user type that can sign in through this agent.',
-    'edit.flows.delegationToggle.label': 'Delegated mode',
     'edit.flows.delegationLock.message':
-      'These settings are frozen for this agent. Turn on Delegated mode above to unlock and start using them.',
+      'These settings are frozen for this agent. Turn on Delegated mode in the Advanced tab to unlock and start using them.',
 
     // Edit page - Advanced tab
+    'edit.advanced.delegationToggle.label': 'Delegated mode',
     'edit.advanced.redirectUris.title': 'Authorized redirect URIs',
     'edit.advanced.redirectUris.description': 'For use with requests from a web server',
     'edit.advanced.redirectUris.empty': 'No redirect URIs configured.',
@@ -1188,7 +1188,7 @@ const translations = {
     'edit.advanced.oauthAccess.description': 'The grants and redirect URIs this agent is authorized to use.',
     'edit.advanced.oauthAccess.grantTypes.label': 'Grant Types',
     'edit.advanced.oauthAccess.grantTypes.hint':
-      'The greyed-out grants unlock once you turn on Delegated mode in the Flows tab.',
+      'The greyed-out grants unlock once you turn on Delegated mode at the top of this tab.',
     'edit.advanced.security.title': 'Security',
     'edit.advanced.security.description':
       'Controls how this agent protects the authorization code exchange when a user signs in.',
@@ -1206,7 +1206,7 @@ const translations = {
     'edit.tokens.tabs.user': 'User',
     'edit.tokens.tabs.agent': 'Agent',
     'edit.tokens.delegationLock.message':
-      'These settings are frozen for this agent. Turn on Delegated mode in the Flows tab to unlock and start using them.',
+      'These settings are frozen for this agent. Turn on Delegated mode in the Advanced tab to unlock and start using them.',
     'edit.tokens.agent.attributes.title': 'Access Token Attributes',
     'edit.tokens.agent.attributes.description':
       'Attributes included in the access token this agent receives for its own requests (client_credentials grant).',

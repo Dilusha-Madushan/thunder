@@ -16,7 +16,7 @@
  * under the License.
  */
 
-import {FormControlLabel, Stack, Switch} from '@wso2/oxygen-ui';
+import {Stack} from '@wso2/oxygen-ui';
 import type {JSX} from 'react';
 import {useTranslation} from 'react-i18next';
 import AuthenticationFlowSection from '../../../../applications/components/edit-application/flows-settings/AuthenticationFlowSection';
@@ -24,9 +24,7 @@ import RecoveryFlowSection from '../../../../applications/components/edit-applic
 import RegistrationFlowSection from '../../../../applications/components/edit-application/flows-settings/RegistrationFlowSection';
 import type {Application} from '../../../../applications/models/application';
 import {OAuth2GrantTypes} from '../../../../applications/models/oauth';
-import {applyGrantTypesChange} from '../../../../applications/utils/oauth2Rules';
-import {DELEGATED_ONLY_GRANTS} from '../../../constants/delegationGrants';
-import type {Agent, AgentInboundAuthConfig, OAuthAgentConfig} from '../../../models/agent';
+import type {Agent, OAuthAgentConfig} from '../../../models/agent';
 import DelegationLockNotice from '../shared/DelegationLockNotice';
 
 interface EditFlowsSettingsProps {
@@ -45,27 +43,6 @@ export default function EditFlowsSettings({
   const {t} = useTranslation();
   const isUnlocked = oauth2Config?.grantTypes?.includes(OAuth2GrantTypes.AUTHORIZATION_CODE) ?? false;
 
-  // Lets the user turn on Delegated mode directly from this tab instead of having to visit
-  // Advanced — same grant-type rules as OperationModesSection's mode toggle.
-  const handleDelegationToggle = (checked: boolean): void => {
-    if (!oauth2Config || checked === isUnlocked) return;
-    const grantTypes = oauth2Config.grantTypes ?? [];
-    const nextGrantTypes = checked
-      ? [...new Set([...grantTypes, OAuth2GrantTypes.AUTHORIZATION_CODE])]
-      : grantTypes.filter((grant) => !DELEGATED_ONLY_GRANTS.includes(grant));
-    const updates = applyGrantTypesChange(oauth2Config, nextGrantTypes);
-    // PKCE is fully derived from authorization_code for agents (mirrors OperationModesSection).
-    if (checked) {
-      updates.pkceRequired = true;
-    }
-
-    const currentInboundAuth: AgentInboundAuthConfig[] = editedAgent.inboundAuthConfig ?? agent.inboundAuthConfig ?? [];
-    const updatedInboundAuth = currentInboundAuth.map((auth) =>
-      auth.type === 'oauth2' ? {...auth, config: {...auth.config, ...updates} as OAuthAgentConfig} : auth,
-    );
-    onFieldChange('inboundAuthConfig', updatedInboundAuth);
-  };
-
   // Agents share the inbound-client shape with applications (auth_flow_id, registration/recovery
   // flow config), so the same components are reused with an entity-label override. Forcing
   // isReadOnly disables every input via their existing disabled={application.isReadOnly} wiring
@@ -76,21 +53,11 @@ export default function EditFlowsSettings({
 
   return (
     <Stack spacing={3}>
-      <FormControlLabel
-        control={
-          <Switch
-            checked={isUnlocked}
-            onChange={(e) => handleDelegationToggle(e.target.checked)}
-            disabled={!oauth2Config || agent.isReadOnly === true}
-          />
-        }
-        label={t('agents:edit.flows.delegationToggle.label', 'Delegated mode')}
-      />
       <DelegationLockNotice
         isUnlocked={isUnlocked}
         message={t(
           'agents:edit.flows.delegationLock.message',
-          'These settings are frozen for this agent. Turn on Delegated mode above to unlock and start using them.',
+          'These settings are frozen for this agent. Turn on Delegated mode in the Advanced tab to unlock and start using them.',
         )}
       >
         <Stack spacing={3}>

@@ -82,7 +82,7 @@ export default function EditTokensSettings({
             isUnlocked={isUnlocked}
             message={t(
               'agents:edit.tokens.delegationLock.message',
-              'These settings are frozen for this agent. Turn on Delegated mode in the Flows tab to unlock and start using them.',
+              'These settings are frozen for this agent. Turn on Delegated mode in the Advanced tab to unlock and start using them.',
             )}
           >
             <Stack spacing={3}>
