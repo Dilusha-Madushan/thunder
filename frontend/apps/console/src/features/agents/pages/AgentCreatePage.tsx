@@ -277,6 +277,7 @@ export default function AgentCreatePage(): JSX.Element {
         return (
           <ShowClientSecret
             agentName={createdAgent.name}
+            agentId={createdAgent.id}
             clientId={oauth2Config?.clientId}
             clientSecret={clientSecret}
             onContinue={handleCompleteContinue}

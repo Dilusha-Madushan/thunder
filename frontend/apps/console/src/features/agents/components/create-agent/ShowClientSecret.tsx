@@ -17,14 +17,35 @@
  */
 
 import {useCopyToClipboard} from '@thunderid/hooks';
+import {useThunderID} from '@thunderid/react';
 import {Box, Typography, Stack, TextField, IconButton, InputAdornment, Alert, Button, Divider} from '@wso2/oxygen-ui';
-import {Copy, Eye, EyeOff, AlertTriangle} from '@wso2/oxygen-ui-icons-react';
+import {Check, Copy, Eye, EyeOff, AlertTriangle, Info} from '@wso2/oxygen-ui-icons-react';
 import type {JSX} from 'react';
 import {useState} from 'react';
 import {useTranslation} from 'react-i18next';
+import CopyableField from '../../../applications/components/common/CopyableField';
+import type {McpDiscoveryEndpoints} from '../../../applications/models/mcp-client';
+import getAgentDiscoveryEndpointRows from '../../utils/getAgentDiscoveryEndpointRows';
+
+const cardSx = {
+  p: 3,
+  bgcolor: 'background.paper',
+  border: '1px solid',
+  borderColor: 'divider',
+  borderRadius: 1,
+} as const;
+
+const secretHighlightSx = {
+  p: 2,
+  borderRadius: 1,
+  bgcolor: 'action.hover',
+  borderLeft: '3px solid',
+  borderColor: 'primary.main',
+} as const;
 
 export interface ShowClientSecretProps {
   agentName: string;
+  agentId?: string;
   clientId?: string;
   clientSecret: string;
   onContinue: () => void;
@@ -32,16 +53,22 @@ export interface ShowClientSecretProps {
 
 export default function ShowClientSecret({
   agentName,
+  agentId = undefined,
   clientId = undefined,
   clientSecret,
   onContinue,
 }: ShowClientSecretProps): JSX.Element {
   const {t} = useTranslation();
+  const {discovery} = useThunderID();
   const [showSecret, setShowSecret] = useState(false);
   const {copied, copy} = useCopyToClipboard({resetDelay: 2000}) as {
     copied: boolean;
     copy: (text: string) => Promise<void>;
   };
+
+  const wellKnown = (discovery as {wellKnown?: McpDiscoveryEndpoints | null} | undefined)?.wellKnown;
+  const endpointRows = getAgentDiscoveryEndpointRows(wellKnown, t);
+  const copyLabel = t('common:actions.copy');
 
   const handleCopy = async (): Promise<void> => {
     await copy(clientSecret);
@@ -75,15 +102,10 @@ export default function ShowClientSecret({
         </Typography>
       </Stack>
 
-      <Box
-        sx={{
-          p: 3,
-          bgcolor: 'background.paper',
-          border: '1px solid',
-          borderColor: 'divider',
-          borderRadius: 1,
-        }}
-      >
+      <Box sx={cardSx}>
+        <Typography variant="subtitle1" sx={{fontWeight: 600, mb: 2}}>
+          {t('agents:clientSecret.agentInfoTitle', 'Agent')}
+        </Typography>
         <Stack direction="column" spacing={2}>
           <Box>
             <Typography variant="caption" color="text.secondary" sx={{display: 'block', mb: 0.5}}>
@@ -92,23 +114,50 @@ export default function ShowClientSecret({
             <Typography variant="body1">{agentName}</Typography>
           </Box>
 
-          {clientId && (
+          {agentId && (
             <>
               <Divider />
               <Box>
                 <Typography variant="caption" color="text.secondary" sx={{display: 'block', mb: 0.5}}>
-                  {t('agents:clientSecret.clientIdLabel', 'Client ID')}
+                  {t('agents:clientSecret.agentIdLabel', 'Agent ID')}
                 </Typography>
                 <Typography variant="body1" sx={{fontFamily: 'monospace', fontSize: '0.875rem'}}>
-                  {clientId}
+                  {agentId}
                 </Typography>
               </Box>
             </>
           )}
+        </Stack>
+      </Box>
 
-          <Divider />
+      <Box sx={cardSx}>
+        <Typography variant="subtitle1" sx={{fontWeight: 600, mb: 2}}>
+          {t('agents:clientSecret.credentialsTitle', 'Credentials')}
+        </Typography>
+        <Stack direction="column" spacing={2}>
+          <Alert severity="info" icon={<Info size={20} />}>
+            <Typography variant="body2">
+              {t(
+                'agents:clientSecret.credentialsInfo',
+                'Your agent authenticates with these credentials to obtain access tokens.',
+              )}
+            </Typography>
+          </Alert>
 
-          <Box>
+          {clientId && (
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{display: 'block', mb: 0.5}}>
+                {t('agents:clientSecret.clientIdLabel', 'Client ID')}
+              </Typography>
+              <Typography variant="body1" sx={{fontFamily: 'monospace', fontSize: '0.875rem'}}>
+                {clientId}
+              </Typography>
+            </Box>
+          )}
+
+          {clientId && <Divider />}
+
+          <Box sx={secretHighlightSx}>
             <Typography variant="caption" color="text.secondary" sx={{display: 'block', mb: 1}}>
               {t('agents:clientSecret.clientSecretLabel', 'Client Secret')}
             </Typography>
@@ -121,10 +170,16 @@ export default function ShowClientSecret({
                 readOnly: true,
                 endAdornment: (
                   <InputAdornment position="end">
-                    <IconButton onClick={() => setShowSecret(!showSecret)} edge="end" size="small">
+                    <IconButton
+                      aria-label={t('agents:clientSecret.toggleVisibility', 'Show or hide client secret')}
+                      onClick={() => setShowSecret(!showSecret)}
+                      edge="end"
+                      size="small"
+                    >
                       {showSecret ? <EyeOff size={16} /> : <Eye size={16} />}
                     </IconButton>
                     <IconButton
+                      aria-label={`${copyLabel} ${t('agents:clientSecret.clientSecretLabel', 'Client Secret')}`}
                       onClick={() => {
                         handleCopy().catch(() => null);
                       }}
@@ -132,46 +187,50 @@ export default function ShowClientSecret({
                       size="small"
                       sx={{ml: 0.5}}
                     >
-                      <Copy size={16} />
+                      {copied ? <Check size={16} /> : <Copy size={16} />}
                     </IconButton>
                   </InputAdornment>
                 ),
               }}
             />
           </Box>
+
+          <Alert severity="warning" icon={<AlertTriangle size={20} />}>
+            <Typography variant="body2" sx={{fontWeight: 'medium', mb: 1}}>
+              {t('agents:clientSecret.securityReminder.title', "You won't be able to see this secret again")}
+            </Typography>
+            <Typography variant="body2">
+              {t(
+                'agents:clientSecret.securityReminder.description',
+                'Store the client secret somewhere safe. If you lose it, you will need to regenerate it from the agent settings.',
+              )}
+            </Typography>
+          </Alert>
         </Stack>
       </Box>
 
-      <Alert severity="warning" icon={<AlertTriangle size={20} />}>
-        <Typography variant="body2" sx={{fontWeight: 'medium', mb: 1}}>
-          {t('agents:clientSecret.securityReminder.title', "You won't be able to see this secret again")}
-        </Typography>
-        <Typography variant="body2">
-          {t(
-            'agents:clientSecret.securityReminder.description',
-            'Store the client secret somewhere safe. If you lose it, you will need to regenerate it from the agent settings.',
-          )}
-        </Typography>
-      </Alert>
+      {endpointRows.length > 0 && (
+        <Box sx={cardSx}>
+          <Typography variant="subtitle1" sx={{fontWeight: 600, mb: 2}}>
+            {t('agents:clientSecret.endpoints.title', 'Endpoints')}
+          </Typography>
+          <Stack direction="column" spacing={2}>
+            {endpointRows.map((row) => (
+              <CopyableField
+                key={row.key}
+                id={`agent-client-secret-endpoint-${row.key}`}
+                label={row.label}
+                value={row.value}
+                copyAriaLabel={`${copyLabel} ${row.label}`}
+              />
+            ))}
+          </Stack>
+        </Box>
+      )}
 
-      <Stack direction="row" spacing={2} sx={{width: '100%'}}>
-        <Button
-          variant="contained"
-          fullWidth
-          startIcon={<Copy size={16} />}
-          onClick={() => {
-            handleCopy().catch(() => null);
-          }}
-          disabled={copied}
-        >
-          {copied
-            ? t('agents:clientSecret.copied', 'Copied')
-            : t('agents:clientSecret.copySecret', 'Copy client secret')}
-        </Button>
-        <Button data-testid="agent-client-secret-continue" variant="outlined" fullWidth onClick={onContinue}>
-          {t('common:actions.continue')}
-        </Button>
-      </Stack>
+      <Button data-testid="agent-client-secret-continue" variant="contained" fullWidth onClick={onContinue}>
+        {t('common:actions.continue')}
+      </Button>
     </Stack>
   );
 }
