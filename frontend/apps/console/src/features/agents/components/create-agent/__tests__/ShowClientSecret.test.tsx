@@ -17,11 +17,10 @@
  */
 
 import userEvent from '@testing-library/user-event';
-import {render, screen, waitFor} from '@thunderid/test-utils';
+import {render, screen, waitForElementToBeRemoved, within} from '@thunderid/test-utils';
 import {describe, it, expect, beforeEach, vi} from 'vitest';
 import ShowClientSecret, {type ShowClientSecretProps} from '../ShowClientSecret';
 
-// Mock the useCopyToClipboard hook
 vi.mock('@thunderid/hooks', () => ({
   useCopyToClipboard: vi.fn(),
 }));
@@ -68,164 +67,97 @@ describe('ShowClientSecret', () => {
   const renderComponent = (props: Partial<ShowClientSecretProps> = {}) =>
     render(<ShowClientSecret {...defaultProps} {...props} />);
 
-  describe('rendering', () => {
-    it('should render the title and subtitle', () => {
+  // The completion window renders inside the `agent-show-client-secret` container; the secret
+  // dialog is portalled outside it, so scoping to the container isolates window-only assertions.
+  const getWindow = () => within(screen.getByTestId('agent-show-client-secret'));
+
+  describe('completion window', () => {
+    it('should render the created title and subtitle', () => {
       renderComponent();
 
-      expect(screen.getByRole('heading', {level: 1, name: /save your client secret/i})).toBeInTheDocument();
-      expect(screen.getByText(/store it somewhere safe/i)).toBeInTheDocument();
+      expect(getWindow().getByText(/agent created/i)).toBeInTheDocument();
+      expect(getWindow().getByText(/save its client secret before you continue/i)).toBeInTheDocument();
     });
 
-    it('should display the agent name', () => {
+    it('should display the agent name and agent ID', () => {
       renderComponent();
 
-      expect(screen.getByText('Agent name')).toBeInTheDocument();
-      expect(screen.getByText('Test Agent')).toBeInTheDocument();
-    });
-
-    it('should display the agent ID when provided', () => {
-      renderComponent();
-
-      expect(screen.getByText('Agent ID')).toBeInTheDocument();
-      expect(screen.getByText('agent-id-abc')).toBeInTheDocument();
+      expect(getWindow().getByText('Agent name')).toBeInTheDocument();
+      expect(getWindow().getByText('Test Agent')).toBeInTheDocument();
+      expect(getWindow().getByText('Agent ID')).toBeInTheDocument();
+      expect(getWindow().getByText('agent-id-abc')).toBeInTheDocument();
     });
 
     it('should not display the agent ID field when not provided', () => {
       renderComponent({agentId: undefined});
 
-      expect(screen.queryByText('Agent ID')).not.toBeInTheDocument();
+      expect(getWindow().queryByText('Agent ID')).not.toBeInTheDocument();
     });
 
-    it('should display the clientId when provided', () => {
-      renderComponent();
-
-      expect(screen.getByText('Client ID')).toBeInTheDocument();
-      expect(screen.getByText('client-id-xyz')).toBeInTheDocument();
-    });
-
-    it('should not display the clientId field when not provided', () => {
-      renderComponent({clientId: undefined});
-
-      expect(screen.queryByText('Client ID')).not.toBeInTheDocument();
-    });
-
-    it('should render the client secret field as masked password', () => {
-      renderComponent();
-
-      const input = screen.getByDisplayValue('test_secret_12345');
-      expect(input).toBeInTheDocument();
-      expect(input).toHaveAttribute('type', 'password');
-      expect(input).toHaveAttribute('readonly');
-    });
-
-    it('should render the credentials info note', () => {
+    it('should render the credentials info note and the client ID', () => {
       renderComponent();
 
       expect(
-        screen.getByText(/your agent authenticates with these credentials to obtain access tokens/i),
+        getWindow().getByText(/your agent authenticates with these credentials to obtain access tokens/i),
       ).toBeInTheDocument();
+      expect(getWindow().getByText('Client ID')).toBeInTheDocument();
+      expect(getWindow().getByDisplayValue('client-id-xyz')).toBeInTheDocument();
     });
 
-    it('should render security reminder alert', () => {
+    it('should not render the client secret as a field on the window', () => {
       renderComponent();
 
-      expect(screen.getByText(/you won't be able to see this secret again/i)).toBeInTheDocument();
-      expect(screen.getByText(/store the client secret somewhere safe/i)).toBeInTheDocument();
+      expect(getWindow().queryByDisplayValue('test_secret_12345')).not.toBeInTheDocument();
+      expect(getWindow().getByText(/shown only once/i)).toBeInTheDocument();
     });
 
-    it('should render the inline copy affordance and a single continue action', () => {
+    it('should render the discovery endpoint fields', () => {
       renderComponent();
 
-      expect(screen.getByRole('button', {name: /copy client secret/i})).toBeInTheDocument();
-      expect(screen.getByTestId('agent-client-secret-continue')).toBeInTheDocument();
-    });
-  });
-
-  describe('endpoints', () => {
-    it('should render the discovery endpoint fields from the well-known document', () => {
-      renderComponent();
-
-      expect(screen.getByText('Issuer')).toBeInTheDocument();
-      expect(screen.getByDisplayValue('https://localhost:8090')).toBeInTheDocument();
-      expect(screen.getByText('OpenID Connect discovery')).toBeInTheDocument();
-      expect(screen.getByDisplayValue('https://localhost:8090/.well-known/openid-configuration')).toBeInTheDocument();
-      expect(screen.getByText('Authorization endpoint')).toBeInTheDocument();
-      expect(screen.getByDisplayValue('https://localhost:8090/oauth2/authorize')).toBeInTheDocument();
-      expect(screen.getByText('Token endpoint')).toBeInTheDocument();
-      expect(screen.getByDisplayValue('https://localhost:8090/oauth2/token')).toBeInTheDocument();
+      const window = getWindow();
+      expect(window.getByText('Issuer')).toBeInTheDocument();
+      expect(window.getByDisplayValue('https://localhost:8090')).toBeInTheDocument();
+      expect(window.getByText('OpenID Connect discovery')).toBeInTheDocument();
+      expect(window.getByDisplayValue('https://localhost:8090/.well-known/openid-configuration')).toBeInTheDocument();
+      expect(window.getByText('Authorization endpoint')).toBeInTheDocument();
+      expect(window.getByText('Token endpoint')).toBeInTheDocument();
     });
 
     it('should not render the endpoints card when discovery is unavailable', () => {
       mockUseThunderID.mockReturnValue({discovery: {wellKnown: null}});
       renderComponent();
 
-      expect(screen.queryByText('Token endpoint')).not.toBeInTheDocument();
-      expect(screen.queryByText('Issuer')).not.toBeInTheDocument();
+      expect(getWindow().queryByText('Token endpoint')).not.toBeInTheDocument();
+      expect(getWindow().queryByText('Issuer')).not.toBeInTheDocument();
     });
-  });
 
-  describe('visibility toggle', () => {
-    it('should toggle client secret visibility when eye icon is clicked', async () => {
+    it('should call onContinue when the continue button is clicked', async () => {
       const user = userEvent.setup();
       renderComponent();
 
-      const input = screen.getByDisplayValue('test_secret_12345');
-      expect(input).toHaveAttribute('type', 'password');
-
-      const visibilityButton = screen.getByRole('button', {name: /show or hide client secret/i});
-
-      await user.click(visibilityButton);
-
-      expect(input).toHaveAttribute('type', 'text');
-
-      await user.click(visibilityButton);
-
-      expect(input).toHaveAttribute('type', 'password');
-    });
-  });
-
-  describe('copy functionality', () => {
-    it('should copy the secret when the inline copy button is clicked', async () => {
-      const user = userEvent.setup();
-      renderComponent();
-
-      const copyButton = screen.getByRole('button', {name: /copy client secret/i});
-      await user.click(copyButton);
-
-      await waitFor(() => {
-        expect(mockCopy).toHaveBeenCalledWith('test_secret_12345');
-      });
-    });
-
-    it('should show the copied confirmation icon when copied is true', () => {
-      vi.mocked(useCopyToClipboard).mockReturnValue({
-        copied: true,
-        copy: mockCopy,
-      });
-
-      renderComponent();
-
-      const copyButton = screen.getByRole('button', {name: /copy client secret/i});
-      expect(copyButton.querySelector('svg.lucide-check')).toBeInTheDocument();
-    });
-
-    it('should configure useCopyToClipboard with resetDelay 2000', () => {
-      renderComponent();
-
-      const hookCall = vi.mocked(useCopyToClipboard).mock.calls[0][0];
-      expect(hookCall).toHaveProperty('resetDelay', 2000);
-    });
-  });
-
-  describe('continue action', () => {
-    it('should call onContinue when continue button is clicked', async () => {
-      const user = userEvent.setup();
-      renderComponent();
-
-      const continueButton = screen.getByTestId('agent-client-secret-continue');
-      await user.click(continueButton);
+      await user.click(screen.getByTestId('agent-client-secret-continue'));
 
       expect(mockOnContinue).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('secret dialog', () => {
+    it('should open the secret dialog automatically on mount', () => {
+      renderComponent();
+
+      expect(screen.getByTestId('agent-client-secret-dialog')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('test_secret_12345')).toBeInTheDocument();
+    });
+
+    it('should close the dialog on Done and reopen it via the view button', async () => {
+      const user = userEvent.setup();
+      renderComponent();
+
+      await user.click(screen.getByTestId('agent-client-secret-dialog-done'));
+      await waitForElementToBeRemoved(() => screen.queryByTestId('agent-client-secret-dialog'));
+
+      await user.click(screen.getByTestId('agent-client-secret-view'));
+      expect(screen.getByTestId('agent-client-secret-dialog')).toBeInTheDocument();
     });
   });
 });

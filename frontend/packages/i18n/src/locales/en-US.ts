@@ -1025,6 +1025,8 @@ const translations = {
       'Defaults to you if left unchanged. You can assign ownership to another user instead.',
 
     // Client secret (creation)
+    'clientSecret.createdTitle': 'Agent created',
+    'clientSecret.createdSubtitle': 'Your agent is ready. Save its client secret before you continue.',
     'clientSecret.saveTitle': 'Save your client secret',
     'clientSecret.saveSubtitle': "This secret won't be shown again. Copy it and store it somewhere safe.",
     'clientSecret.agentInfoTitle': 'Agent',
@@ -1034,7 +1036,12 @@ const translations = {
     'clientSecret.credentialsInfo': 'Your agent authenticates with these credentials to obtain access tokens.',
     'clientSecret.clientIdLabel': 'Client ID',
     'clientSecret.clientSecretLabel': 'Client Secret',
+    'clientSecret.secretHiddenNote':
+      'The client secret is shown only once. Regenerate it from the agent settings if you lose it.',
+    'clientSecret.viewSecret': 'View client secret',
     'clientSecret.toggleVisibility': 'Show or hide client secret',
+    'clientSecret.copySecret': 'Copy client secret',
+    'clientSecret.copied': 'Copied',
     'clientSecret.endpoints.title': 'Endpoints',
     'clientSecret.endpoints.issuer': 'Issuer',
     'clientSecret.endpoints.oidcDiscovery': 'OpenID Connect discovery',
