@@ -117,6 +117,10 @@ func (n *promptNode) Execute(ctx *providers.NodeContext) (*common.NodeResponse, 
 		return n.executeLoginOptions(ctx, nodeResp)
 	}
 
+	if svcErr := n.rejectConstantInputs(ctx, logger); svcErr != nil {
+		return nil, svcErr
+	}
+
 	if n.resolvePromptInputs(ctx, nodeResp) {
 		logger.Debug(ctx.Context, "All required inputs and actions are available")
 		if n.applyValidationFailureRePrompt(ctx, nodeResp) {
@@ -205,6 +209,9 @@ func (n *promptNode) applyValidationFailureRePrompt(ctx *providers.NodeContext, 
 		if val, isClaim := extIdentity.Claim(input.Identifier); isClaim && val != "" &&
 			input.Type != providers.InputTypePassword {
 			continue
+		}
+		if input.DefaultValue != "" {
+			input.Value = input.DefaultValue
 		}
 		rePromptInputs = append(rePromptInputs, input)
 	}
@@ -404,6 +411,19 @@ func (n *promptNode) SetVariant(variant providers.NodeVariant) {
 	n.variant = variant
 }
 
+// rejectConstantInputs fails the node when a prompt input is marked constant, which only executor
+// inputs support.
+func (n *promptNode) rejectConstantInputs(ctx *providers.NodeContext, logger *log.Logger) *tidcommon.ServiceError {
+	for _, input := range n.getAllInputs() {
+		if input.Constant {
+			logger.Error(ctx.Context, "Prompt input is marked constant",
+				log.String("identifier", input.Identifier))
+			return &tidcommon.InternalServerError
+		}
+	}
+	return nil
+}
+
 // resolvePromptInputs resolves the inputs and actions for the prompt node.
 // It checks for missing required inputs, validates action selection, attempts auto-selection
 // if applicable, and enriches inputs with dynamic data from ForwardedData.
@@ -447,6 +467,7 @@ func (n *promptNode) hasRequiredInputs(ctx *providers.NodeContext, nodeResp *com
 		// If the selected action matches a prompt, validate inputs for that prompt only
 		for _, prompt := range n.prompts {
 			if prompt.Action != nil && prompt.Action.Ref == ctx.CurrentAction {
+				applyInputDefaults(ctx, prompt.Inputs)
 				return !n.appendMissingInputs(ctx, nodeResp, prompt.Inputs)
 			}
 		}
@@ -460,15 +481,32 @@ func (n *promptNode) hasRequiredInputs(ctx *providers.NodeContext, nodeResp *com
 	return !n.appendMissingInputs(ctx, nodeResp, n.getAllInputs())
 }
 
-// appendMissingInputs appends the missing prompt inputs to the node response.
-// Returns true when the prompt should pause for user input.
+// appendMissingInputs appends the missing prompt inputs to the node response. A missing input with a
+// default value carries the default as its value so a client can show it prefilled. Returns true when
+// the prompt should pause for user input.
 func (n *promptNode) appendMissingInputs(ctx *providers.NodeContext, nodeResp *common.NodeResponse,
 	requiredInputs []providers.Input) bool {
 	logger := log.GetLogger().With(log.String(log.LoggerKeyExecutionID, ctx.ExecutionID))
 
 	missing := collectMissingInputs(ctx, GetPresentedOptionalInputs(ctx.RuntimeData), requiredInputs, logger)
+	for i, input := range missing {
+		if input.DefaultValue != "" {
+			missing[i].Value = input.DefaultValue
+		}
+	}
 	nodeResp.Inputs = append(nodeResp.Inputs, missing...)
 	return len(missing) > 0
+}
+
+// applyInputDefaults writes the default of each input that a submission left empty or missing, so the
+// submitted prompt does not ask for it again and later nodes see the value. An input that already has a
+// usable value keeps it.
+func applyInputDefaults(ctx *providers.NodeContext, inputs []providers.Input) {
+	for _, input := range inputs {
+		if input.DefaultValue != "" && !hasUsableInputValue(ctx, input) {
+			writeInputDefault(ctx, input)
+		}
+	}
 }
 
 // enrichInputsFromForwardedData enriches the inputs in the node response with dynamic data
@@ -774,7 +812,8 @@ func (n *promptNode) buildSyntheticComponentList(
 		if inMeta {
 			needsRequired := input.Required && comp["required"] != true
 			needsPassword := input.Type == providers.InputTypePassword && comp["type"] != providers.InputTypePassword
-			if needsRequired || needsPassword {
+			needsValue := input.DefaultValue != "" && comp["value"] != input.DefaultValue
+			if needsRequired || needsPassword || needsValue {
 				cloned := make(map[string]interface{}, len(comp))
 				for k, v := range comp {
 					cloned[k] = v
@@ -784,6 +823,9 @@ func (n *promptNode) buildSyntheticComponentList(
 				}
 				if needsPassword {
 					cloned["type"] = providers.InputTypePassword
+				}
+				if needsValue {
+					cloned["value"] = input.DefaultValue
 				}
 
 				promotions[ref] = cloned
@@ -864,7 +906,7 @@ func applyComponentPromotions(comps []interface{}, promotions map[string]map[str
 
 // appendSyntheticMetaComponents ensures every input in the list has a corresponding meta
 // component. For inputs whose component already exists (matched by ref or id), a cloned
-// component with the promoted fields (required, type) is swapped in — the original shared
+// component with the promoted fields (required, type, value) is swapped in — the original shared
 // metadata is never mutated. For inputs with no existing component, a minimal synthetic
 // component is created and inserted into the first BLOCK before any ACTION. If no BLOCK
 // exists, a new one is appended.

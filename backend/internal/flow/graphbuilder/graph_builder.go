@@ -349,11 +349,13 @@ func (b *graphBuilder) configureNodeInputs(
 	inputs := make([]providers.Input, len(nodeDef.Executor.Inputs))
 	for i, input := range nodeDef.Executor.Inputs {
 		inputs[i] = providers.Input{
-			Ref:        input.Ref,
-			Identifier: input.Identifier,
-			Type:       input.Type,
-			Required:   input.Required,
-			OneTimeUse: input.OneTimeUse,
+			Ref:          input.Ref,
+			Identifier:   input.Identifier,
+			Type:         input.Type,
+			Required:     input.Required,
+			OneTimeUse:   input.OneTimeUse,
+			DefaultValue: input.DefaultValue,
+			Constant:     input.Constant,
 		}
 	}
 	executorNode.SetInputs(inputs)
@@ -443,12 +445,14 @@ func (b *graphBuilder) configureNodePrompts(
 					nodeDef.ID, i, inputDef.Identifier, err)
 			}
 			inputs[j] = providers.Input{
-				Ref:        inputDef.Ref,
-				Identifier: inputDef.Identifier,
-				Type:       inputDef.Type,
-				Required:   inputDef.Required,
-				OneTimeUse: inputDef.OneTimeUse,
-				Validation: validation,
+				Ref:          inputDef.Ref,
+				Identifier:   inputDef.Identifier,
+				Type:         inputDef.Type,
+				Required:     inputDef.Required,
+				OneTimeUse:   inputDef.OneTimeUse,
+				DefaultValue: inputDef.DefaultValue,
+				Constant:     inputDef.Constant,
+				Validation:   validation,
 			}
 		}
 		prompts[i].Inputs = inputs

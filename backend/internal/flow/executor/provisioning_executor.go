@@ -1017,13 +1017,13 @@ func collectedFlag(ctx *providers.NodeContext, key string) (bool, *tidcommon.Ser
 	return parsed, nil
 }
 
-// collectedValue reads a value the flow collected for key, preferring what an executor resolved
-// over what the caller submitted. Submitted values are unfiltered, so a resolved one wins.
+// collectedValue reads a value the flow collected for key. User inputs come first, so a constant
+// input, which the task node writes there, wins over a value an executor resolved earlier.
 func collectedValue(ctx *providers.NodeContext, key string) string {
-	if val, ok := ctx.RuntimeData[key]; ok && val != "" {
+	if val, ok := ctx.UserInputs[key]; ok && val != "" {
 		return val
 	}
-	if val, ok := ctx.UserInputs[key]; ok && val != "" {
+	if val, ok := ctx.RuntimeData[key]; ok && val != "" {
 		return val
 	}
 	return ""

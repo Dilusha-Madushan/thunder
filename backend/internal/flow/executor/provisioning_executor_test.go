@@ -4700,6 +4700,56 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_AgentProvisioning_UsesRe
 	assert.Equal(suite.T(), "resolved-owner", received.Owner)
 }
 
+// A value held as an input wins over one an executor resolved earlier, which is how a constant input
+// takes effect on the agent's record fields.
+func (suite *ProvisioningExecutorTestSuite) TestExecute_AgentProvisioning_InputsWinOverRuntimeRecordFields() {
+	suite.expectSchemaForAgentProvisioning()
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything).Return(nil,
+		entityprovider.NewEntityProviderError(entityprovider.ErrorCodeEntityNotFound, "", ""))
+
+	var received *providers.Agent
+	var delegated bool
+	suite.mockAgentMgtProvider.On("CreateAgent", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			received = args.Get(1).(*providers.Agent)
+			delegated = args.Get(2).(bool)
+		}).
+		Return(&providers.Agent{ID: testNewAgentID}, nil).Once()
+
+	ctx := &providers.NodeContext{
+		ExecutionID: "flow-123",
+		FlowType:    providers.FlowTypeAdministration,
+		NodeProperties: map[string]interface{}{
+			propertyKeyProvisioningMode: string(entitytype.TypeCategoryAgent),
+		},
+		UserInputs: map[string]string{
+			"model": "claude", "name": "support-bot",
+			descriptionKey:  "From the input",
+			logoURLKey:      "https://example.com/input.png",
+			redirectURIsKey: "https://example.com/input",
+			delegatedKey:    dataValueTrue,
+		},
+		RuntimeData: map[string]string{
+			ouIDKey: testOUID, categoryTypeKey: testAgentType,
+			descriptionKey:  "From the runtime",
+			logoURLKey:      "https://example.com/runtime.png",
+			redirectURIsKey: "https://example.com/runtime",
+			delegatedKey:    dataValueFalse,
+		},
+	}
+
+	_, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	require.NotNil(suite.T(), received)
+	assert.Equal(suite.T(), "From the input", received.Description)
+	assert.Equal(suite.T(), "https://example.com/input.png", received.LogoURL)
+	require.Len(suite.T(), received.InboundAuthConfig, 1)
+	assert.Equal(suite.T(), []string{"https://example.com/input"},
+		received.InboundAuthConfig[0].OAuthConfig.RedirectURIs)
+	assert.True(suite.T(), delegated)
+}
+
 // Agents do not self-register yet. The refusal sits in the executor rather than in flow
 // validation, so the capability is not blocked structurally and the guard can simply be removed.
 func (suite *ProvisioningExecutorTestSuite) TestExecute_AgentProvisioning_RefusedInARegistrationFlow() {
