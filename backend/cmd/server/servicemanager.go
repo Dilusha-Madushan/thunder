@@ -354,7 +354,6 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	// Initialize authentication services.
 	authAssertGen := authnAssert.Initialize()
 	consentEnforcer := authnConsent.Initialize(jwtService)
-	agentMgtProvider := agentmgtprovider.Initialize()
 
 	_, directAuthGuard := authn.Initialize(mux, mcpServer, idpService, jwtService, authnProvider, authAssertGen,
 		otpCoreService, notifSenderSvc, notifTemplateRenderer, magicLinkService, oauthAuthnService,
@@ -427,7 +426,6 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 			RoleAssignmentService: roleAssignmentService,
 			EntityProvider:        entityProvider,
 			UserMgtProvider:       userMgtProvider,
-			AgentMgtProvider:      agentMgtProvider,
 			AttributeCacheSvc:     attributeCacheService,
 			TemplateRenderer:      notifTemplateRenderer,
 			OAuthSvc:              oauthAuthnService,
@@ -498,10 +496,9 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	fatalOnError(ctx, logger, err, "Failed to initialize AgentService")
 	exporters = append(exporters, agentExporter)
 
-	// Two-phase initialization: the provider is constructed before the executor registry, which
-	// needs it, while the agent service it delegates to only exists after the inbound client and
-	// flow management services.
-	agentMgtProvider.SetAgentService(agentService)
+	// Two-phase initialization: inject the agent provider into the executors that provision agents.
+	fatalOnError(ctx, logger, executor.SetAgentMgtProvider(execRegistry, agentmgtprovider.Initialize(agentService)),
+		"Failed to inject the agent provider into the flow executors")
 
 	// Wire the dependency registry into the consuming services (two-phase init to avoid cyclic
 	// imports). flowMgtService is both a consumer and a provider: it reports which flows reference an

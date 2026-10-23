@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	flowcm "github.com/thunder-id/thunderid/internal/flow/common"
+	"github.com/thunder-id/thunderid/internal/flow/executor"
 	"github.com/thunder-id/thunderid/internal/flow/flowexec"
 	oauthconfig "github.com/thunder-id/thunderid/internal/oauth/config"
 	oauth2const "github.com/thunder-id/thunderid/internal/oauth/oauth2/constants"
@@ -419,18 +420,11 @@ func (s *cibaService) resolveExpectedAudience(ctx context.Context, clientID stri
 	return app.ID
 }
 
-// Flow executor error codes that mean the login_hint resolved to no single entity. Matched by
-// code rather than by message, because the messages are translatable and name the entity category.
-const (
-	flowErrCodeEntityNotFound          = "FET-1001"
-	flowErrCodeAmbiguousEntityIdentity = "FET-1003"
-)
-
 // mapFlowErrorToCIBAError maps a flow failure to the appropriate CIBA error.
 // Not-found and ambiguous-identity failures map to unknown_user_id per CIBA Core 1.0 §7.3.
 func mapFlowErrorToCIBAError(failureCode string) *CIBAError {
 	switch failureCode {
-	case flowErrCodeEntityNotFound, flowErrCodeAmbiguousEntityIdentity:
+	case executor.ErrEntityNotFound.Code, executor.ErrAmbiguousEntityIdentity.Code:
 		return &CIBAError{
 			Code:    oauth2const.ErrorUnknownUserID,
 			Message: "Unable to resolve the user for the provided login_hint",

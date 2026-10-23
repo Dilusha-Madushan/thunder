@@ -99,6 +99,33 @@ func (r *executorRegistry) setApplicationProvider(provider applicationAdminProvi
 	}
 }
 
+// agentMgtProviderConsumerInterface is implemented by the executors that provision agents.
+type agentMgtProviderConsumerInterface interface {
+	setAgentMgtProvider(provider providers.AgentMgtProvider)
+}
+
+// SetAgentMgtProvider injects the agent provider into every registered executor that provisions
+// agents. The agent service behind it is built after the executors (agent -> inboundclient ->
+// flowmgt -> executor), so it cannot be passed to their constructors.
+func SetAgentMgtProvider(reg ExecutorRegistryInterface, provider providers.AgentMgtProvider) error {
+	registry, ok := reg.(*executorRegistry)
+	if !ok {
+		return fmt.Errorf("executor registry does not support agent provider injection")
+	}
+	registry.setAgentMgtProvider(provider)
+	return nil
+}
+
+func (r *executorRegistry) setAgentMgtProvider(provider providers.AgentMgtProvider) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ex := range r.executors {
+		if consumer, ok := ex.(agentMgtProviderConsumerInterface); ok {
+			consumer.setAgentMgtProvider(provider)
+		}
+	}
+}
+
 // RegisterExecutor registers an executor instance.
 func (r *executorRegistry) RegisterExecutor(name string, exec providers.Executor) {
 	// Executors are registered at server startup, outside any request,

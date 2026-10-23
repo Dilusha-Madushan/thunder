@@ -17,20 +17,8 @@ import (
 // entityTypeCandidateLimit bounds the candidate list a resolver considers.
 const entityTypeCandidateLimit = 100
 
-// entityTypeResolutionInterface defines the resolution steps the per-category resolvers delegate
-// to. They embed it, so the steps are reached on the resolver itself.
-type entityTypeResolutionInterface interface {
-	resolve(ctx *providers.NodeContext, category entitytype.TypeCategory, allowedTypes []string,
-		defaultInputs []providers.Input, execResp *providers.ExecutorResponse,
-		logger *log.Logger) (*providers.ExecutorResponse, error)
-	entityTypeAndOU(ctx context.Context, category entitytype.TypeCategory, name string,
-		logger *log.Logger) (*entitytype.EntityType, string, error)
-	promptOptions(ctx context.Context, execResp *providers.ExecutorResponse, options []string,
-		defaultInputs []providers.Input, logger *log.Logger)
-}
-
 // entityTypeResolution resolves the entity type to provision as, for any category. The
-// per-category resolvers own the flow-type handling and delegate the resolution here.
+// per-category resolvers embed it, own the flow-type handling, and delegate the resolution here.
 //
 // The outcome follows the number of candidates that survive filtering: none fails, one is taken
 // without asking, several are offered as a choice.
@@ -38,8 +26,6 @@ type entityTypeResolution struct {
 	entityTypeService entitytype.EntityTypeServiceInterface
 	ouService         providers.OrganizationUnitProvider
 }
-
-var _ entityTypeResolutionInterface = (*entityTypeResolution)(nil)
 
 // resolve runs the resolution for a category. defaultInputs carries the input to offer when there
 // is a choice, and allowedTypes narrows the candidates.
@@ -90,7 +76,7 @@ func (r *entityTypeResolution) resolveSubmitted(ctx *providers.NodeContext,
 		return execResp, nil
 	}
 
-	entityType, ouID, err := r.entityTypeAndOU(ctx.Context, category, selected, logger)
+	entityType, ouID, err := r.entityTypeAndOU(ctx.Context, category, selected)
 	if err != nil {
 		execResp.Status = providers.ExecFailure
 		execResp.Error = errForEntityCategory(ErrInvalidUserType, category)
@@ -175,22 +161,14 @@ func (r *entityTypeResolution) accept(ctx *providers.NodeContext, handle, ouID s
 	return execResp
 }
 
-// prompt offers the surviving candidates as a choice.
+// prompt offers the options on the executor's first declared input, forwarding it so a prompt node
+// renders the same choice.
 func (r *entityTypeResolution) prompt(ctx *providers.NodeContext, category entitytype.TypeCategory,
 	options []string, defaultInputs []providers.Input, execResp *providers.ExecutorResponse,
 	logger *log.Logger,
 ) {
 	logger.Debug(ctx.Context, "Prompting for entity type selection",
 		log.String("category", string(category)), log.Any("options", options))
-	r.promptOptions(ctx.Context, execResp, options, defaultInputs, logger)
-}
-
-// promptOptions offers the options on the executor's first declared input, forwarding it so a
-// prompt node renders the same choice.
-func (r *entityTypeResolution) promptOptions(ctx context.Context, execResp *providers.ExecutorResponse,
-	options []string, defaultInputs []providers.Input, logger *log.Logger,
-) {
-	logger.Debug(ctx, "Prompting for type selection", log.Any("options", options))
 
 	execResp.Status = providers.ExecUserInputRequired
 	if len(defaultInputs) > 0 {
@@ -203,7 +181,7 @@ func (r *entityTypeResolution) promptOptions(ctx context.Context, execResp *prov
 
 // entityTypeAndOU reads a type by handle and the organization unit it lives in.
 func (r *entityTypeResolution) entityTypeAndOU(ctx context.Context, category entitytype.TypeCategory,
-	handle string, logger *log.Logger,
+	handle string,
 ) (*entitytype.EntityType, string, error) {
 	entityType, svcErr := r.entityTypeService.GetEntityTypeByHandle(ctx, category, handle)
 	if svcErr != nil {
@@ -281,4 +259,19 @@ func allowedTypesFromProperties(ctx *providers.NodeContext, key string) []string
 	}
 
 	return handles
+}
+
+// checkAuthenticationAllowed admits authentication only when the application allows at least one
+// type of the category.
+func checkAuthenticationAllowed(
+	allowedTypes []string, execResp *providers.ExecutorResponse,
+) *providers.ExecutorResponse {
+	if len(allowedTypes) == 0 {
+		execResp.Status = providers.ExecFailure
+		execResp.Error = &ErrAuthNotAvailableForApp
+		return execResp
+	}
+
+	execResp.Status = providers.ExecComplete
+	return execResp
 }

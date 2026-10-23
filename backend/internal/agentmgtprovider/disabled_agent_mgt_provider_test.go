@@ -14,7 +14,7 @@ import (
 
 type DisabledAgentMgtProviderTestSuite struct {
 	suite.Suite
-	provider AgentMgtProviderService
+	provider providers.AgentMgtProvider
 }
 
 func (suite *DisabledAgentMgtProviderTestSuite) SetupTest() {

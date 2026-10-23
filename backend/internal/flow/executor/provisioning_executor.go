@@ -50,6 +50,7 @@ type provisioningExecutor struct {
 
 var _ providers.Executor = (*provisioningExecutor)(nil)
 var _ identifyingExecutorInterface = (*provisioningExecutor)(nil)
+var _ agentMgtProviderConsumerInterface = (*provisioningExecutor)(nil)
 
 // newProvisioningExecutor creates a new instance of ProvisioningExecutor.
 func newProvisioningExecutor(
@@ -103,6 +104,11 @@ func newProvisioningExecutor(
 		authnProvider:                authnProvider,
 		logger:                       logger,
 	}
+}
+
+// setAgentMgtProvider injects the agent provider. See SetAgentMgtProvider.
+func (p *provisioningExecutor) setAgentMgtProvider(provider providers.AgentMgtProvider) {
+	p.agentMgtProvider = provider
 }
 
 // Execute provisions an entity of the node's category. It runs the category-independent

@@ -22,6 +22,7 @@ import (
 
 	"github.com/thunder-id/thunderid/internal/actorprovider"
 	flowcm "github.com/thunder-id/thunderid/internal/flow/common"
+	"github.com/thunder-id/thunderid/internal/flow/executor"
 	"github.com/thunder-id/thunderid/internal/flow/flowexec"
 	oauth2const "github.com/thunder-id/thunderid/internal/oauth/oauth2/constants"
 	"github.com/thunder-id/thunderid/internal/system/config"
@@ -580,7 +581,7 @@ func (suite *CIBAServiceTestSuite) TestInitiate_FlowInitiationFails() {
 func (suite *CIBAServiceTestSuite) TestInitiate_FlowErrorMapsToUnknownUser() {
 	suite.mockFlowExec.EXPECT().InitiateAndExecute(mock.Anything, mock.Anything).Return(
 		&flowexec.FlowStep{Status: providers.FlowStatusError, Error: &tidcommon.ServiceError{
-			Code:  flowErrCodeEntityNotFound,
+			Code:  executor.ErrEntityNotFound.Code,
 			Error: tidcommon.I18nMessage{DefaultValue: "The user could not be found"},
 		}}, nil)
 
@@ -597,7 +598,7 @@ func (suite *CIBAServiceTestSuite) TestInitiate_FlowErrorMapsToUnknownUser() {
 func (suite *CIBAServiceTestSuite) TestInitiate_FlowErrorAmbiguousUserMapsToUnknownUser() {
 	suite.mockFlowExec.EXPECT().InitiateAndExecute(mock.Anything, mock.Anything).Return(
 		&flowexec.FlowStep{Status: providers.FlowStatusError, Error: &tidcommon.ServiceError{
-			Code:  flowErrCodeAmbiguousEntityIdentity,
+			Code:  executor.ErrAmbiguousEntityIdentity.Code,
 			Error: tidcommon.I18nMessage{DefaultValue: "Ambiguous user identity"},
 		}}, nil)
 

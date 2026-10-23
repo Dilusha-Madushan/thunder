@@ -892,7 +892,7 @@ func (suite *UserTypeResolverTestSuite) TestExecute_RegistrationFlow_NodeAllowed
 	assert.Equal(suite.T(), ErrUserTypeNotAllowed.Error.DefaultValue, result.Error.Error.DefaultValue)
 }
 
-func (suite *UserTypeResolverTestSuite) TestGetEntityTypeAndOU_Success() {
+func (suite *UserTypeResolverTestSuite) TestEntityTypeAndOU_Success() {
 	suite.SetupTest()
 
 	entityType := &entitytype.EntityType{
@@ -904,7 +904,7 @@ func (suite *UserTypeResolverTestSuite) TestGetEntityTypeAndOU_Success() {
 	suite.mockEntityTypeService.On("GetEntityTypeByHandle", context.Background(), mock.Anything, "employee").
 		Return(entityType, nil)
 
-	schema, ouID, err := suite.executor.getEntityTypeAndOU(context.Background(), "employee")
+	schema, ouID, err := suite.executor.entityTypeAndOU(context.Background(), entitytype.TypeCategoryUser, "employee")
 
 	assert.Nil(suite.T(), err)
 	assert.NotNil(suite.T(), schema)
@@ -913,7 +913,7 @@ func (suite *UserTypeResolverTestSuite) TestGetEntityTypeAndOU_Success() {
 	suite.mockEntityTypeService.AssertExpectations(suite.T())
 }
 
-func (suite *UserTypeResolverTestSuite) TestGetEntityTypeAndOU_NoOUFound() {
+func (suite *UserTypeResolverTestSuite) TestEntityTypeAndOU_NoOUFound() {
 	suite.SetupTest()
 
 	entityType := &entitytype.EntityType{
@@ -925,7 +925,7 @@ func (suite *UserTypeResolverTestSuite) TestGetEntityTypeAndOU_NoOUFound() {
 	suite.mockEntityTypeService.On("GetEntityTypeByHandle", context.Background(), mock.Anything, "employee").
 		Return(entityType, nil)
 
-	schema, ouID, err := suite.executor.getEntityTypeAndOU(context.Background(), "employee")
+	schema, ouID, err := suite.executor.entityTypeAndOU(context.Background(), entitytype.TypeCategoryUser, "employee")
 
 	assert.NotNil(suite.T(), err)
 	assert.Nil(suite.T(), schema)
@@ -934,7 +934,7 @@ func (suite *UserTypeResolverTestSuite) TestGetEntityTypeAndOU_NoOUFound() {
 	suite.mockEntityTypeService.AssertExpectations(suite.T())
 }
 
-func (suite *UserTypeResolverTestSuite) TestGetEntityTypeAndOU_SchemaNotFound() {
+func (suite *UserTypeResolverTestSuite) TestEntityTypeAndOU_SchemaNotFound() {
 	suite.SetupTest()
 
 	svcErr := &tidcommon.ServiceError{
@@ -948,7 +948,7 @@ func (suite *UserTypeResolverTestSuite) TestGetEntityTypeAndOU_SchemaNotFound() 
 	suite.mockEntityTypeService.On("GetEntityTypeByHandle", context.Background(), mock.Anything, "employee").
 		Return(nil, svcErr)
 
-	schema, ouID, err := suite.executor.getEntityTypeAndOU(context.Background(), "employee")
+	schema, ouID, err := suite.executor.entityTypeAndOU(context.Background(), entitytype.TypeCategoryUser, "employee")
 
 	assert.NotNil(suite.T(), err)
 	assert.Nil(suite.T(), schema)
@@ -1279,7 +1279,7 @@ func (suite *UserTypeResolverTestSuite) TestExecute_UserOnboardingFlow_AllowedUs
 	assert.Equal(suite.T(), "ou-123", result.RuntimeData[defaultOUIDKey])
 }
 
-func (suite *UserTypeResolverTestSuite) TestPromptUserSelection_ForwardsInputsInForwardedData() {
+func (suite *UserTypeResolverTestSuite) TestPrompt_ForwardsInputsInForwardedData() {
 	suite.SetupTest()
 
 	options := []string{"employee", "customer", "partner"}
@@ -1287,7 +1287,8 @@ func (suite *UserTypeResolverTestSuite) TestPromptUserSelection_ForwardsInputsIn
 		ForwardedData: map[string]interface{}{},
 	}
 
-	suite.executor.promptUserSelection(context.Background(), execResp, options)
+	suite.executor.prompt(&providers.NodeContext{Context: context.Background()}, entitytype.TypeCategoryUser,
+		options, suite.executor.GetDefaultInputs(), execResp, suite.executor.logger)
 
 	// Verify status and inputs are set
 	assert.Equal(suite.T(), providers.ExecUserInputRequired, execResp.Status)
@@ -1308,7 +1309,7 @@ func (suite *UserTypeResolverTestSuite) TestPromptUserSelection_ForwardsInputsIn
 	assert.ElementsMatch(suite.T(), options, inputsSlice[0].Options)
 }
 
-func (suite *UserTypeResolverTestSuite) TestPromptUserSelection_WithEmptyOptions() {
+func (suite *UserTypeResolverTestSuite) TestPrompt_WithEmptyOptions() {
 	suite.SetupTest()
 
 	options := []string{}
@@ -1316,7 +1317,8 @@ func (suite *UserTypeResolverTestSuite) TestPromptUserSelection_WithEmptyOptions
 		ForwardedData: map[string]interface{}{},
 	}
 
-	suite.executor.promptUserSelection(context.Background(), execResp, options)
+	suite.executor.prompt(&providers.NodeContext{Context: context.Background()}, entitytype.TypeCategoryUser,
+		options, suite.executor.GetDefaultInputs(), execResp, suite.executor.logger)
 
 	// Verify status is set
 	assert.Equal(suite.T(), providers.ExecUserInputRequired, execResp.Status)
@@ -1333,7 +1335,7 @@ func (suite *UserTypeResolverTestSuite) TestPromptUserSelection_WithEmptyOptions
 	assert.Empty(suite.T(), inputsSlice[0].Options)
 }
 
-func (suite *UserTypeResolverTestSuite) TestPromptUserSelection_PreservesExistingForwardedData() {
+func (suite *UserTypeResolverTestSuite) TestPrompt_PreservesExistingForwardedData() {
 	suite.SetupTest()
 
 	options := []string{"employee"}
@@ -1343,7 +1345,8 @@ func (suite *UserTypeResolverTestSuite) TestPromptUserSelection_PreservesExistin
 		},
 	}
 
-	suite.executor.promptUserSelection(context.Background(), execResp, options)
+	suite.executor.prompt(&providers.NodeContext{Context: context.Background()}, entitytype.TypeCategoryUser,
+		options, suite.executor.GetDefaultInputs(), execResp, suite.executor.logger)
 
 	// Verify existing ForwardedData is preserved
 	assert.NotNil(suite.T(), execResp.ForwardedData)

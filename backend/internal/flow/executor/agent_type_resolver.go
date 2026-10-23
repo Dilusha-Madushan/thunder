@@ -10,8 +10,6 @@ import (
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 )
 
-const agentTypeResolverLoggerComponentName = "AgentTypeResolver"
-
 // agentTypeResolver resolves the agent type to provision as, publishing it and the organization
 // unit that type lives in.
 //
@@ -19,12 +17,11 @@ const agentTypeResolverLoggerComponentName = "AgentTypeResolver"
 // rejects a node placed elsewhere.
 type agentTypeResolver struct {
 	providers.Executor
-	entityTypeResolutionInterface
+	*entityTypeResolution
 	logger *log.Logger
 }
 
 var _ providers.Executor = (*agentTypeResolver)(nil)
-var _ entityTypeResolutionInterface = (*agentTypeResolver)(nil)
 
 // newAgentTypeResolver creates a new instance of the AgentTypeResolver executor.
 func newAgentTypeResolver(
@@ -33,7 +30,7 @@ func newAgentTypeResolver(
 	ouService providers.OrganizationUnitProvider,
 ) *agentTypeResolver {
 	logger := log.GetLogger().With(
-		log.String(log.LoggerKeyComponentName, agentTypeResolverLoggerComponentName),
+		log.String(log.LoggerKeyComponentName, "AgentTypeResolver"),
 		log.String(log.LoggerKeyExecutorName, ExecutorNameAgentTypeResolver))
 
 	defaultInputs := []providers.Input{
@@ -58,7 +55,7 @@ func newAgentTypeResolver(
 
 	return &agentTypeResolver{
 		Executor: base,
-		entityTypeResolutionInterface: &entityTypeResolution{
+		entityTypeResolution: &entityTypeResolution{
 			entityTypeService: entityTypeService,
 			ouService:         ouService,
 		},
@@ -79,7 +76,7 @@ func (a *agentTypeResolver) Execute(ctx *providers.NodeContext) (*providers.Exec
 
 	switch ctx.FlowType {
 	case providers.FlowTypeAuthentication:
-		return a.handleAuthenticationFlows(ctx, execResp)
+		return checkAuthenticationAllowed(ctx.Application.AllowedAgentTypes, execResp), nil
 	case providers.FlowTypeAdministration:
 		return a.handleAdministrationFlows(ctx, execResp)
 	case providers.FlowTypeRegistration:
@@ -90,26 +87,6 @@ func (a *agentTypeResolver) Execute(ctx *providers.NodeContext) (*providers.Exec
 		execResp.Status = providers.ExecComplete
 		return execResp, nil
 	}
-}
-
-// handleAuthenticationFlows gates authentication on the agent types the application accepts. An
-// empty list means the application admits no agent at all, which is the same shape as the user
-// gate and what the allowedAgentTypes contract states.
-func (a *agentTypeResolver) handleAuthenticationFlows(ctx *providers.NodeContext,
-	execResp *providers.ExecutorResponse) (*providers.ExecutorResponse, error) {
-	logger := a.logger.With(log.String(log.LoggerKeyExecutionID, ctx.ExecutionID))
-
-	if len(ctx.Application.AllowedAgentTypes) == 0 {
-		logger.Debug(ctx.Context, "No allowed agent types configured for authentication")
-		execResp.Status = providers.ExecFailure
-		execResp.Error = &ErrAuthNotAvailableForApp
-
-		return execResp, nil
-	}
-
-	execResp.Status = providers.ExecComplete
-
-	return execResp, nil
 }
 
 // handleAdministrationFlows resolves the agent type for an administrator-driven flow. The
