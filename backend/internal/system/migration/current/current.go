@@ -6,23 +6,12 @@ package current
 
 import (
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
-	release "github.com/thunder-id/thunderid/internal/system/migration/releases/v2_0_0"
+	previous "github.com/thunder-id/thunderid/internal/system/migration/releases/v2_0_0"
+	release "github.com/thunder-id/thunderid/internal/system/migration/releases/v2_0_0_1"
 )
 
 // Dependencies contains the dependencies available to the release compiled into this binary.
 type Dependencies = release.Dependencies
-
-// DeclarativeEntityTypes lists the entity types defined in declarative resource files.
-type DeclarativeEntityTypes = release.DeclarativeEntityTypes
-
-// DeclarativeEntityType is an entity type defined in a declarative resource file.
-type DeclarativeEntityType = release.DeclarativeEntityType
-
-// DeclarativeConnections lists the connections defined in declarative resource files.
-type DeclarativeConnections = release.DeclarativeConnections
-
-// DeclarativeConnection is a connection defined in a declarative resource file.
-type DeclarativeConnection = release.DeclarativeConnection
 
 // Definition returns the release definition selected for the current binary.
 func Definition() (*engine.ReleaseDefinition, error) {
@@ -34,11 +23,16 @@ func DefinitionWithDependencies(dependencies Dependencies) (*engine.ReleaseDefin
 	return release.DefinitionWithDependencies(dependencies)
 }
 
-// Catalog returns the ordered migration manifests known to the current binary.
+// Catalog returns the ordered migration manifests known to the current binary. The previous release is
+// listed so that a store still at its source level is routed through it first.
 func Catalog() ([]engine.ReleaseManifest, error) {
+	previousDefinition, err := previous.Definition()
+	if err != nil {
+		return nil, err
+	}
 	definition, err := release.Definition()
 	if err != nil {
 		return nil, err
 	}
-	return []engine.ReleaseManifest{definition.Manifest}, nil
+	return []engine.ReleaseManifest{previousDefinition.Manifest, definition.Manifest}, nil
 }

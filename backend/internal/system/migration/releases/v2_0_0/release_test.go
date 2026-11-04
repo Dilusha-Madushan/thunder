@@ -5,7 +5,6 @@ package v2_0_0
 
 import (
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,13 +13,11 @@ import (
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
 )
 
-func TestDefinitionMatchesProductVersion(t *testing.T) {
+func TestDefinitionTargetsVersion2(t *testing.T) {
 	definition, err := Definition()
 	require.NoError(t, err)
 
-	versionBytes, err := os.ReadFile("../../../../../../version.txt")
-	require.NoError(t, err)
-	expectedVersion := strings.TrimPrefix(strings.TrimSpace(string(versionBytes)), "v")
+	expectedVersion := "2.0.0-m1-pidp"
 
 	assert.Equal(t, expectedVersion, definition.Manifest.ReleaseVersion)
 	assert.Equal(t, expectedVersion, definition.Plan.TargetVersion)

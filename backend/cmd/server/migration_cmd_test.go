@@ -116,7 +116,7 @@ func TestRunMigrationStatusReportsMissingMetadata(t *testing.T) {
 	}
 }
 
-func TestRunMigrationStatusReportsDirectMigrationRoute(t *testing.T) {
+func TestRunMigrationStatusReportsRouteThroughPreviousRelease(t *testing.T) {
 	dataSource := testPostgresDataSource("thunderid")
 	cfg := &config.Config{Database: config.DatabaseConfig{
 		Config: dataSource, Entity: dataSource, RuntimeTransient: dataSource, RuntimePersistent: dataSource,
@@ -149,8 +149,8 @@ func TestRunMigrationStatusReportsDirectMigrationRoute(t *testing.T) {
 	require.ErrorIs(t, err, errMigrationStatusIncompatible)
 	require.NotNil(t, result)
 	require.NotNil(t, result.compatibility)
-	assert.Equal(t, "2.0.0-m1-pidp", result.compatibility.NextMigrationRelease)
-	assert.Equal(t, []string{"2.0.0-m1-pidp"}, result.compatibility.MigrationRoute)
+	assert.Equal(t, testPreviousReleaseLevel, result.compatibility.NextMigrationRelease)
+	assert.Equal(t, []string{testPreviousReleaseLevel, testCurrentReleaseLevel}, result.compatibility.MigrationRoute)
 	assert.NoError(t, result.compatibility.RouteErr)
 }
 
@@ -231,8 +231,8 @@ func TestRunStartupCompatibilityCheckAcceptsContractReadyTarget(t *testing.T) {
 	} {
 		row := testMigrationStateRow(storeID)
 		if storeID == engine.StoreIDConfigDB || storeID == engine.StoreIDRuntimePersistent {
-			row["completed_level"] = "1.0.0"
-			row["target_level"] = "2.0.0-m1-pidp"
+			row["completed_level"] = testPreviousReleaseLevel
+			row["target_level"] = testCurrentReleaseLevel
 			row["stage"] = string(engine.MigrationStageContractReady)
 			row["status"] = string(engine.StatusCompleted)
 		}
@@ -270,8 +270,8 @@ func TestRunStartupCompatibilityCheckAcceptsExpandedTarget(t *testing.T) {
 	} {
 		row := testMigrationStateRow(storeID)
 		if storeID == engine.StoreIDConfigDB || storeID == engine.StoreIDRuntimePersistent {
-			row["completed_level"] = "1.0.0"
-			row["target_level"] = "2.0.0-m1-pidp"
+			row["completed_level"] = testPreviousReleaseLevel
+			row["target_level"] = testCurrentReleaseLevel
 			row["stage"] = string(engine.MigrationStageExpanded)
 			row["status"] = string(engine.StatusCompleted)
 		}
@@ -663,16 +663,19 @@ func TestParseMigrationCommandOptionsRejectsConflictingRollbackScopes(t *testing
 	assert.ErrorContains(t, err, "cannot combine")
 }
 
+// testPreviousReleaseLevel is the level the current release accepts as its source, and testCurrentReleaseLevel
+// the level it migrates changed stores to.
+const (
+	testPreviousReleaseLevel = "2.0.0-m1-pidp"
+	testCurrentReleaseLevel  = "2.0.0-m1-pidp.1"
+)
+
 func testMigrationStateRow(storeID engine.StoreID) map[string]interface{} {
-	completedLevel := "1.0.0"
-	if storeID != engine.StoreIDRuntimeTransient {
-		completedLevel = "2.0.0-m1-pidp"
-	}
 	return map[string]interface{}{
 		"id":               "0199a123-4567-7abc-8def-0123456789ab",
 		"store_id":         string(storeID),
 		"metadata_version": int64(2),
-		"completed_level":  completedLevel,
+		"completed_level":  testCurrentReleaseLevel,
 		"target_level":     nil,
 		"stage":            "complete",
 		"status":           "clean",
