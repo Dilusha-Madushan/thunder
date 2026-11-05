@@ -5,7 +5,7 @@ package v2_0_0_1
 
 import "github.com/thunder-id/thunderid/internal/system/migration/engine"
 
-const addInboundClientDeviceGrantFlowIDOperationID engine.OperationID = "2.0.0-m1-pidp.1/configdb/" +
+const addInboundClientDeviceGrantFlowIDOperationID engine.OperationID = "2.0.0-m1-pidp/configdb/" +
 	"01_add_inbound_client_device_grant_flow_id"
 
 // newAddInboundClientDeviceGrantFlowIDOperation adds the column that stores each application's Device Grant
@@ -18,10 +18,10 @@ func newAddInboundClientDeviceGrantFlowIDOperation() (engine.Operation, error) {
 		description: "Add the Device Grant flow ID to inbound clients",
 		storeID:     engine.StoreIDConfigDB,
 		table:       "INBOUND_CLIENT",
-		column: columnSpec{
+		columns: []columnSpec{{
 			name: "device_grant_flow_id", nullable: "YES", dataType: "character varying",
 			maximumLength: "100", defaultValue: "none",
-		},
+		}},
 		statements: []engine.SQLStatement{
 			{ID: "set-lock-timeout", Query: "SET LOCAL lock_timeout = '2s'"},
 			{ID: "add-device-grant-flow-id", Query: `ALTER TABLE "INBOUND_CLIENT"

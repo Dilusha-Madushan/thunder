@@ -22,8 +22,6 @@ import (
 )
 
 const (
-	testServerURL = "https://localhost:8095"
-
 	vcExportConfigHandle     = "export_test_credential"
 	vcExportConfigVCT        = "https://credentials.thunderid.local/ExportTestCredential"
 	vcExportDefinitionHandle = "export_test_presentation"
@@ -33,6 +31,8 @@ const (
 	vcExportDeclarativeConfigID     = "decl-credential-config-1"
 	vcExportDeclarativeDefinitionID = "decl-presentation-def-1"
 )
+
+var testServerURL = testutils.TestServerURL
 
 // ExportAPITestSuite is a test suite for export API tests.
 type ExportAPITestSuite struct {
@@ -678,6 +678,44 @@ func (ts *ExportAPITestSuite) TestExportWithInvalidPresentationDefinitionID() {
 	ts.Require().Error(err)
 }
 
+// The same organization units export in the same order every time, each parent before its
+// children, so an export of unchanged configuration is the same text and a version named by its
+// content stays the same version.
+func (ts *ExportAPITestSuite) TestOrganizationUnitsExportInAStableOrder() {
+	parentID, err := testutils.CreateOrganizationUnit(testutils.OrganizationUnit{
+		Handle: "export-order-parent", Name: "Export Order Parent",
+	})
+	ts.Require().NoError(err)
+	defer func() { _ = testutils.DeleteOrganizationUnit(parentID) }()
+	childIDs := []string{}
+	for _, handle := range []string{"export-order-a", "export-order-b", "export-order-c", "export-order-d"} {
+		id, err := testutils.CreateOrganizationUnit(testutils.OrganizationUnit{
+			Handle: handle, Name: handle, Parent: &parentID,
+		})
+		ts.Require().NoError(err)
+		childIDs = append(childIDs, id)
+	}
+	defer func() {
+		for _, id := range childIDs {
+			_ = testutils.DeleteOrganizationUnit(id)
+		}
+	}()
+
+	first, err := ts.exportResourcesYAML(ExportRequest{OrganizationUnits: []string{"*"}})
+	ts.Require().NoError(err)
+	for i := 0; i < 5; i++ {
+		again, err := ts.exportResourcesYAML(ExportRequest{OrganizationUnits: []string{"*"}})
+		ts.Require().NoError(err)
+		ts.Require().Equal(first, again, "the same organization units exported in another order")
+	}
+	parentAt := strings.Index(first, "id: "+parentID)
+	ts.Require().GreaterOrEqual(parentAt, 0, "the parent was not exported")
+	for _, id := range childIDs {
+		childAt := strings.Index(first, "id: "+id)
+		ts.Require().Greater(childAt, parentAt, "a child was exported before its parent")
+	}
+}
+
 // Helper functions
 
 func (ts *ExportAPITestSuite) createApplication(app Application) (string, error) {
@@ -914,7 +952,13 @@ func (ts *ExportAPITestSuite) createIDP(idp IDP) (string, error) {
 		return "", err
 	}
 
-	idpJSON, err := json.Marshal(idpToConnectionBody(idp))
+	ouID, err := testutils.DefaultConnectionOUID()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve the connection organization unit: %w", err)
+	}
+	body := idpToConnectionBody(idp)
+	body["ouId"] = ouID
+	idpJSON, err := json.Marshal(body)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal IDP: %w", err)
 	}

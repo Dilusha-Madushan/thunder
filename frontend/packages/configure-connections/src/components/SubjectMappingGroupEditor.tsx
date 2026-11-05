@@ -3,6 +3,7 @@
 
 import {useGetAgentType} from '@thunderid/configure-agent-types';
 import {useGetUserType} from '@thunderid/configure-user-types';
+import {useConfig} from '@thunderid/contexts';
 import {getUserTypeLabel} from '@thunderid/utils';
 import {
   Autocomplete,
@@ -51,6 +52,8 @@ export default function SubjectMappingGroupEditor({
   onRemoveGroup,
 }: SubjectMappingGroupEditorProps): JSX.Element {
   const {t} = useTranslation('connections');
+  const {config} = useConfig();
+  const productName: string = config.brand.product_name;
   const [pdpAttributeRows, setPdpAttributeRows] = useState<Set<number>>(new Set());
   const selectedType = subjectTypes.find((type) => type.handle === group.userType && type.category === group.category);
   const userTypeDetail = useGetUserType(group.category === 'user' ? selectedType?.id : undefined);
@@ -91,17 +94,15 @@ export default function SubjectMappingGroupEditor({
     >
       <Stack direction="row" spacing={2} alignItems="flex-end" sx={{mb: 2}}>
         {showEntityType && hasOnlyAvailableType && (
-          <FormControl sx={{minWidth: 220}}>
-            <FormLabel sx={{mb: 0.75}} htmlFor={`subject-mapping-group-user-type-${group.key}`}>
-              {entityTypeLabel}
-            </FormLabel>
-            <TextField
-              id={`subject-mapping-group-user-type-${group.key}`}
-              value={getTypeLabel(group.userType)}
-              slotProps={{input: {readOnly: true}}}
-              data-testid={`subject-mapping-group-user-type-value-${group.key}`}
-            />
-          </FormControl>
+          <TextField
+            labelPlacement="top"
+            label={entityTypeLabel}
+            sx={{minWidth: 220}}
+            id={`subject-mapping-group-user-type-${group.key}`}
+            value={getTypeLabel(group.userType)}
+            slotProps={{input: {readOnly: true}}}
+            data-testid={`subject-mapping-group-user-type-value-${group.key}`}
+          />
         )}
         {showEntityType && !hasOnlyAvailableType && (
           <FormControl sx={{minWidth: 220}}>
@@ -141,7 +142,7 @@ export default function SubjectMappingGroupEditor({
       <Stack direction="column" spacing={1.5}>
         <Stack direction="row" spacing={1.5}>
           <Typography variant="caption" color="text.secondary" fontWeight={600} sx={{flex: 1}}>
-            {t('subjectMapping.mappings.thunderIdAttribute', 'ThunderID Attribute')}
+            {t('subjectMapping.mappings.thunderIdAttribute', '{{productName}} attribute', {productName})}
           </Typography>
           <Box sx={{width: 40}} />
         </Stack>
@@ -177,14 +178,17 @@ export default function SubjectMappingGroupEditor({
                       placeholder={t('subjectMapping.mappings.thunderIdPlaceholder', 'e.g. email')}
                       inputProps={{
                         ...params.inputProps,
-                        'aria-label': t('subjectMapping.mappings.thunderIdAttribute', 'ThunderID Attribute'),
+                        'aria-label': t('subjectMapping.mappings.thunderIdAttribute', '{{productName}} attribute', {
+                          productName,
+                        }),
                       }}
                       error={duplicateAttribute}
                       helperText={
                         duplicateAttribute
                           ? t(
                               'subjectMapping.mappings.duplicateAttribute',
-                              'Each ThunderID attribute can be mapped only once for an entity type.',
+                              'Each {{productName}} attribute can be mapped only once for an entity type.',
+                              {productName},
                             )
                           : undefined
                       }
@@ -196,7 +200,7 @@ export default function SubjectMappingGroupEditor({
                     fullWidth
                     sx={{width: 'calc(50% - 20px)'}}
                     id={`subject-mapping-pdp-attribute-${group.key}-${index + 1}`}
-                    label={t('subjectMapping.mappings.pdpAttribute', 'PDP Attribute')}
+                    label={t('subjectMapping.mappings.pdpAttribute', 'PDP attribute')}
                     value={row.pdpAttribute}
                     onChange={(event) => onUpdateRow(row.key, 'pdpAttribute', event.target.value)}
                   />
@@ -236,7 +240,7 @@ export default function SubjectMappingGroupEditor({
             disabled={lastRowIsEmpty}
             data-testid={`subject-mapping-add-${group.key}`}
           >
-            {t('subjectMapping.mappings.add', 'Add Mapping')}
+            {t('subjectMapping.mappings.add', 'Add mapping')}
           </Button>
         </Box>
       </Stack>

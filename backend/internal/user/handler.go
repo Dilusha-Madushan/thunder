@@ -17,10 +17,12 @@ import (
 
 	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 
+	"github.com/thunder-id/thunderid/internal/sharing"
 	serverconst "github.com/thunder-id/thunderid/internal/system/constants"
 	"github.com/thunder-id/thunderid/internal/system/error/apierror"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/internal/system/security"
+	"github.com/thunder-id/thunderid/internal/system/sysauthz"
 	sysutils "github.com/thunder-id/thunderid/internal/system/utils"
 )
 
@@ -380,7 +382,7 @@ func (uh *userHandler) HandleSelfUserGetRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	sysutils.WriteSuccessResponse(ctx, w, http.StatusOK, user)
+	sysutils.WriteSuccessResponse(ctx, w, http.StatusOK, withoutOperatorNote(user))
 
 	logger.Debug(ctx, "Self user GET response sent", log.MaskedString(log.LoggerKeyUserID, userID))
 }
@@ -418,7 +420,7 @@ func (uh *userHandler) HandleSelfUserPutRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	sysutils.WriteSuccessResponse(ctx, w, http.StatusOK, updatedUser)
+	sysutils.WriteSuccessResponse(ctx, w, http.StatusOK, withoutOperatorNote(updatedUser))
 
 	logger.Debug(ctx, "Self user PUT response sent", log.MaskedString(log.LoggerKeyUserID, userID))
 }
@@ -446,6 +448,27 @@ func (uh *userHandler) HandleSelfUserMetadataGetRequest(w http.ResponseWriter, r
 	sysutils.WriteSuccessResponse(ctx, w, http.StatusOK, response)
 
 	logger.Debug(ctx, "Self user metadata GET response sent", log.MaskedString(log.LoggerKeyUserID, userID))
+}
+
+// HandleSelfOrganizationUnitsGetRequest lists the organization units the signed-in user can access.
+func (uh *userHandler) HandleSelfOrganizationUnitsGetRequest(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	limit, offset, svcErr := parsePaginationParams(r.URL.Query())
+	if svcErr != nil {
+		handleError(ctx, w, svcErr)
+		return
+	}
+	if limit == 0 {
+		limit = serverconst.DefaultPageSize
+	}
+
+	list, svcErr := uh.userService.GetAccessibleOrganizationUnits(ctx, r.URL.Query().Get("scope"), limit, offset)
+	if svcErr != nil {
+		handleError(ctx, w, svcErr)
+		return
+	}
+	sysutils.WriteSuccessResponse(ctx, w, http.StatusOK, list)
 }
 
 // HandleSelfUserCredentialUpdateRequest handles the credential update for the authenticated user.
@@ -565,10 +588,15 @@ func handleError(ctx context.Context, w http.ResponseWriter, svcErr *tidcommon.S
 		switch svcErr.Code {
 		case ErrorMissingUserID.Code,
 			ErrorUserNotFound.Code,
-			ErrorOrganizationUnitNotFound.Code:
+			ErrorOrganizationUnitNotFound.Code,
+			ErrorSharingPolicyNotFound.Code,
+			ErrorUserNotSharedToOU.Code:
 			statusCode = http.StatusNotFound
 		case ErrorAttributeConflict.Code,
-			ErrorUserHasBlockingDependencies.Code:
+			ErrorUserHasBlockingDependencies.Code,
+			ErrorSharingPolicyExists.Code,
+			ErrorSharingPolicyVersionMismatch.Code,
+			ErrorSharedUserCannotMove.Code:
 			statusCode = http.StatusConflict
 		case ErrorHandlePathRequired.Code,
 			ErrorInvalidHandlePath.Code,
@@ -578,7 +606,7 @@ func handleError(ctx context.Context, w http.ResponseWriter, svcErr *tidcommon.S
 			statusCode = http.StatusBadRequest
 		case ErrorAuthenticationFailed.Code:
 			statusCode = http.StatusUnauthorized
-		case tidcommon.ErrorUnauthorized.Code:
+		case tidcommon.ErrorUnauthorized.Code, sysauthz.ErrorGrantNotPermitted.Code:
 			statusCode = http.StatusForbidden
 		default:
 			statusCode = http.StatusBadRequest
@@ -674,6 +702,20 @@ func parseFilterExpression(filterStr string) (map[string]interface{}, error) {
 	}
 }
 
+// withoutOperatorNote returns the user with the operator note cleared from its status.
+func withoutOperatorNote(user *providers.User) *providers.User {
+	if user == nil || user.Status == nil || user.Status.Details == nil || user.Status.Details.OperatorNote == "" {
+		return user
+	}
+	details := *user.Status.Details
+	details.OperatorNote = ""
+	status := *user.Status
+	status.Details = &details
+	stripped := *user
+	stripped.Status = &status
+	return &stripped
+}
+
 // sanitizeFilter performs additional sanitization on parsed filters
 func sanitizeFilter(filters map[string]interface{}) map[string]interface{} {
 	sanitized := make(map[string]interface{})
@@ -689,4 +731,104 @@ func sanitizeFilter(filters map[string]interface{}) map[string]interface{} {
 	}
 
 	return sanitized
+}
+
+// HandleSharingPolicyPostRequest records a sharing policy on a user.
+func (uh *userHandler) HandleSharingPolicyPostRequest(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	wire, ok := sharing.DecodePolicyBody[sharing.PolicyCreateBody](ctx, w, r, ErrorInvalidRequestFormat)
+	if !ok {
+		return
+	}
+	req := wire.ToPolicyRequest()
+	// A reach not bounded by the issuer's place in the tree is a deployment decision, as for
+	// applications; the framework refuses an edit that would introduce one.
+	if req.IsDeploymentWide() {
+		handleError(ctx, w, &ErrorDeploymentWideSharingNotAllowed)
+		return
+	}
+
+	policy, svcErr := uh.userService.CreateSharingPolicy(ctx, r.PathValue("id"), req)
+	if svcErr != nil {
+		handleError(ctx, w, svcErr)
+		return
+	}
+	sysutils.WriteSuccessResponse(ctx, w, http.StatusCreated, sharing.ToPolicyResponse(policy))
+}
+
+// HandleSharingPolicyListRequest returns one page of a user's sharing policies.
+func (uh *userHandler) HandleSharingPolicyListRequest(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	limit, offset, svcErr := parsePaginationParams(r.URL.Query())
+	if svcErr != nil {
+		handleError(ctx, w, svcErr)
+		return
+	}
+	if limit == 0 {
+		limit = serverconst.DefaultPageSize
+	}
+
+	userID := r.PathValue("id")
+	list, svcErr := uh.userService.ListSharingPolicies(ctx, userID, limit, offset)
+	if svcErr != nil {
+		handleError(ctx, w, svcErr)
+		return
+	}
+	sysutils.WriteSuccessResponse(ctx, w, http.StatusOK, sharing.ToPolicyListResponse(
+		list, "/users/"+userID+"/sharing-policies", limit, offset))
+}
+
+// HandleSharingPolicyGetRequest returns one of a user's sharing policies.
+func (uh *userHandler) HandleSharingPolicyGetRequest(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	policy, svcErr := uh.userService.GetSharingPolicy(ctx, r.PathValue("id"), r.PathValue("policyId"))
+	if svcErr != nil {
+		handleError(ctx, w, svcErr)
+		return
+	}
+	sysutils.WriteSuccessResponse(ctx, w, http.StatusOK, sharing.ToPolicyResponse(policy))
+}
+
+// HandleSharingPolicyPutRequest replaces a sharing policy's contents.
+func (uh *userHandler) HandleSharingPolicyPutRequest(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	wire, ok := sharing.DecodePolicyBody[sharing.PolicyUpdateBody](ctx, w, r, ErrorInvalidRequestFormat)
+	if !ok {
+		return
+	}
+
+	policy, svcErr := uh.userService.UpdateSharingPolicy(
+		ctx, r.PathValue("id"), r.PathValue("policyId"), wire.ToPolicyRequest())
+	if svcErr != nil {
+		handleError(ctx, w, svcErr)
+		return
+	}
+	sysutils.WriteSuccessResponse(ctx, w, http.StatusOK, sharing.ToPolicyResponse(policy))
+}
+
+// HandleSharingPolicyDeleteRequest removes a sharing policy.
+func (uh *userHandler) HandleSharingPolicyDeleteRequest(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if svcErr := uh.userService.DeleteSharingPolicy(ctx, r.PathValue("id"), r.PathValue("policyId")); svcErr != nil {
+		handleError(ctx, w, svcErr)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleOverlayRuleGetRequest answers what the organization unit named in ouId may do with the user.
+func (uh *userHandler) HandleOverlayRuleGetRequest(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	overlay, svcErr := uh.userService.ResolveSharingOverlay(ctx, r.PathValue("id"), r.URL.Query().Get("ouId"))
+	if svcErr != nil {
+		handleError(ctx, w, svcErr)
+		return
+	}
+	sysutils.WriteSuccessResponse(ctx, w, http.StatusOK, sharing.ToResolvedOverlayResponse(overlay))
 }

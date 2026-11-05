@@ -5,7 +5,7 @@ package v2_0_0_1
 
 import "github.com/thunder-id/thunderid/internal/system/migration/engine"
 
-const createSessionOperationID engine.OperationID = "2.0.0-m1-pidp.1/runtime_persistent/05_create_session"
+const createSessionOperationID engine.OperationID = "2.0.0-m1-pidp/runtime_persistent/05_create_session"
 
 // sessionTable is the session table of the target release, which replaces SSO_SESSION. The old binary never
 // refers to it, so it is created while the old binary serves.

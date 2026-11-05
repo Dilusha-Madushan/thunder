@@ -94,8 +94,9 @@ export default function VerifiablePresentationsList(): JSX.Element {
         hideable: false,
         renderCell: (params: DataGrid.GridRenderCellParams<VerifiablePresentationSummary>): JSX.Element => (
           <ListingTable.RowActions>
-            <Tooltip title={t('verifiable-presentations:listing.verify')}>
+            <Tooltip title={t('verifiable-presentations:listing.verify', 'Verify')}>
               <IconButton
+                aria-label={t('verifiable-presentations:listing.verify', 'Verify')}
                 size="small"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -105,8 +106,9 @@ export default function VerifiablePresentationsList(): JSX.Element {
                 <QrCodeIcon size={16} />
               </IconButton>
             </Tooltip>
-            <Tooltip title={t('common:actions.edit')}>
+            <Tooltip title={t('common:actions.edit', 'Edit')}>
               <IconButton
+                aria-label={t('common:actions.edit', 'Edit')}
                 size="small"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -116,8 +118,9 @@ export default function VerifiablePresentationsList(): JSX.Element {
                 <Pencil size={16} />
               </IconButton>
             </Tooltip>
-            <Tooltip title={t('common:actions.delete')}>
+            <Tooltip title={t('common:actions.delete', 'Delete')}>
               <IconButton
+                aria-label={t('common:actions.delete', 'Delete')}
                 size="small"
                 color="error"
                 onClick={(e) => {

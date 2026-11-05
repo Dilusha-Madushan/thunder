@@ -116,7 +116,7 @@ func (s *MetaTestSuite) TestNoVendorDescribesEveryVendor() {
 		s.Equal(s.describe(vendor.Vendor), vendor, vendor.Vendor)
 	}
 	s.Equal([]string{"google", "github", "oidc", "oauth", "twilio", "vonage", smsGatewayVendorName,
-		emailSMTPVendorName, authZENPDPVendorName}, names)
+		emailSMTPVendorName, authZENPDPVendorName, httpVendorName}, names)
 }
 
 // The endpoint must not be able to advertise a method the sender service would reject, so it
@@ -126,6 +126,8 @@ func (s *MetaTestSuite) TestAdvertisedMethodsMatchTheValidatedSet() {
 		emailSMTPVendorName:  smtpauth.SupportedTypes(),
 		smsGatewayVendorName: httpauth.SupportedTypes(),
 		authZENPDPVendorName: {outboundauth.TypeNone, outboundauth.TypeBearer, outboundauth.TypeBasic,
+			outboundauth.TypeAPIKey},
+		httpVendorName: {outboundauth.TypeNone, outboundauth.TypeBearer, outboundauth.TypeBasic,
 			outboundauth.TypeAPIKey},
 	}
 

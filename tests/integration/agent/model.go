@@ -18,6 +18,10 @@ type Agent struct {
 	Owner       string          `json:"owner,omitempty"`
 	Attributes  json.RawMessage `json:"attributes,omitempty"`
 	IsReadOnly  bool            `json:"isReadOnly"`
+	Delegated   bool            `json:"delegated,omitempty"`
+	ValidUntil  *string         `json:"validUntil,omitempty"`
+	Lifespan    *AgentLifespan  `json:"lifespan,omitempty"`
+	Status      *AgentStatus    `json:"status,omitempty"`
 
 	AuthFlowID                string              `json:"authFlowId,omitempty"`
 	RegistrationFlowID        string              `json:"registrationFlowId,omitempty"`
@@ -26,6 +30,16 @@ type Agent struct {
 	LayoutID                  string              `json:"layoutId,omitempty"`
 	AllowedUserTypes          []string            `json:"allowedUserTypes,omitempty"`
 	InboundAuthConfig         []InboundAuthConfig `json:"inboundAuthConfig,omitempty"`
+}
+
+// AgentLifespan is the lifespan phase reported on agent reads.
+type AgentLifespan struct {
+	Phase string `json:"phase"`
+}
+
+// AgentStatus is the effective access status reported on agent reads.
+type AgentStatus struct {
+	Value string `json:"value"`
 }
 
 // agentAttrs builds the attributes payload of an agent. The agent name is the schema attribute "name", so
@@ -85,6 +99,14 @@ type OAuthAgentConfig struct {
 // OAuthTokenConfig represents the OAuth token configuration for an agent's inbound auth config.
 type OAuthTokenConfig struct {
 	AccessToken *AccessTokenConfig `json:"accessToken,omitempty"`
+	IDJAG       *IDJAGConfig       `json:"idJag,omitempty"`
+}
+
+// IDJAGConfig represents the ID-JAG issuance configuration of an agent's OAuth client.
+type IDJAGConfig struct {
+	Enabled          bool     `json:"enabled"`
+	AllowedAudiences []string `json:"allowedAudiences,omitempty"`
+	ValidityPeriod   int64    `json:"validityPeriod,omitempty"`
 }
 
 // AccessTokenConfig represents the access token configuration, split by token subject.

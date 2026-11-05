@@ -14,6 +14,7 @@ import (
 
 	"github.com/thunder-id/thunderid/internal/flow/common"
 	"github.com/thunder-id/thunderid/internal/flow/session"
+	oauth2const "github.com/thunder-id/thunderid/internal/oauth/oauth2/constants"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 
 	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
@@ -50,25 +51,31 @@ func (s *HandlerTestSuite) TestHandleFlowError_ClientError_Returns400() {
 			DefaultValue: "bad request",
 		},
 	}
-	handleFlowError(context.Background(), w, svcErr, "")
+	handleFlowError(context.Background(), w, svcErr, nil)
 	s.Equal(http.StatusBadRequest, w.Code)
 }
 
 func (s *HandlerTestSuite) TestHandleFlowError_ForbiddenError_Returns403() {
 	w := httptest.NewRecorder()
-	handleFlowError(context.Background(), w, &ErrorDirectFlowInitiationNotPermitted, "")
+	handleFlowError(context.Background(), w, &ErrorDirectFlowInitiationNotPermitted, nil)
+	s.Equal(http.StatusForbidden, w.Code)
+}
+
+func (s *HandlerTestSuite) TestHandleFlowError_ApplicationNotUsable_Returns403() {
+	w := httptest.NewRecorder()
+	handleFlowError(context.Background(), w, &ErrorFlowApplicationNotUsable, nil)
 	s.Equal(http.StatusForbidden, w.Code)
 }
 
 func (s *HandlerTestSuite) TestHandleFlowError_AdministrationAuthenticationRequired_Returns401() {
 	w := httptest.NewRecorder()
-	handleFlowError(context.Background(), w, &ErrorAdministrationAuthenticationRequired, "")
+	handleFlowError(context.Background(), w, &ErrorAdministrationAuthenticationRequired, nil)
 	s.Equal(http.StatusUnauthorized, w.Code)
 }
 
 func (s *HandlerTestSuite) TestHandleFlowError_FeatureDisabled_Returns503() {
 	w := httptest.NewRecorder()
-	handleFlowError(context.Background(), w, &ErrorFlowFeatureDisabled, "")
+	handleFlowError(context.Background(), w, &ErrorFlowFeatureDisabled, nil)
 	s.Equal(http.StatusServiceUnavailable, w.Code)
 }
 
@@ -82,7 +89,7 @@ func (s *HandlerTestSuite) TestHandleFlowError_ServerError_Returns500() {
 			DefaultValue: "internal error",
 		},
 	}
-	handleFlowError(context.Background(), w, svcErr, "")
+	handleFlowError(context.Background(), w, svcErr, nil)
 	s.Equal(http.StatusInternalServerError, w.Code)
 }
 
@@ -119,7 +126,7 @@ func (s *HandlerTestSuite) TestHandleFlowExecutionRequest_ServiceError() {
 	t := s.T()
 	mockSvc := NewFlowExecServiceInterfaceMock(t)
 	mockSvc.EXPECT().Execute(mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, &ErrorDirectFlowInitiationNotPermitted)
 
 	h := newFlowExecutionHandler(mockSvc, session.NewHandleTransport(session.TransportConfig{SecureCookies: false}), 0)
@@ -135,12 +142,14 @@ func (s *HandlerTestSuite) TestHandleFlowExecutionRequest_ByFlowID() {
 	t := s.T()
 	mockSvc := NewFlowExecServiceInterfaceMock(t)
 	mockSvc.EXPECT().ExecuteByID(mock.Anything, "administration-1", "", true,
-		"", mock.Anything, "").Return(&FlowStep{
-		ExecutionID: "execution-1", Status: providers.FlowStatusComplete,
-	}, nil)
+		"", mock.Anything, "", []SessionData{{FlowIdentifier: "identifier-1", SessionHandle: "body-handle"}}).
+		Return(&FlowStep{
+			ExecutionID: "execution-1", Status: providers.FlowStatusComplete,
+		}, nil)
 	h := newFlowExecutionHandler(mockSvc, session.NewHandleTransport(session.TransportConfig{SecureCookies: false}), 0)
 	req := httptest.NewRequest(http.MethodPost, "/flow/execute",
-		bytes.NewBufferString(`{"flowId":"administration-1","verbose":true}`))
+		bytes.NewBufferString(`{"flowId":"administration-1","verbose":true,`+
+			`"sessionData":[{"flowIdentifier":"identifier-1","sessionHandle":" body-handle "}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -156,7 +165,7 @@ func (s *HandlerTestSuite) TestHandleFlowExecutionRequest_Success() {
 		Status:      providers.FlowStatusIncomplete,
 	}
 	mockSvc.EXPECT().Execute(mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(flowStep, (*tidcommon.ServiceError)(nil))
 
 	h := newFlowExecutionHandler(mockSvc, session.NewHandleTransport(session.TransportConfig{SecureCookies: false}), 0)
@@ -178,9 +187,9 @@ func (s *HandlerTestSuite) TestHandleFlowExecutionRequest_PropagatesInboundSSOCo
 	var gotOK bool
 	transport := session.NewHandleTransport(session.TransportConfig{SecureCookies: false})
 	mockSvc.EXPECT().Execute(mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(ctx context.Context, _ string, _ string, _ string, _ bool, _ string,
-			_ map[string]string, _ string, _ string, _ string) {
+			_ map[string]string, _ string, _ string, _ string, _ []SessionData) {
 			gotInbound, gotOK = session.InboundFrom(ctx)
 		}).
 		Return(&FlowStep{ExecutionID: "exec-1", Status: providers.FlowStatusIncomplete},
@@ -212,9 +221,9 @@ func (s *HandlerTestSuite) TestHandleFlowExecutionRequest_CapturesCurrentRequest
 
 	var gotRequest *providers.CurrentRequest
 	mockSvc.EXPECT().Execute(mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(ctx context.Context, _ string, _ string, _ string, _ bool, _ string,
-			_ map[string]string, _ string, _ string, _ string) {
+			_ map[string]string, _ string, _ string, _ string, _ []SessionData) {
 			gotRequest = common.CurrentRequestFrom(ctx)
 		}).
 		Return(&FlowStep{ExecutionID: "exec-1", Status: providers.FlowStatusIncomplete},
@@ -254,7 +263,7 @@ func (s *HandlerTestSuite) TestHandleFlowExecutionRequest_WritesSSOHandleCookie(
 		SSOFlowID:    "flow-1",
 	}
 	mockSvc.EXPECT().Execute(mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(flowStep, (*tidcommon.ServiceError)(nil))
 
 	// secure=true and a non-zero TTL so the emitted cookie carries the expected transport settings.
@@ -279,7 +288,92 @@ func (s *HandlerTestSuite) TestHandleFlowExecutionRequest_WritesSSOHandleCookie(
 	s.Positive(ssoCookie.MaxAge, "cookie TTL must be non-zero")
 	s.True(ssoCookie.Secure)
 	s.True(ssoCookie.HttpOnly)
-	s.NotContains(w.Body.String(), "minted-handle", "the handle must never appear in the response body")
+}
+
+// TestHandleFlowExecutionRequest_ReturnsSessionData verifies the sessions a step started and ended
+// reach the response body.
+func (s *HandlerTestSuite) TestHandleFlowExecutionRequest_ReturnsSessionData() {
+	issued := []IssuedSessionData{{
+		SessionData: SessionData{FlowIdentifier: "identifier-1", SessionHandle: "minted-handle"},
+		ExpiresIn:   3600,
+	}}
+	cleared := []string{"identifier-2"}
+	mockSvc := NewFlowExecServiceInterfaceMock(s.T())
+	mockSvc.EXPECT().Execute(mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything).
+		Return(&FlowStep{
+			ExecutionID:     "exec-1",
+			Status:          providers.FlowStatusComplete,
+			SessionData:     issued,
+			ClearedSessions: cleared,
+		}, (*tidcommon.ServiceError)(nil))
+
+	h := newFlowExecutionHandler(mockSvc, session.NewHandleTransport(session.TransportConfig{}), time.Hour)
+	req := httptest.NewRequest(http.MethodPost, "/flow/execute", bytes.NewBufferString(testFlowExecRequestBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.HandleFlowExecutionRequest(w, req)
+
+	s.Equal(http.StatusOK, w.Code)
+	var resp FlowResponse
+	s.Require().NoError(json.Unmarshal(w.Body.Bytes(), &resp))
+	s.Equal(issued, resp.SessionData)
+	s.Equal(cleared, resp.ClearedSessions)
+}
+
+// TestHandleFlowExecutionRequest_PassesRequestSessionData verifies the session data a caller sends in the
+// request body reaches the flow service sanitized.
+func (s *HandlerTestSuite) TestHandleFlowExecutionRequest_PassesRequestSessionData() {
+	mockSvc := NewFlowExecServiceInterfaceMock(s.T())
+	mockSvc.EXPECT().Execute(mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		[]SessionData{
+			{FlowIdentifier: "identifier-1", SessionHandle: "body-handle"},
+			{FlowIdentifier: "identifier-2", SessionHandle: "other-handle"},
+		}).
+		Return(&FlowStep{ExecutionID: "exec-1", Status: providers.FlowStatusComplete},
+			(*tidcommon.ServiceError)(nil))
+
+	h := newFlowExecutionHandler(mockSvc, session.NewHandleTransport(session.TransportConfig{}), time.Hour)
+	body := `{"applicationId":"app-1","flowType":"AUTHENTICATION","sessionData":[` +
+		`{"flowIdentifier":" identifier-1 ","sessionHandle":" body-handle "},` +
+		`{"flowIdentifier":"identifier-2","sessionHandle":"other-handle"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/flow/execute", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.HandleFlowExecutionRequest(w, req)
+
+	s.Equal(http.StatusOK, w.Code)
+}
+
+func (s *HandlerTestSuite) TestHandleFlowExecutionRequest_RejectsIncompleteSessionData() {
+	cases := []struct {
+		name  string
+		entry string
+	}{
+		{"no flow identifier", `{"sessionHandle":"body-handle"}`},
+		{"no session handle", `{"flowIdentifier":"identifier-1"}`},
+		{"a blank session handle", `{"flowIdentifier":"identifier-1","sessionHandle":"  "}`},
+	}
+
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			mockSvc := NewFlowExecServiceInterfaceMock(s.T())
+			h := newFlowExecutionHandler(mockSvc, session.NewHandleTransport(session.TransportConfig{}), time.Hour)
+			body := `{"applicationId":"app-1","flowType":"AUTHENTICATION","sessionData":[` + tc.entry + `]}`
+			req := httptest.NewRequest(http.MethodPost, "/flow/execute", bytes.NewBufferString(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			h.HandleFlowExecutionRequest(w, req)
+
+			s.Equal(http.StatusBadRequest, w.Code)
+			s.Contains(w.Body.String(), APIErrorInvalidSessionData.Code)
+		})
+	}
 }
 
 // TestHandleFlowExecutionRequest_NilSSOTransport verifies a deployment without an SSO handle transport
@@ -296,9 +390,9 @@ func (s *HandlerTestSuite) TestHandleFlowExecutionRequest_NilSSOTransport() {
 	}
 	gotOK := true
 	mockSvc.EXPECT().Execute(mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(ctx context.Context, _ string, _ string, _ string, _ bool, _ string,
-			_ map[string]string, _ string, _ string, _ string) {
+			_ map[string]string, _ string, _ string, _ string, _ []SessionData) {
 			_, gotOK = session.InboundFrom(ctx)
 		}).
 		Return(flowStep, (*tidcommon.ServiceError)(nil))
@@ -326,7 +420,7 @@ func (s *HandlerTestSuite) TestHandleFlowExecutionRequest_ClearsSSOHandleCookie(
 		SSOClearFlowID: "flow-1",
 	}
 	mockSvc.EXPECT().Execute(mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(flowStep, (*tidcommon.ServiceError)(nil))
 
 	transport := session.NewHandleTransport(session.TransportConfig{SecureCookies: false})
@@ -355,7 +449,8 @@ func (s *HandlerTestSuite) TestHandleFlowExecutionRequest_AttestationTokenHeader
 	t := s.T()
 	mockSvc := NewFlowExecServiceInterfaceMock(t)
 	mockSvc.EXPECT().Execute(mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, "play-integrity-token").
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, "play-integrity-token",
+		mock.Anything).
 		Return(&FlowStep{ExecutionID: "exec-1", Status: providers.FlowStatusIncomplete},
 			(*tidcommon.ServiceError)(nil))
 
@@ -385,7 +480,7 @@ func (s *HandlerTestSuite) TestHandleFlowExecutionRequest_StepWithError() {
 		Error:       stepErr,
 	}
 	mockSvc.EXPECT().Execute(mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(flowStep, (*tidcommon.ServiceError)(nil))
 
 	h := newFlowExecutionHandler(mockSvc, session.NewHandleTransport(session.TransportConfig{SecureCookies: false}), 0)
@@ -408,7 +503,7 @@ func (s *HandlerTestSuite) TestHandleFlowError_WithErrorAssertion_IncludesAssert
 		},
 	}
 
-	handleFlowError(context.Background(), w, svcErr, "signed-error-assertion")
+	handleFlowError(context.Background(), w, svcErr, &FlowStep{ErrorAssertion: "signed-error-assertion"})
 
 	s.Equal(http.StatusBadRequest, w.Code)
 
@@ -417,6 +512,36 @@ func (s *HandlerTestSuite) TestHandleFlowError_WithErrorAssertion_IncludesAssert
 	s.Equal("FES-1013", body["code"])
 	s.Equal("signed-error-assertion", body["errorAssertion"])
 	s.NotNil(body["message"])
+}
+
+func (s *HandlerTestSuite) TestHandleFlowError_WithDeviceGrantCallbackData_IncludesData() {
+	w := httptest.NewRecorder()
+	svcErr := &tidcommon.ServiceError{
+		Code:  "FES-5000",
+		Type:  tidcommon.ServerErrorType,
+		Error: tidcommon.I18nMessage{Key: "server.error", DefaultValue: "internal error"},
+	}
+	flowStep := &FlowStep{
+		ErrorAssertion: "signed-error-assertion",
+		Data: FlowData{AdditionalData: map[string]string{
+			oauth2const.AuthID:      "device-request-1",
+			common.DataCallbackType: string(providers.GrantTypeDeviceCode),
+		}},
+	}
+
+	handleFlowError(context.Background(), w, svcErr, flowStep)
+
+	s.Equal(http.StatusInternalServerError, w.Code)
+	var body struct {
+		ErrorAssertion string `json:"errorAssertion"`
+		Data           struct {
+			AdditionalData map[string]string `json:"additionalData"`
+		} `json:"data"`
+	}
+	s.Require().NoError(json.Unmarshal(w.Body.Bytes(), &body))
+	s.Equal("signed-error-assertion", body.ErrorAssertion)
+	s.Equal("device-request-1", body.Data.AdditionalData[oauth2const.AuthID])
+	s.Equal(string(providers.GrantTypeDeviceCode), body.Data.AdditionalData[common.DataCallbackType])
 }
 
 func (s *HandlerTestSuite) TestHandleFlowError_WithoutErrorAssertion_OmitsAssertionField() {
@@ -430,7 +555,7 @@ func (s *HandlerTestSuite) TestHandleFlowError_WithoutErrorAssertion_OmitsAssert
 		},
 	}
 
-	handleFlowError(context.Background(), w, svcErr, "")
+	handleFlowError(context.Background(), w, svcErr, nil)
 
 	s.Equal(http.StatusBadRequest, w.Code)
 

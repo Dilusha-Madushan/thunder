@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	addOriginalsToDuplicateGroupsOperationID engine.OperationID = "2.0.0-m1-pidp.1/entitydb/" +
+	addOriginalsToDuplicateGroupsOperationID engine.OperationID = "2.0.0-m1-pidp/entitydb/" +
 		"10_add_originals_to_duplicate_groups"
-	addOriginalsToDuplicateGroupsRollbackID engine.OperationID = "2.0.0-m1-pidp.1/entitydb/" +
+	addOriginalsToDuplicateGroupsRollbackID engine.OperationID = "2.0.0-m1-pidp/entitydb/" +
 		"10_add_originals_to_duplicate_groups_rollback"
 
 	// addOriginalsToDuplicateGroupsBatchSize is the number of originals whose duplicates' memberships are

@@ -13,16 +13,20 @@ describe('getGrantTypeLabel', () => {
     );
   });
 
+  it('returns the friendly Device Authorization Grant label for the device-code URN', () => {
+    expect(getGrantTypeLabel('urn:ietf:params:oauth:grant-type:device_code', t)).toBe('Device Authorization Grant');
+  });
+
   it('returns the raw value unchanged for authorization_code', () => {
     expect(getGrantTypeLabel('authorization_code', t)).toBe('authorization_code');
   });
 
   it('returns the friendly Token Exchange label for the token-exchange URN', () => {
-    expect(getGrantTypeLabel('urn:ietf:params:oauth:grant-type:token-exchange', t)).toBe('Token Exchange');
+    expect(getGrantTypeLabel('urn:ietf:params:oauth:grant-type:token-exchange', t)).toBe('Token exchange');
   });
 
   it('returns the friendly JWT Bearer label for the jwt-bearer URN', () => {
-    expect(getGrantTypeLabel('urn:ietf:params:oauth:grant-type:jwt-bearer', t)).toBe('JWT Bearer');
+    expect(getGrantTypeLabel('urn:ietf:params:oauth:grant-type:jwt-bearer', t)).toBe('JWT bearer');
   });
 
   it('returns the raw value unchanged for an unknown/arbitrary grant type', () => {

@@ -4,7 +4,6 @@
 package executor
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/thunder-id/thunderid/internal/entityprovider"
@@ -37,16 +36,16 @@ func newAttributeUniquenessValidator(
 	logger := log.GetLogger().With(log.String(log.LoggerKeyComponentName, ExecutorNameAttributeUniquenessValidator))
 	prerequisites := []providers.Input{
 		{
+			Identifier: categoryNameKey,
+			Required:   true,
+		},
+		{
 			Identifier: categoryTypeKey,
 			Required:   true,
 		},
 	}
 	base := flowFactory.CreateExecutor(ExecutorNameAttributeUniquenessValidator, providers.ExecutorTypeUtility,
-		[]providers.Input{}, prerequisites, &providers.ExecutorMeta{
-			SupportedProperties: []providers.ExecutorSupportedProperties{
-				{Property: propertyKeyProvisioningMode},
-			},
-		})
+		[]providers.Input{}, prerequisites, &providers.ExecutorMeta{})
 	return &attributeUniquenessValidator{
 		Executor:          base,
 		entityTypeService: entityTypeService,
@@ -69,23 +68,24 @@ func (e *attributeUniquenessValidator) Execute(ctx *providers.NodeContext) (*pro
 		RuntimeData:    make(map[string]string),
 	}
 
-	category, err := categoryFromMode(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	if !e.ValidatePrerequisites(ctx, execResp, e.authnProvider) {
 		return execResp, nil
 	}
 
+	categoryName := ctx.RuntimeData[categoryNameKey]
 	entityType := ctx.RuntimeData[categoryTypeKey]
-	if entityType == "" {
-		logger.Debug(ctx.Context, "No entity type in runtime data, nothing to check uniqueness against")
+	if categoryName == "" || entityType == "" {
+		logger.Debug(ctx.Context, "No category or entity type in runtime data, nothing to check uniqueness against")
 		execResp.Status = providers.ExecComplete
 		return execResp, nil
 	}
 
-	svcCtx := security.WithRuntimeContext(context.Background())
+	category := entitytype.TypeCategory(categoryName)
+	if !category.IsValid() {
+		return nil, fmt.Errorf("invalid category: %s", category)
+	}
+
+	svcCtx := security.WithRuntimeContext(ctx.Context)
 	uniqueAttrs, svcErr := e.entityTypeService.GetUniqueAttributes(svcCtx, category, entityType)
 	if svcErr != nil {
 		return nil, fmt.Errorf("failed to retrieve unique attributes from schema for %s type %s: %s",
@@ -98,7 +98,7 @@ func (e *attributeUniquenessValidator) Execute(ctx *providers.NodeContext) (*pro
 			continue
 		}
 
-		userID, svcErr := e.entityProvider.IdentifyEntity(map[string]interface{}{attr: value})
+		userID, svcErr := e.entityProvider.IdentifyEntity(ctx.Context, map[string]interface{}{attr: value})
 		if svcErr != nil {
 			if svcErr.Code == entityprovider.ErrorCodeEntityNotFound {
 				continue

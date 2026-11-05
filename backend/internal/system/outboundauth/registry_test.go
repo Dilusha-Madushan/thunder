@@ -94,3 +94,23 @@ func (s *RegistryTestSuite) TestGetMethodsServesFieldlessMethodAsEmptyArray() {
 	s.Require().NoError(err)
 	s.Contains(string(encoded), `"fields":[]`)
 }
+
+// Any authentication property may hold a secret, except a field no method marks as a credential,
+// which is stored and returned in clear.
+func (s *RegistryTestSuite) TestSecretFieldPathsExcludeFieldsShownInClear() {
+	s.Equal([]string{"auth.properties.*", "!auth.properties." + FieldBasicUsername},
+		SecretFieldPaths("auth.properties"))
+}
+
+// Each credential an authentication holds gets a variable path; fields shown in clear, empty credentials
+// and unknown methods get none.
+func (s *RegistryTestSuite) TestSecretVariablePaths() {
+	s.Equal([]string{"P." + FieldBasicPassword}, SecretVariablePaths(&Authentication{Type: string(TypeBasic),
+		Properties: map[string]string{FieldBasicUsername: "u", FieldBasicPassword: "p"}}, "P"))
+	s.Equal([]string{"P.X-Api-Key"}, SecretVariablePaths(&Authentication{Type: string(TypeAPIKey),
+		Properties: map[string]string{"X-Api-Key": "k", "X-Empty": ""}}, "P"))
+	s.Empty(SecretVariablePaths(&Authentication{Type: string(TypeBearer),
+		Properties: map[string]string{FieldBearerToken: ""}}, "P"))
+	s.Empty(SecretVariablePaths(&Authentication{Type: "kerberos"}, "P"))
+	s.Empty(SecretVariablePaths(nil, "P"))
+}

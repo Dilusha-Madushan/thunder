@@ -20,6 +20,7 @@ import (
 	"github.com/thunder-id/thunderid/tests/mocks/authnprovider/managermock"
 	"github.com/thunder-id/thunderid/tests/mocks/entityprovidermock"
 	"github.com/thunder-id/thunderid/tests/mocks/flow/coremock"
+	"github.com/thunder-id/thunderid/tests/mocks/identitygovernanceprovidermock"
 )
 
 const testOTPUserID = "user-abc-123"
@@ -72,7 +73,7 @@ func (suite *OTPExecutorTestSuite) SetupTest() {
 		defaultInputs, prerequisites, mock.Anything).Return(suite.mockBaseExec)
 
 	suite.executor = newOTPExecutor(suite.mockFlowFactory, suite.mockOTPService,
-		suite.mockAuthnProvider, suite.mockEntityProvider)
+		suite.mockAuthnProvider, suite.mockEntityProvider, newAccessGuard(admitAllAccess(suite.T())))
 	suite.executor.Executor = suite.mockBaseExec
 }
 
@@ -119,10 +120,11 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_UserInputRequired_WhenNod
 
 func (suite *OTPExecutorTestSuite) TestExecuteGenerate_Success_UserIdentifiedAndOTPGenerated() {
 	userID := testOTPUserID
-	suite.mockEntityProvider.On("IdentifyEntity", mock.MatchedBy(func(attrs map[string]interface{}) bool {
-		_, hasMobile := attrs[common.AttributeMobileNumber]
-		return hasMobile
-	})).Return(&userID, nil)
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything,
+		mock.MatchedBy(func(attrs map[string]interface{}) bool {
+			_, hasMobile := attrs[common.AttributeMobileNumber]
+			return hasMobile
+		})).Return(&userID, nil)
 
 	suite.mockOTPService.On("GenerateOTP",
 		mock.Anything, userID, authnprovidercm.UserAttributeUserID,
@@ -158,9 +160,101 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_Success_UserIdentifiedAnd
 	assert.Equal(suite.T(), "5 minutes", fwdData[common.ForwardedDataKeyExpiryTime])
 }
 
+// heldOTPGenerate runs a generate step for a user the flow already resolved, as in a second factor,
+// under the given governance answer.
+func (suite *OTPExecutorTestSuite) heldOTPGenerate(governance providers.IdentityGovernanceProvider,
+	runtime map[string]string) (*providers.ExecutorResponse, error) {
+	suite.executor.accessGuard = newAccessGuard(governance)
+	runtime[userAttributeUserID] = testOTPUserID
+	return suite.executor.Execute(&providers.NodeContext{
+		ExecutionID:  "exec-held",
+		FlowType:     providers.FlowTypeAuthentication,
+		ExecutorMode: ExecutorModeGenerate,
+		UserInputs:   map[string]string{},
+		RuntimeData:  runtime,
+	})
+}
+
+// dispatchDecision expects one dispatch check of the resolved user's one-time password.
+func (suite *OTPExecutorTestSuite) dispatchDecision(decision providers.AccessDecision,
+	fault *tidcommon.ServiceError) providers.IdentityGovernanceProvider {
+	return expectAccess(suite.T(), testOTPUserID, providers.AccessPlaneDispatch, providers.AuthenticationMethodOTP,
+		decision, fault)
+}
+
+// A withheld code is generated but not delivered, so the step answers as a sent code does.
+func (suite *OTPExecutorTestSuite) TestExecuteGenerate_HeldSkipsDelivery() {
+	suite.mockOTPService.On("GenerateOTP", mock.Anything, testOTPUserID, authnprovidercm.UserAttributeUserID,
+		mock.Anything).Return("session-tok-1", "654321", int64(300), (*tidcommon.ServiceError)(nil)).Once()
+
+	resp, err := suite.heldOTPGenerate(suite.dispatchDecision(providers.AccessDecision{}, nil),
+		map[string]string{})
+
+	suite.Require().NoError(err)
+	suite.Equal(providers.ExecComplete, resp.Status)
+	suite.Nil(resp.Error)
+	suite.Equal("session-tok-1", resp.RuntimeData[common.RuntimeKeyOTPSessionToken])
+	suite.Equal(dataValueTrue, resp.RuntimeData[common.RuntimeKeySkipDelivery])
+}
+
+func (suite *OTPExecutorTestSuite) TestExecuteGenerate_HeldStatesTheHold() {
+	resp, err := suite.heldOTPGenerate(suite.dispatchDecision(
+		providers.AccessDecision{Reason: providers.AccessRefusalReasonSuspended}, nil), map[string]string{})
+
+	suite.Require().NoError(err)
+	suite.Equal(providers.ExecFailure, resp.Status)
+	suite.Equal(ErrAccountSuspended.Code, resp.Error.Code)
+	suite.mockOTPService.AssertNotCalled(suite.T(), "GenerateOTP",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func (suite *OTPExecutorTestSuite) TestExecuteGenerate_GovernanceFaultIsAnError() {
+	resp, err := suite.heldOTPGenerate(suite.dispatchDecision(providers.AccessDecision{},
+		&tidcommon.InternalServerError), map[string]string{})
+
+	suite.Error(err)
+	suite.Nil(resp)
+	suite.mockOTPService.AssertNotCalled(suite.T(), "GenerateOTP",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// A recovery flow checks the code at the recovery plane, where a lock gives way, so it is delivered.
+func (suite *OTPExecutorTestSuite) TestExecuteGenerate_RecoveryFlowChecksTheRecoveryPlane() {
+	suite.executor.accessGuard = newAccessGuard(expectAccess(suite.T(), testOTPUserID,
+		providers.AccessPlaneRecovery, providers.AuthenticationMethodOTP,
+		providers.AccessDecision{Admitted: true}, nil))
+	suite.mockOTPService.On("GenerateOTP", mock.Anything, testOTPUserID, authnprovidercm.UserAttributeUserID,
+		mock.Anything).Return("session-tok-3", "654321", int64(300), (*tidcommon.ServiceError)(nil)).Once()
+
+	resp, err := suite.executor.Execute(&providers.NodeContext{
+		ExecutionID:  "exec-recovery",
+		FlowType:     providers.FlowTypeRecovery,
+		ExecutorMode: ExecutorModeGenerate,
+		UserInputs:   map[string]string{},
+		RuntimeData:  map[string]string{userAttributeUserID: testOTPUserID},
+	})
+
+	suite.Require().NoError(err)
+	suite.Equal(providers.ExecComplete, resp.Status)
+	suite.Equal("session-tok-3", resp.RuntimeData[common.RuntimeKeyOTPSessionToken])
+	suite.NotEqual(dataValueTrue, resp.RuntimeData[common.RuntimeKeySkipDelivery])
+}
+
+func (suite *OTPExecutorTestSuite) TestExecuteGenerate_ResendAfterHoldLiftsDelivers() {
+	suite.mockOTPService.On("GenerateOTP", mock.Anything, testOTPUserID, authnprovidercm.UserAttributeUserID,
+		mock.Anything).Return("session-tok-2", "654321", int64(300), (*tidcommon.ServiceError)(nil)).Once()
+
+	resp, err := suite.heldOTPGenerate(admitAllAccess(suite.T()),
+		map[string]string{common.RuntimeKeySkipDelivery: dataValueTrue})
+
+	suite.Require().NoError(err)
+	suite.Equal(providers.ExecComplete, resp.Status)
+	suite.Equal("", resp.RuntimeData[common.RuntimeKeySkipDelivery])
+}
+
 func (suite *OTPExecutorTestSuite) TestExecuteGenerate_PublishesConfiguredOTPLength() {
 	userID := testOTPUserID
-	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything).Return(&userID, nil)
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything, mock.Anything).Return(&userID, nil)
 
 	suite.mockOTPService.On("GenerateOTP",
 		mock.Anything, userID, authnprovidercm.UserAttributeUserID,
@@ -193,7 +287,7 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_PublishesConfiguredOTPLen
 // out of range, so the published length must come from the generated value rather than the property.
 func (suite *OTPExecutorTestSuite) TestExecuteGenerate_PublishedLengthFollowsGeneratedValue() {
 	userID := testOTPUserID
-	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything).Return(&userID, nil)
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything, mock.Anything).Return(&userID, nil)
 
 	suite.mockOTPService.On("GenerateOTP",
 		mock.Anything, userID, authnprovidercm.UserAttributeUserID,
@@ -225,7 +319,7 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_PublishedLengthFollowsGen
 // published flag must come from the generated value rather than the property.
 func (suite *OTPExecutorTestSuite) TestExecuteGenerate_PublishesNumericOnlyFalseForAlphanumericOTP() {
 	userID := testOTPUserID
-	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything).Return(&userID, nil)
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything, mock.Anything).Return(&userID, nil)
 
 	suite.mockOTPService.On("GenerateOTP",
 		mock.Anything, userID, authnprovidercm.UserAttributeUserID,
@@ -257,11 +351,12 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_PublishesNumericOnlyFalse
 
 func (suite *OTPExecutorTestSuite) TestExecuteGenerate_MultipleInputs_IdentifiesUserByAllAttrs() {
 	userID := testOTPUserID
-	suite.mockEntityProvider.On("IdentifyEntity", mock.MatchedBy(func(attrs map[string]interface{}) bool {
-		_, hasMobile := attrs[common.AttributeMobileNumber]
-		_, hasEmail := attrs["email"]
-		return hasMobile && hasEmail
-	})).Return(&userID, nil)
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything,
+		mock.MatchedBy(func(attrs map[string]interface{}) bool {
+			_, hasMobile := attrs[common.AttributeMobileNumber]
+			_, hasEmail := attrs["email"]
+			return hasMobile && hasEmail
+		})).Return(&userID, nil)
 
 	suite.mockOTPService.On("GenerateOTP",
 		mock.Anything, userID, authnprovidercm.UserAttributeUserID,
@@ -293,7 +388,7 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_MultipleInputs_Identifies
 }
 
 func (suite *OTPExecutorTestSuite) TestExecuteGenerate_UserNotFound_ReturnsFailure() {
-	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything).
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything, mock.Anything).
 		Return((*string)(nil), &entityprovider.EntityProviderError{Code: entityprovider.ErrorCodeEntityNotFound})
 
 	ctx := &providers.NodeContext{
@@ -320,10 +415,14 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_UserNotFound_ReturnsFailu
 }
 
 func (suite *OTPExecutorTestSuite) TestExecuteGenerate_Registration_UserNotFound_UsesMobileDestValue() {
-	suite.mockEntityProvider.On("IdentifyEntity", mock.MatchedBy(func(attrs map[string]interface{}) bool {
-		_, hasMobile := attrs[common.AttributeMobileNumber]
-		return hasMobile
-	})).Return((*string)(nil), &entityprovider.EntityProviderError{Code: entityprovider.ErrorCodeEntityNotFound})
+	// A recipient that is not an entity ID is never checked.
+	unchecked := identitygovernanceprovidermock.NewIdentityGovernanceProviderMock(suite.T())
+	suite.executor.accessGuard = newAccessGuard(unchecked)
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything,
+		mock.MatchedBy(func(attrs map[string]interface{}) bool {
+			_, hasMobile := attrs[common.AttributeMobileNumber]
+			return hasMobile
+		})).Return((*string)(nil), &entityprovider.EntityProviderError{Code: entityprovider.ErrorCodeEntityNotFound})
 
 	suite.mockOTPService.On("GenerateOTP",
 		mock.Anything, "+1234567890",
@@ -357,10 +456,11 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_Registration_UserNotFound
 }
 
 func (suite *OTPExecutorTestSuite) TestExecuteGenerate_Registration_UserNotFound_NoPhoneValue_ReturnsInputRequired() {
-	suite.mockEntityProvider.On("IdentifyEntity", mock.MatchedBy(func(attrs map[string]interface{}) bool {
-		_, hasUsername := attrs["username"]
-		return hasUsername
-	})).Return((*string)(nil), &entityprovider.EntityProviderError{Code: entityprovider.ErrorCodeEntityNotFound})
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything,
+		mock.MatchedBy(func(attrs map[string]interface{}) bool {
+			_, hasUsername := attrs["username"]
+			return hasUsername
+		})).Return((*string)(nil), &entityprovider.EntityProviderError{Code: entityprovider.ErrorCodeEntityNotFound})
 
 	ctx := &providers.NodeContext{
 		ExecutionID:  "exec-reg-2",
@@ -408,7 +508,7 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_MaxAttemptsFromNodeProper
 		FlowType:     providers.FlowTypeAuthentication,
 		ExecutorMode: ExecutorModeGenerate,
 		NodeProperties: map[string]interface{}{
-			propertyKeyMaxOTPAttempts: "2",
+			common.NodePropertyMaxAttempts: "2",
 		},
 		UserInputs: map[string]string{},
 		RuntimeData: map[string]string{
@@ -495,33 +595,44 @@ func (suite *OTPExecutorTestSuite) TestExecuteVerify_Success() {
 	assert.Equal(suite.T(), userID, resp.RuntimeData[userAttributeUserID])
 }
 
-func (suite *OTPExecutorTestSuite) TestExecuteVerify_InvalidOTP_ReturnsUserInputRequired() {
-	suite.mockAuthnProvider.On("AuthenticateUser",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(
-			providers.AuthUser{},
-			providers.AuthenticatedClaims(nil),
-			&authnprovidermgr.ErrorAuthenticationFailed,
-		)
-
-	ctx := &providers.NodeContext{
-		ExecutionID:  "exec-8",
-		FlowType:     providers.FlowTypeAuthentication,
-		ExecutorMode: ExecutorModeVerify,
-		UserInputs: map[string]string{
-			userInputOTP: "000000",
-		},
-		RuntimeData: map[string]string{
-			common.RuntimeKeyOTPSessionToken: "session-tok-1",
-		},
+// Every refusal re-prompts; only a stated hold replaces the wrong-code error.
+func (suite *OTPExecutorTestSuite) TestExecuteVerify_RefusalsRepromptWithTheirError() {
+	cases := []struct {
+		name     string
+		svcErr   *tidcommon.ServiceError
+		wantCode string
+	}{
+		{name: "wrong code", svcErr: &authnprovidermgr.ErrorAuthenticationFailed, wantCode: ErrInvalidOTP.Code},
+		{name: "invalid request", svcErr: &authnprovidermgr.ErrorInvalidRequest, wantCode: ErrInvalidOTP.Code},
+		{name: "stated lock", svcErr: &authnprovidermgr.ErrorAccountLocked, wantCode: ErrAccountLocked.Code},
+		{name: "stated suspension", svcErr: &authnprovidermgr.ErrorAccountSuspended,
+			wantCode: ErrAccountSuspended.Code},
 	}
 
-	resp, err := suite.executor.Execute(ctx)
+	for _, tc := range cases {
+		suite.Run(tc.name, func() {
+			suite.SetupTest()
+			suite.mockAuthnProvider.On("AuthenticateUser",
+				mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+				mock.Anything).
+				Return(providers.AuthUser{}, providers.AuthenticatedClaims(nil), tc.svcErr)
 
-	assert.NoError(suite.T(), err)
-	assert.Equal(suite.T(), providers.ExecUserInputRequired, resp.Status)
-	assert.NotNil(suite.T(), resp.Error)
-	assert.Equal(suite.T(), ErrInvalidOTP.Code, resp.Error.Code)
+			resp, err := suite.executor.Execute(&providers.NodeContext{
+				ExecutionID:  "exec-8",
+				FlowType:     providers.FlowTypeAuthentication,
+				ExecutorMode: ExecutorModeVerify,
+				UserInputs:   map[string]string{userInputOTP: "000000"},
+				RuntimeData: map[string]string{
+					common.RuntimeKeyOTPSessionToken: "session-tok-1",
+				},
+			})
+
+			assert.NoError(suite.T(), err)
+			assert.Equal(suite.T(), providers.ExecUserInputRequired, resp.Status)
+			assert.NotNil(suite.T(), resp.Error)
+			assert.Equal(suite.T(), tc.wantCode, resp.Error.Code)
+		})
+	}
 }
 
 func (suite *OTPExecutorTestSuite) TestExecuteVerify_MissingSessionToken_ReturnsError() {
@@ -721,10 +832,11 @@ func (suite *OTPExecutorTestSuite) TestResolveUserID_AuthenticatedUser_EntityRef
 	suite.mockAuthnProvider.On("GetEntityReference", mock.Anything, mock.Anything).
 		Return(providers.AuthUser{}, (*providers.EntityReference)(nil), &tidcommon.InternalServerError)
 
-	suite.mockEntityProvider.On("IdentifyEntity", mock.MatchedBy(func(attrs map[string]interface{}) bool {
-		_, hasMobile := attrs[common.AttributeMobileNumber]
-		return hasMobile
-	})).Return((*string)(nil), &entityprovider.EntityProviderError{Code: entityprovider.ErrorCodeEntityNotFound})
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything,
+		mock.MatchedBy(func(attrs map[string]interface{}) bool {
+			_, hasMobile := attrs[common.AttributeMobileNumber]
+			return hasMobile
+		})).Return((*string)(nil), &entityprovider.EntityProviderError{Code: entityprovider.ErrorCodeEntityNotFound})
 
 	ctx := &providers.NodeContext{
 		ExecutionID:  "exec-auth-err",
@@ -758,10 +870,11 @@ func (suite *OTPExecutorTestSuite) TestResolveUserID_AuthenticatedUser_Unresolve
 	suite.mockAuthnProvider.On("GetEntityReference", mock.Anything, mock.Anything).
 		Return(authUser, (*providers.EntityReference)(nil), (*tidcommon.ServiceError)(nil))
 
-	suite.mockEntityProvider.On("IdentifyEntity", mock.MatchedBy(func(attrs map[string]interface{}) bool {
-		_, hasMobile := attrs[common.AttributeMobileNumber]
-		return hasMobile
-	})).Return((*string)(nil), &entityprovider.EntityProviderError{Code: entityprovider.ErrorCodeEntityNotFound})
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything,
+		mock.MatchedBy(func(attrs map[string]interface{}) bool {
+			_, hasMobile := attrs[common.AttributeMobileNumber]
+			return hasMobile
+		})).Return((*string)(nil), &entityprovider.EntityProviderError{Code: entityprovider.ErrorCodeEntityNotFound})
 
 	ctx := &providers.NodeContext{
 		ExecutionID:  "exec-auth-unresolved",
@@ -787,7 +900,7 @@ func (suite *OTPExecutorTestSuite) TestResolveUserID_AuthenticatedUser_Unresolve
 
 func (suite *OTPExecutorTestSuite) TestResolveUserID_IdentifyEntityReturnsEmptyString_ReturnsFailure() {
 	emptyID := ""
-	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything).Return(&emptyID, nil)
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything, mock.Anything).Return(&emptyID, nil)
 
 	ctx := &providers.NodeContext{
 		ExecutionID:  "exec-empty-id",
@@ -831,7 +944,7 @@ func (suite *OTPExecutorTestSuite) TestBuildSearchAttributes_FallsBackToForwarde
 
 func (suite *OTPExecutorTestSuite) TestExecuteGenerate_GenerateOTPError_ReturnsError() {
 	userID := testOTPUserID
-	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything).Return(&userID, nil)
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything, mock.Anything).Return(&userID, nil)
 
 	svcErr := tidcommon.ServiceError{
 		Code:             "OTP-ERR",
@@ -885,7 +998,7 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_MaxAttemptsFromNodeProper
 		FlowType:     providers.FlowTypeAuthentication,
 		ExecutorMode: ExecutorModeGenerate,
 		NodeProperties: map[string]interface{}{
-			propertyKeyMaxOTPAttempts: 1,
+			common.NodePropertyMaxAttempts: 1,
 		},
 		UserInputs: map[string]string{},
 		RuntimeData: map[string]string{
@@ -905,7 +1018,7 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_MaxAttemptsFromNodeProper
 		FlowType:     providers.FlowTypeAuthentication,
 		ExecutorMode: ExecutorModeGenerate,
 		NodeProperties: map[string]interface{}{
-			propertyKeyMaxOTPAttempts: float64(1),
+			common.NodePropertyMaxAttempts: float64(1),
 		},
 		UserInputs: map[string]string{},
 		RuntimeData: map[string]string{
@@ -921,7 +1034,7 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_MaxAttemptsFromNodeProper
 
 func (suite *OTPExecutorTestSuite) TestExecuteGenerate_MaxAttemptsFromNodeProperties_InvalidStringFallsBack() {
 	userID := testOTPUserID
-	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything).Return(&userID, nil)
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything, mock.Anything).Return(&userID, nil)
 	suite.mockOTPService.On("GenerateOTP",
 		mock.Anything, userID, authnprovidercm.UserAttributeUserID,
 		mock.Anything).
@@ -932,7 +1045,7 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_MaxAttemptsFromNodeProper
 		FlowType:     providers.FlowTypeAuthentication,
 		ExecutorMode: ExecutorModeGenerate,
 		NodeProperties: map[string]interface{}{
-			propertyKeyMaxOTPAttempts: "not-a-number",
+			common.NodePropertyMaxAttempts: "not-a-number",
 		},
 		NodeInputs: []providers.Input{
 			{Ref: "mobile_input", Identifier: common.AttributeMobileNumber,
@@ -951,7 +1064,7 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_MaxAttemptsFromNodeProper
 // resolveOTPDestination: RuntimeData and ForwardedData paths
 
 func (suite *OTPExecutorTestSuite) TestExecuteGenerate_Registration_DestinationFromRuntimeData() {
-	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything).
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything, mock.Anything).
 		Return((*string)(nil), &entityprovider.EntityProviderError{Code: entityprovider.ErrorCodeEntityNotFound})
 
 	suite.mockOTPService.On("GenerateOTP",
@@ -981,7 +1094,7 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_Registration_DestinationF
 }
 
 func (suite *OTPExecutorTestSuite) TestExecuteGenerate_Registration_DestinationFromForwardedData() {
-	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything).
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything, mock.Anything).
 		Return((*string)(nil), &entityprovider.EntityProviderError{Code: entityprovider.ErrorCodeEntityNotFound})
 
 	suite.mockOTPService.On("GenerateOTP",
@@ -1043,7 +1156,7 @@ func (suite *OTPExecutorTestSuite) TestExecuteGenerate_UserIDAlreadyInRuntimeDat
 // resolveUserID: non-EntityNotFound provider error propagates up
 
 func (suite *OTPExecutorTestSuite) TestExecuteGenerate_IdentifyEntitySystemError_ReturnsError() {
-	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything).
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything, mock.Anything).
 		Return((*string)(nil), &entityprovider.EntityProviderError{Code: entityprovider.ErrorCodeSystemError})
 
 	ctx := &providers.NodeContext{

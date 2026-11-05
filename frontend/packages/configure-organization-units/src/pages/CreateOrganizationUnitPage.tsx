@@ -2,10 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {zodResolver} from '@hookform/resolvers/zod';
-import {FullScreenCreationWizardLayout, NameSuggestion, OrganizationUnitSummaryChip} from '@thunderid/components';
+import {
+  DocumentTitle,
+  FullScreenCreationWizardLayout,
+  NameSuggestion,
+  OrganizationUnitSummaryChip,
+} from '@thunderid/components';
 import {useLogger} from '@thunderid/logger/react';
 import {generateHandle, getErrorMessage} from '@thunderid/utils';
-import {Box, Stack, Typography, Button, TextField, Alert, FormControl, FormLabel} from '@wso2/oxygen-ui';
+import {Box, Stack, Typography, Button, TextField, Alert} from '@wso2/oxygen-ui';
 import {useState, useMemo, useRef, type JSX} from 'react';
 import {useForm, Controller} from 'react-hook-form';
 import {useTranslation} from 'react-i18next';
@@ -160,11 +165,13 @@ export default function CreateOrganizationUnitPage(): JSX.Element {
     });
   };
 
+  const pageTitle = t('organizationUnits:create.title', 'Create organization unit');
+
   return (
     <FullScreenCreationWizardLayout
       onClose={handleClose}
       progress={100}
-      breadcrumbItems={[{key: 'create', label: t('organizationUnits:create.title', 'Create Organization Unit')}]}
+      breadcrumbItems={[{key: 'create', label: pageTitle}]}
       footer={
         <Box sx={{display: 'flex', justifyContent: 'flex-end'}}>
           <Button
@@ -181,6 +188,7 @@ export default function CreateOrganizationUnitPage(): JSX.Element {
         </Box>
       }
     >
+      <DocumentTitle title={pageTitle} />
       {error && (
         <Alert severity="error" sx={{mb: 3}} onClose={() => setError(null)}>
           {error}
@@ -203,27 +211,29 @@ export default function CreateOrganizationUnitPage(): JSX.Element {
 
           <OrganizationUnitSummaryChip
             icon={OrganizationUnitTreeConstants.DEFAULT_AVATAR}
-            label={t('organizationUnits:edit.general.parent.label', 'Parent Organization Unit')}
+            label={t('organizationUnits:edit.general.parent.label', 'Parent organization unit')}
             value={
               parentDisplayName
                 ? `${parentDisplayName}${parentDisplayHandle ? ` (${parentDisplayHandle})` : ''}`
-                : t('organizationUnits:edit.general.ou.noParent.label', 'Root Organization Unit')
+                : t('organizationUnits:edit.general.ou.noParent.label', 'Root organization unit')
             }
           />
 
           {/* Name field first */}
-          <FormControl fullWidth required>
-            <FormLabel htmlFor="ou-name-input">{t('organizationUnits:edit.general.name.label', 'Name')}</FormLabel>
+          <Stack>
             <Controller
               name="name"
               control={control}
               render={({field}) => (
                 <TextField
+                  labelPlacement="top"
+                  label={t('organizationUnits:edit.general.name.label', 'Name')}
+                  required
                   {...field}
                   fullWidth
                   id="ou-name-input"
                   onChange={(e) => handleNameChange(e.target.value)}
-                  placeholder={t('organizationUnits:edit.general.name.placeholder', 'e.g., Engineering Department')}
+                  placeholder={t('organizationUnits:edit.general.name.placeholder', 'e.g., engineering department')}
                   error={!!errors.name}
                   helperText={errors.name?.message}
                 />
@@ -231,32 +241,30 @@ export default function CreateOrganizationUnitPage(): JSX.Element {
             />
 
             <NameSuggestion onSelect={handleNameSuggestionSelect} />
-          </FormControl>
+          </Stack>
 
           {/* Handle field */}
-          <FormControl fullWidth required>
-            <FormLabel htmlFor="ou-handle-input">
-              {t('organizationUnits:edit.general.handle.label', 'Handle')}
-            </FormLabel>
-            <Controller
-              name="handle"
-              control={control}
-              render={({field}) => (
-                <TextField
-                  {...field}
-                  fullWidth
-                  id="ou-handle-input"
-                  onChange={(e) => handleHandleChange(e.target.value)}
-                  placeholder={t('organizationUnits:edit.general.handle.placeholder', 'e.g., engineering, sales, hr')}
-                  error={!!errors.handle}
-                  helperText={
-                    errors.handle?.message ??
-                    t('organizationUnits:edit.general.handle.hint', 'A unique identifier for this organization unit')
-                  }
-                />
-              )}
-            />
-          </FormControl>
+          <Controller
+            name="handle"
+            control={control}
+            render={({field}) => (
+              <TextField
+                labelPlacement="top"
+                label={t('organizationUnits:edit.general.handle.label', 'Handle')}
+                required
+                {...field}
+                fullWidth
+                id="ou-handle-input"
+                onChange={(e) => handleHandleChange(e.target.value)}
+                placeholder={t('organizationUnits:edit.general.handle.placeholder', 'e.g., engineering, sales, hr')}
+                error={!!errors.handle}
+                helperText={
+                  errors.handle?.message ??
+                  t('organizationUnits:edit.general.handle.hint', 'A unique identifier for this organization unit')
+                }
+              />
+            )}
+          />
         </Stack>
       </form>
     </FullScreenCreationWizardLayout>

@@ -5,8 +5,12 @@
 package config
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
+	"math"
+	"net/url"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -31,6 +35,57 @@ type TrustedIssuerConfig struct {
 	JWKSURL        string          `yaml:"jwks_url"        json:"jwks_url"`
 	Audience       string          `yaml:"audience"        json:"audience"`
 	RequiredClaims []RequiredClaim `yaml:"required_claims" json:"required_claims"`
+	// UserIDClaim names the claim a caller's id is read from where the caller is recorded, such as who
+	// captured a configuration version or applied one to a gateway. It defaults to sub.
+	UserIDClaim string `yaml:"user_id_claim" json:"user_id_claim"`
+	// UserLookup is how a recorded user's id is put a name to when the record is read. Names are not
+	// stored; they are read from the issuer's user API with a token the configured client obtains.
+	UserLookup UserLookupConfig `yaml:"user_lookup" json:"user_lookup"`
+}
+
+// UserIDClaimOrDefault reports the claim a caller's id is read from, sub by default.
+func (c TrustedIssuerConfig) UserIDClaimOrDefault() string {
+	return cmp.Or(strings.TrimSpace(c.UserIDClaim), "sub")
+}
+
+// UserLookupConfig names the trusted issuer's user API and the client that may call it, so a control
+// plane shows who captured or applied a version by name without keeping names in its own store.
+type UserLookupConfig struct {
+	// URL is the issuer's endpoint for one user, with {id} where the user's id goes, such as
+	// https://cloud.example.com/users/{id}. Unset, recorded users are shown by id alone.
+	URL string `yaml:"url" json:"url"`
+	// TokenURL is the issuer's token endpoint, asked for a client credentials token for the lookups.
+	TokenURL string `yaml:"token_url" json:"token_url"`
+	// ClientID and ClientSecret are the machine-to-machine application registered at the issuer for
+	// the lookups.
+	ClientID     string `yaml:"client_id"     json:"client_id"`
+	ClientSecret string `yaml:"client_secret" json:"client_secret"`
+	// Scopes are what the token is asked for, as the user endpoint requires.
+	Scopes []string `yaml:"scopes" json:"scopes"`
+	// NameAttribute is the attribute of the user the name is read from, username by default.
+	NameAttribute string `yaml:"name_attribute" json:"name_attribute"`
+	// CacheTTL is how long a name once read is kept, in seconds, 300 by default.
+	CacheTTL int `yaml:"cache_ttl" json:"cache_ttl"`
+}
+
+// Enabled reports whether recorded users are put a name to at all.
+func (c UserLookupConfig) Enabled() bool {
+	return strings.TrimSpace(c.URL) != ""
+}
+
+// UserURL is the URL of one user's record at the issuer.
+func (c UserLookupConfig) UserURL(id string) string {
+	return strings.ReplaceAll(strings.TrimSpace(c.URL), "{id}", url.PathEscape(id))
+}
+
+// NameAttributeOrDefault reports the attribute a user's name is read from, username by default.
+func (c UserLookupConfig) NameAttributeOrDefault() string {
+	return cmp.Or(strings.TrimSpace(c.NameAttribute), "username")
+}
+
+// CacheTTLOrDefault reports how long a name once read is kept, five minutes by default.
+func (c UserLookupConfig) CacheTTLOrDefault() time.Duration {
+	return time.Duration(cmp.Or(c.CacheTTL, 300)) * time.Second
 }
 
 // SecurityConfig holds the security-related configuration details.
@@ -137,17 +192,28 @@ type CacheConfig struct {
 
 // RedisConfig holds the Redis connection configuration.
 type RedisConfig struct {
-	Address           string `yaml:"address"              json:"address"`
-	Username          string `yaml:"username"             json:"username"`
-	Password          string `yaml:"password"             json:"password"`
-	DB                int    `yaml:"db"                   json:"db"`
-	KeyPrefix         string `yaml:"key_prefix"           json:"key_prefix"`
-	MaxRetries        int    `yaml:"max_retries"          json:"max_retries"`
-	MinRetryBackoffMS int    `yaml:"min_retry_backoff_ms" json:"min_retry_backoff_ms"`
-	MaxRetryBackoffMS int    `yaml:"max_retry_backoff_ms" json:"max_retry_backoff_ms"`
-	DialTimeoutMS     int    `yaml:"dial_timeout_ms"      json:"dial_timeout_ms"`
-	ReadTimeoutMS     int    `yaml:"read_timeout_ms"      json:"read_timeout_ms"`
-	WriteTimeoutMS    int    `yaml:"write_timeout_ms"     json:"write_timeout_ms"`
+	Address           string         `yaml:"address"              json:"address"`
+	Username          string         `yaml:"username"             json:"username"`
+	Password          string         `yaml:"password"             json:"password"`
+	DB                int            `yaml:"db"                   json:"db"`
+	KeyPrefix         string         `yaml:"key_prefix"           json:"key_prefix"`
+	MaxRetries        int            `yaml:"max_retries"          json:"max_retries"`
+	MinRetryBackoffMS int            `yaml:"min_retry_backoff_ms" json:"min_retry_backoff_ms"`
+	MaxRetryBackoffMS int            `yaml:"max_retry_backoff_ms" json:"max_retry_backoff_ms"`
+	DialTimeoutMS     int            `yaml:"dial_timeout_ms"      json:"dial_timeout_ms"`
+	ReadTimeoutMS     int            `yaml:"read_timeout_ms"      json:"read_timeout_ms"`
+	WriteTimeoutMS    int            `yaml:"write_timeout_ms"     json:"write_timeout_ms"`
+	TLS               RedisTLSConfig `yaml:"tls" json:"tls"`
+}
+
+// RedisTLSConfig holds the TLS settings for a Redis connection.
+type RedisTLSConfig struct {
+	Enabled            bool   `yaml:"enabled"              json:"enabled"`
+	CAFile             string `yaml:"ca_file"              json:"ca_file"`
+	CertFile           string `yaml:"cert_file"            json:"cert_file"`
+	KeyFile            string `yaml:"key_file"             json:"key_file"`
+	ServerName         string `yaml:"server_name"          json:"server_name"`
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify" json:"insecure_skip_verify"`
 }
 
 // ServerConfig holds the server configuration details.
@@ -159,6 +225,55 @@ type ServerConfig struct {
 	Identifier                 string         `yaml:"identifier" json:"identifier"`
 	SecurityConfig             SecurityConfig `yaml:"security"   json:"security"`
 	EnableOUQualifiedEndpoints bool           `yaml:"enable_ou_qualified_endpoints" json:"enable_ou_qualified_endpoints"` //nolint:lll // one tag pair
+	Timeouts                   ServerTimeouts `yaml:"timeouts"   json:"timeouts"`
+}
+
+// The timeouts a server uses for a value that is not positive, the same as default.json ships. Go's
+// HTTP server reads zero or less as no limit, which for the header read would drop the guard against
+// slow clients, so a configuration built without default.json, or a value set to zero or less, falls
+// back to these instead.
+const (
+	defaultReadHeaderTimeout = 10 * time.Second
+	defaultWriteTimeout      = 10 * time.Second
+	defaultIdleTimeout       = 120 * time.Second
+)
+
+// ServerTimeouts bounds how long the HTTP server waits on a connection, in seconds. They apply to
+// every route; a route that needs longer to answer extends its own write deadline from its own key.
+type ServerTimeouts struct {
+	// ReadHeaderSeconds bounds reading a request's headers, which guards against clients that send
+	// them slowly to hold connections open.
+	ReadHeaderSeconds int `yaml:"read_header_seconds" json:"read_header_seconds"`
+	// WriteSeconds bounds a request from the end of its headers until the response is written. A
+	// route known to run longer, such as applying a configuration version or the import that applies
+	// it, extends its own deadline from its own key rather than raising this one for every route.
+	WriteSeconds int `yaml:"write_seconds" json:"write_seconds"`
+	// IdleSeconds bounds how long a kept-alive connection waits for its next request.
+	IdleSeconds int `yaml:"idle_seconds" json:"idle_seconds"`
+}
+
+// ReadHeader is how long the server waits for a request's headers, the default when not positive.
+func (t ServerTimeouts) ReadHeader() time.Duration {
+	return positiveSeconds(t.ReadHeaderSeconds, defaultReadHeaderTimeout)
+}
+
+// Write is how long a request may take to answer after its headers, the default when not positive.
+func (t ServerTimeouts) Write() time.Duration {
+	return positiveSeconds(t.WriteSeconds, defaultWriteTimeout)
+}
+
+// Idle is how long a kept-alive connection waits for its next request, the default when not positive.
+func (t ServerTimeouts) Idle() time.Duration {
+	return positiveSeconds(t.IdleSeconds, defaultIdleTimeout)
+}
+
+// positiveSeconds is seconds as a duration, or fallback when seconds is not positive or too large for a
+// duration, which would otherwise wrap around to a value the server reads as no limit.
+func positiveSeconds(seconds int, fallback time.Duration) time.Duration {
+	if seconds <= 0 || int64(seconds) > int64(math.MaxInt64/time.Second) {
+		return fallback
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // GateClientConfig holds the client configuration details.
@@ -253,6 +368,26 @@ func (c CIMDConfig) IsEnabled() bool {
 	return c.Enabled != nil && *c.Enabled
 }
 
+// IDJAGConfig holds the deployment-wide Identity Assertion JWT Authorization Grant (ID-JAG) switches.
+// Each applies on top of the per-client and per-connection ID-JAG settings: when off, the role is off
+// whatever those settings say.
+type IDJAGConfig struct {
+	// Issuance controls whether ID-JAGs are issued through token exchange.
+	Issuance IDJAGRoleConfig `yaml:"issuance"   json:"issuance"`
+	// Acceptance controls whether ID-JAGs from trusted issuers are accepted on the jwt-bearer grant.
+	Acceptance IDJAGRoleConfig `yaml:"acceptance" json:"acceptance"`
+}
+
+// IDJAGRoleConfig switches one ID-JAG role on or off.
+type IDJAGRoleConfig struct {
+	Enabled *bool `yaml:"enabled" json:"enabled"`
+}
+
+// IsEnabled returns whether the ID-JAG role is enabled, defaulting to true if unset, as default.json does.
+func (c IDJAGRoleConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
 // PARConfig holds the Pushed Authorization Request (RFC 9126) configuration.
 type PARConfig struct {
 	RequirePAR bool  `yaml:"require_par" json:"require_par"`
@@ -281,6 +416,14 @@ type ClientAssertionConfig struct {
 	MaxIatAge int64 `yaml:"max_iat_age" json:"max_iat_age"`
 }
 
+// DeviceGrantConfig holds the lifetime and polling interval for device authorization requests.
+type DeviceGrantConfig struct {
+	// ExpiresIn is the device authorization request lifetime in seconds.
+	ExpiresIn int64 `yaml:"expires_in" json:"expires_in"`
+	// Interval is the minimum token polling interval in seconds.
+	Interval int64 `yaml:"interval" json:"interval"`
+}
+
 // OAuthConfig holds the OAuth configuration details.
 type OAuthConfig struct {
 	RefreshToken         RefreshTokenConfig         `yaml:"refresh_token"               json:"refresh_token"`
@@ -288,10 +431,12 @@ type OAuthConfig struct {
 	AuthorizationRequest AuthorizationRequestConfig `yaml:"authorization_request"       json:"authorization_request"`
 	DCR                  DCRConfig                  `yaml:"dcr"                         json:"dcr"`
 	CIMD                 CIMDConfig                 `yaml:"cimd"                        json:"cimd"`
+	IDJAG                IDJAGConfig                `yaml:"id_jag"                      json:"id_jag"`
 	PAR                  PARConfig                  `yaml:"par"                         json:"par"`
 	DPoP                 DPoPConfig                 `yaml:"dpop"                        json:"dpop"`
 	AuthClass            AuthClassConfig            `yaml:"auth_class"                  json:"auth_class"`
 	CIBA                 CIBAConfig                 `yaml:"ciba"                        json:"ciba"`
+	DeviceGrant          DeviceGrantConfig          `yaml:"device_grant"                json:"device_grant"`
 	ClientAssertion      ClientAssertionConfig      `yaml:"client_assertion"            json:"client_assertion"`
 	Revocation           RevocationConfig           `yaml:"revocation"                  json:"revocation"`
 	TokenExchange        TokenExchangeConfig        `yaml:"token_exchange"              json:"token_exchange"`
@@ -319,6 +464,30 @@ type OAuthConfig struct {
 
 	TokenRevocation OAuthTokenRevocationConfig `yaml:"token_revocation" json:"token_revocation"`
 	Logout          LogoutConfig               `yaml:"logout" json:"logout"`
+	// AuthorizationDetails holds the RFC 9396 authorization details configuration.
+	AuthorizationDetails AuthorizationDetailsConfig `yaml:"authorization_details" json:"authorization_details"`
+}
+
+// AuthorizationDetailsConfig holds the RFC 9396 authorization details configuration.
+type AuthorizationDetailsConfig struct {
+	// ProcessorTimeout bounds one authorization details processor call, in seconds.
+	ProcessorTimeout int64 `yaml:"processor_timeout" json:"processor_timeout"`
+	// TypeMetadataEnabled serves the type metadata endpoint and advertises it in discovery.
+	TypeMetadataEnabled *bool `yaml:"type_metadata_enabled" json:"type_metadata_enabled"`
+}
+
+// ProcessorTimeoutOrDefault reports the authorization details processor call timeout, five seconds by default.
+func (c AuthorizationDetailsConfig) ProcessorTimeoutOrDefault() time.Duration {
+	if c.ProcessorTimeout <= 0 {
+		return 5 * time.Second
+	}
+	return time.Duration(c.ProcessorTimeout) * time.Second
+}
+
+// IsTypeMetadataEnabled returns whether the type metadata endpoint is served, defaulting to true if unset, as
+// default.json does.
+func (c AuthorizationDetailsConfig) IsTypeMetadataEnabled() bool {
+	return c.TypeMetadataEnabled == nil || *c.TypeMetadataEnabled
 }
 
 // SendServerErrorsToClientEnabled reports whether server errors reach the client, defaulting to

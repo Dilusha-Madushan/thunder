@@ -232,7 +232,7 @@ async function pickOrganizationUnit(user: ReturnType<typeof userEvent.setup>, ou
  */
 async function goToPropertiesStep(user: ReturnType<typeof userEvent.setup>, name = 'Employee') {
   await pickOrganizationUnit(user);
-  await user.type(screen.getByLabelText(/User Type Name/i), name);
+  await user.type(screen.getByLabelText(/User type name/i), name);
   await user.click(screen.getByRole('button', {name: /Continue/i}));
   await waitFor(() => {
     expect(screen.getByTestId('configure-properties')).toBeInTheDocument();
@@ -316,7 +316,7 @@ describe('CreateUserTypePage', () => {
 
     expect(screen.getByTestId('configure-name')).toBeInTheDocument();
     expect(screen.getByText("Let's collect some details about your user type")).toBeInTheDocument();
-    expect(screen.getByLabelText(/User Type Name/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/User type name/i)).toBeInTheDocument();
   });
 
   it('closes wizard when X button is clicked', async () => {
@@ -342,7 +342,7 @@ describe('CreateUserTypePage', () => {
 
     await pickOrganizationUnit(user);
 
-    const nameInput = screen.getByLabelText(/User Type Name/i);
+    const nameInput = screen.getByLabelText(/User type name/i);
     await user.type(nameInput, 'Employee');
 
     expect(nameInput).toHaveValue('Employee');
@@ -363,7 +363,7 @@ describe('CreateUserTypePage', () => {
     renderPage();
 
     await pickOrganizationUnit(user);
-    await user.type(screen.getByLabelText(/User Type Name/i), 'Employee');
+    await user.type(screen.getByLabelText(/User type name/i), 'Employee');
 
     const continueButton = screen.getByRole('button', {name: /Continue/i});
     expect(continueButton).not.toBeDisabled();
@@ -374,7 +374,7 @@ describe('CreateUserTypePage', () => {
     renderPage();
 
     await pickOrganizationUnit(user);
-    await user.type(screen.getByLabelText(/User Type Name/i), 'E');
+    await user.type(screen.getByLabelText(/User type name/i), 'E');
 
     expect(screen.getByRole('button', {name: /Continue/i})).not.toBeDisabled();
   });
@@ -384,7 +384,7 @@ describe('CreateUserTypePage', () => {
     renderPage();
 
     await pickOrganizationUnit(user);
-    fireEvent.change(screen.getByLabelText(/User Type Name/i), {
+    fireEvent.change(screen.getByLabelText(/User type name/i), {
       target: {value: 'a'.repeat(UserTypeConstraints.NAME_MAX_LENGTH + 1)},
     });
 
@@ -399,12 +399,12 @@ describe('CreateUserTypePage', () => {
     await pickOrganizationUnit(user);
     const handleInput = screen.getByTestId('user-type-handle-input');
 
-    await user.type(screen.getByLabelText(/User Type Name/i), 'Customer Accounts');
+    await user.type(screen.getByLabelText(/User type name/i), 'Customer Accounts');
     expect(handleInput).toHaveValue('customer-accounts');
 
     await user.clear(handleInput);
     await user.type(handleInput, 'custom_handle');
-    await user.type(screen.getByLabelText(/User Type Name/i), ' Extra');
+    await user.type(screen.getByLabelText(/User type name/i), ' Extra');
 
     expect(handleInput).toHaveValue('custom_handle');
   });
@@ -414,7 +414,7 @@ describe('CreateUserTypePage', () => {
     renderPage();
 
     await pickOrganizationUnit(user);
-    await user.type(screen.getByLabelText(/User Type Name/i), 'Employee');
+    await user.type(screen.getByLabelText(/User type name/i), 'Employee');
     await user.clear(screen.getByTestId('user-type-handle-input'));
     await user.type(screen.getByTestId('user-type-handle-input'), 'employee-');
 
@@ -427,7 +427,7 @@ describe('CreateUserTypePage', () => {
     renderPage();
 
     await pickOrganizationUnit(user);
-    await user.type(screen.getByLabelText(/User Type Name/i), 'Employee');
+    await user.type(screen.getByLabelText(/User type name/i), 'Employee');
     await user.clear(screen.getByTestId('user-type-handle-input'));
 
     expect(screen.getByRole('button', {name: /Continue/i})).toBeDisabled();
@@ -439,7 +439,7 @@ describe('CreateUserTypePage', () => {
 
     await pickOrganizationUnit(user);
 
-    const selfRegistrationCheckbox = screen.getByLabelText(/Allow Self Registration/i);
+    const selfRegistrationCheckbox = screen.getByLabelText(/Allow self registration/i);
     expect(selfRegistrationCheckbox).not.toBeChecked();
 
     await user.click(selfRegistrationCheckbox);
@@ -597,9 +597,9 @@ describe('CreateUserTypePage', () => {
     await addAttribute(user, 'email');
 
     const displayNameInput = await screen.findByPlaceholderText(/e.g., First Name/i);
-    await user.type(displayNameInput, 'Email Address');
+    await user.type(displayNameInput, 'Email address');
 
-    expect(displayNameInput).toHaveValue('Email Address');
+    expect(displayNameInput).toHaveValue('Email address');
   });
 
   it('allows adding a regex pattern for a string property', async () => {
@@ -667,7 +667,7 @@ describe('CreateUserTypePage', () => {
     await pickOrganizationUnit(user);
 
     // Step 1: Details
-    await user.type(screen.getByLabelText(/User Type Name/i), 'Employee');
+    await user.type(screen.getByLabelText(/User type name/i), 'Employee');
     await user.click(screen.getByRole('button', {name: /Continue/i}));
 
     // Step 2: Properties
@@ -680,7 +680,7 @@ describe('CreateUserTypePage', () => {
     await user.click(requiredCheckbox);
 
     // Submit
-    const submitButton = screen.getByRole('button', {name: /Create User Type/i});
+    const submitButton = screen.getByRole('button', {name: /Create user type/i});
     await user.click(submitButton);
 
     await waitFor(() => {
@@ -713,8 +713,8 @@ describe('CreateUserTypePage', () => {
     await pickOrganizationUnit(user, 'select-other-ou');
 
     // Step 1: Details - enable self-registration
-    await user.type(screen.getByLabelText(/User Type Name/i), 'Employee');
-    await user.click(screen.getByLabelText(/Allow Self Registration/i));
+    await user.type(screen.getByLabelText(/User type name/i), 'Employee');
+    await user.click(screen.getByLabelText(/Allow self registration/i));
     await user.click(screen.getByRole('button', {name: /Continue/i}));
 
     // Step 2: Properties
@@ -723,7 +723,7 @@ describe('CreateUserTypePage', () => {
     });
     await addAttribute(user, 'email');
 
-    await user.click(screen.getByRole('button', {name: /Create User Type/i}));
+    await user.click(screen.getByRole('button', {name: /Create user type/i}));
 
     await waitFor(() => {
       expect(mockMutateAsync).toHaveBeenCalledWith({
@@ -749,7 +749,7 @@ describe('CreateUserTypePage', () => {
     await goToPropertiesStep(user);
 
     // The Create User Type button should be disabled when no attribute has been added.
-    const submitButton = screen.getByRole('button', {name: /Create User Type/i});
+    const submitButton = screen.getByRole('button', {name: /Create user type/i});
     expect(submitButton).toBeDisabled();
 
     expect(mockMutateAsync).not.toHaveBeenCalled();
@@ -793,7 +793,7 @@ describe('CreateUserTypePage', () => {
 
     expect(screen.getByText('Failed to create user type. Please try again.')).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText(/User Type Name/i), 'A');
+    await user.type(screen.getByLabelText(/User type name/i), 'A');
 
     expect(mockReset).toHaveBeenCalled();
   });
@@ -814,7 +814,7 @@ describe('CreateUserTypePage', () => {
 
     await pickOrganizationUnit(user);
 
-    await user.type(screen.getByLabelText(/User Type Name/i), 'A');
+    await user.type(screen.getByLabelText(/User type name/i), 'A');
 
     expect(mockReset).not.toHaveBeenCalled();
   });
@@ -864,7 +864,7 @@ describe('CreateUserTypePage', () => {
     await user.paste('^[A-Z]{3}$');
 
     // Submit
-    const submitButton = screen.getByRole('button', {name: /Create User Type/i});
+    const submitButton = screen.getByRole('button', {name: /Create user type/i});
     await user.click(submitButton);
 
     await waitFor(() => {
@@ -901,7 +901,7 @@ describe('CreateUserTypePage', () => {
     });
 
     // Submit
-    const submitButton = screen.getByRole('button', {name: /Create User Type/i});
+    const submitButton = screen.getByRole('button', {name: /Create user type/i});
     await user.click(submitButton);
 
     await waitFor(() => {
@@ -930,7 +930,7 @@ describe('CreateUserTypePage', () => {
     await addAttribute(user, 'workMail');
     await addAttribute(user, 'phone');
 
-    await user.click(screen.getByRole('button', {name: /Create User Type/i}));
+    await user.click(screen.getByRole('button', {name: /Create user type/i}));
 
     await waitFor(() => {
       expect(mockMutateAsync).toHaveBeenCalledWith(
@@ -960,7 +960,7 @@ describe('CreateUserTypePage', () => {
     expect(altPrimary).not.toBeChecked();
     await user.click(altPrimary);
 
-    await user.click(screen.getByRole('button', {name: /Create User Type/i}));
+    await user.click(screen.getByRole('button', {name: /Create user type/i}));
 
     await waitFor(() => {
       expect(mockMutateAsync).toHaveBeenCalledWith(
@@ -981,7 +981,7 @@ describe('CreateUserTypePage', () => {
     await addAttribute(user, attribute);
     await user.clear(getPropertyNameInputs()[1]);
 
-    const submit = screen.getByRole('button', {name: /Create User Type/i});
+    const submit = screen.getByRole('button', {name: /Create user type/i});
     expect(submit).toBeEnabled();
     await user.click(submit);
 
@@ -1005,7 +1005,7 @@ describe('CreateUserTypePage', () => {
 
     await user.clear(screen.getByDisplayValue('^[^\\s@]+@[^\\s@]+$'));
 
-    expect(screen.getByRole('button', {name: /Create User Type/i})).toBeDisabled();
+    expect(screen.getByRole('button', {name: /Create user type/i})).toBeDisabled();
     expect(mockMutateAsync).not.toHaveBeenCalled();
   });
 
@@ -1030,7 +1030,7 @@ describe('CreateUserTypePage', () => {
       const [draftPrimary, namedPrimary] = screen.getAllByLabelText('Primary');
       expect(draftPrimary).not.toBeChecked();
       expect(namedPrimary).toBeChecked();
-      const submit = screen.getByRole('button', {name: /Create User Type/i});
+      const submit = screen.getByRole('button', {name: /Create user type/i});
       expect(submit).toBeEnabled();
       await user.click(submit);
 
@@ -1066,7 +1066,7 @@ describe('CreateUserTypePage', () => {
     const [draftPrimary, namedPrimary] = screen.getAllByLabelText('Primary');
     expect(draftPrimary).not.toBeChecked();
     expect(namedPrimary).toBeChecked();
-    await user.click(screen.getByRole('button', {name: /Create User Type/i}));
+    await user.click(screen.getByRole('button', {name: /Create user type/i}));
     await waitFor(() => {
       expect(mockMutateAsync).toHaveBeenCalledWith({
         handle: 'contacts',
@@ -1091,7 +1091,7 @@ describe('CreateUserTypePage', () => {
 
     await addAttribute(user, 'email');
 
-    const submitButton = screen.getByRole('button', {name: /Create User Type/i});
+    const submitButton = screen.getByRole('button', {name: /Create user type/i});
     await user.click(submitButton);
 
     await waitFor(() => {
@@ -1115,15 +1115,15 @@ describe('CreateUserTypePage', () => {
     const breadcrumb1 = screen.getByRole('navigation', {name: /breadcrumb/i});
     expect(within(breadcrumb1).getByText('Details')).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText(/User Type Name/i), 'Employee');
+    await user.type(screen.getByLabelText(/User type name/i), 'Employee');
     await user.click(screen.getByRole('button', {name: /Continue/i}));
     await waitFor(() => {
       expect(screen.getByTestId('configure-properties')).toBeInTheDocument();
     });
 
-    // Step 2: "Organization Unit" > "Details" > "Properties" breadcrumbs
+    // Step 2: "Organization unit" > "Details" > "Properties" breadcrumbs
     const breadcrumb2 = screen.getByRole('navigation', {name: /breadcrumb/i});
-    expect(within(breadcrumb2).getByText('Organization Unit')).toBeInTheDocument();
+    expect(within(breadcrumb2).getByText('Organization unit')).toBeInTheDocument();
     expect(within(breadcrumb2).getByText('Details')).toBeInTheDocument();
     expect(within(breadcrumb2).getByText('Properties')).toBeInTheDocument();
   });

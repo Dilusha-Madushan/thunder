@@ -208,6 +208,101 @@ func (c *entityCompositeStore) GetEntityList(ctx context.Context, category strin
 	return entities, nil
 }
 
+// GetEntityListCountBySystemAttributes retrieves the number of entities a system attribute query
+// selects from both stores.
+func (c *entityCompositeStore) GetEntityListCountBySystemAttributes(ctx context.Context, category string,
+	sysQuery SystemAttributeQuery) (int, error) {
+	return c.getDistinctEntityCount(
+		func() (int, error) { return c.dbStore.GetEntityListCountBySystemAttributes(ctx, category, sysQuery) },
+		func() (int, error) { return c.fileStore.GetEntityListCountBySystemAttributes(ctx, category, sysQuery) },
+		func(count int) ([]providers.Entity, error) {
+			return c.dbStore.GetEntityListBySystemAttributes(ctx, category, sysQuery, count, 0)
+		},
+		func(count int) ([]providers.Entity, error) {
+			return c.fileStore.GetEntityListBySystemAttributes(ctx, category, sysQuery, count, 0)
+		},
+	)
+}
+
+// GetEntityListBySystemAttributes retrieves the entities a system attribute query selects from both
+// stores with pagination.
+func (c *entityCompositeStore) GetEntityListBySystemAttributes(ctx context.Context, category string,
+	sysQuery SystemAttributeQuery, limit, offset int) ([]providers.Entity, error) {
+	entities, limitExceeded, err := declarativeresource.CompositeMergeListHelperWithLimit(
+		func() (int, error) { return c.dbStore.GetEntityListCountBySystemAttributes(ctx, category, sysQuery) },
+		func() (int, error) { return c.fileStore.GetEntityListCountBySystemAttributes(ctx, category, sysQuery) },
+		func(count int) ([]providers.Entity, error) {
+			return c.dbStore.GetEntityListBySystemAttributes(ctx, category, sysQuery, count, 0)
+		},
+		func(count int) ([]providers.Entity, error) {
+			return c.fileStore.GetEntityListBySystemAttributes(ctx, category, sysQuery, count, 0)
+		},
+		mergeAndDeduplicateEntities,
+		limit,
+		offset,
+		serverconst.MaxCompositeStoreRecords,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if limitExceeded {
+		return nil, errResultLimitExceededInCompositeMode
+	}
+	return entities, nil
+}
+
+// GetEntityListCountBySystemAttributesAndOUIDs retrieves the number of entities a system attribute query
+// selects within the given organization units from both stores.
+func (c *entityCompositeStore) GetEntityListCountBySystemAttributesAndOUIDs(ctx context.Context,
+	category string, sysQuery SystemAttributeQuery, ouIDs []string) (int, error) {
+	return c.getDistinctEntityCount(
+		func() (int, error) {
+			return c.dbStore.GetEntityListCountBySystemAttributesAndOUIDs(ctx, category, sysQuery, ouIDs)
+		},
+		func() (int, error) {
+			return c.fileStore.GetEntityListCountBySystemAttributesAndOUIDs(ctx, category, sysQuery, ouIDs)
+		},
+		func(count int) ([]providers.Entity, error) {
+			return c.dbStore.GetEntityListBySystemAttributesAndOUIDs(ctx, category, sysQuery, ouIDs, count, 0)
+		},
+		func(count int) ([]providers.Entity, error) {
+			return c.fileStore.GetEntityListBySystemAttributesAndOUIDs(ctx, category, sysQuery, ouIDs, count, 0)
+		},
+	)
+}
+
+// GetEntityListBySystemAttributesAndOUIDs retrieves the entities a system attribute query selects within
+// the given organization units from both stores with pagination.
+func (c *entityCompositeStore) GetEntityListBySystemAttributesAndOUIDs(ctx context.Context,
+	category string, sysQuery SystemAttributeQuery, ouIDs []string, limit, offset int) (
+	[]providers.Entity, error) {
+	entities, limitExceeded, err := declarativeresource.CompositeMergeListHelperWithLimit(
+		func() (int, error) {
+			return c.dbStore.GetEntityListCountBySystemAttributesAndOUIDs(ctx, category, sysQuery, ouIDs)
+		},
+		func() (int, error) {
+			return c.fileStore.GetEntityListCountBySystemAttributesAndOUIDs(ctx, category, sysQuery, ouIDs)
+		},
+		func(count int) ([]providers.Entity, error) {
+			return c.dbStore.GetEntityListBySystemAttributesAndOUIDs(ctx, category, sysQuery, ouIDs, count, 0)
+		},
+		func(count int) ([]providers.Entity, error) {
+			return c.fileStore.GetEntityListBySystemAttributesAndOUIDs(ctx, category, sysQuery, ouIDs, count, 0)
+		},
+		mergeAndDeduplicateEntities,
+		limit,
+		offset,
+		serverconst.MaxCompositeStoreRecords,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if limitExceeded {
+		return nil, errResultLimitExceededInCompositeMode
+	}
+	return entities, nil
+}
+
 // GetEntityListCountByOUIDs retrieves the total count of entities by OU IDs from both stores.
 func (c *entityCompositeStore) GetEntityListCountByOUIDs(ctx context.Context, category string,
 	ouIDs []string, filters map[string]interface{}) (int, error) {
@@ -353,7 +448,8 @@ func (c *entityCompositeStore) LoadIndexedAttributes(attributes []string) error 
 	return c.dbStore.LoadIndexedAttributes(attributes)
 }
 
-// getDistinctEntityCount retrieves the count of distinct entities from both stores.
+// getDistinctEntityCount retrieves the count of distinct entities from both stores. Entities are
+// listed to find the ones both stores hold only when both have matches.
 func (c *entityCompositeStore) getDistinctEntityCount(
 	dbCount func() (int, error),
 	fileCount func() (int, error),
@@ -367,6 +463,9 @@ func (c *entityCompositeStore) getDistinctEntityCount(
 	fileCountValue, err := fileCount()
 	if err != nil {
 		return 0, err
+	}
+	if count == 0 || fileCountValue == 0 {
+		return count + fileCountValue, nil
 	}
 
 	entityIDs := make(map[string]struct{}, count+fileCountValue)

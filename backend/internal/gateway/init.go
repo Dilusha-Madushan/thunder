@@ -6,6 +6,8 @@ package gateway
 import (
 	"net/http"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	serverconst "github.com/thunder-id/thunderid/internal/system/constants"
 	declarativeresource "github.com/thunder-id/thunderid/internal/system/declarative_resource"
 	"github.com/thunder-id/thunderid/internal/system/export"
@@ -29,8 +31,15 @@ import (
 // default gateway has to hold, while a plane exporting template placeholders carries the values
 // itself and has nothing to put anywhere.
 // The exporters it was built from are what show a gateway's applied resources as their own reads do.
-func Initialize(mux *http.ServeMux, exporter export.ExportServiceInterface,
-	capture *ValueCapture, exporters []declarativeresource.ResourceExporter) (ServiceInterface, error) {
+//
+// changes is bound here when given, so the configuration is captured as the current version after
+// each change. Only a control plane gives one: it is where the configuration is authored.
+//
+// The same operations are registered on mcpServer, when given, as tools that answer as the REST endpoints do, so
+// an MCP client can capture, deploy, promote and roll back as the console does.
+func Initialize(mux *http.ServeMux, mcpServer *mcp.Server, exporter export.ExportServiceInterface,
+	capture *ValueCapture, exporters []declarativeresource.ResourceExporter,
+	changes *ChangeCapture) (ServiceInterface, error) {
 	var (
 		gatewayStore storeInterface
 		fileStore    *gatewayFileStore
@@ -48,18 +57,29 @@ func Initialize(mux *http.ServeMux, exporter export.ExportServiceInterface,
 	}
 
 	service := newService(gatewayStore)
-	versions := newVersionService(gatewayStore, newVersionStore(), exporter, newGatewayClient())
+	versions := newVersionService(gatewayStore, newVersionStore(), exporter, newGatewayClient(),
+		declarativeresource.SecretFieldsOf(exporters), newActorNames())
+	versions.autoApply = isAutoApplyEnabled()
 	h := newHandler(service)
 	h.afterDelete = versions.Forget
 	stores := newStoreService(gatewayStore, newGatewayClient())
 	if capture != nil {
 		capture.bind(exporter, gatewayStore, stores)
 	}
+	if changes != nil {
+		changes.bind(versions)
+	}
 	registerRoutes(mux, h)
-	registerVersionRoutes(mux, newVersionHandler(versions))
-	registerAppliedConfigurationRoutes(mux,
-		newAppliedConfigurationHandler(newAppliedConfigurationService(versions, exporters)))
+	versionRoutes := newVersionHandler(versions)
+	registerVersionRoutes(mux, versionRoutes)
+	registerMasterRoutes(mux, versionRoutes)
+	applied := newAppliedConfigurationService(versions, exporters)
+	registerAppliedConfigurationRoutes(mux, newAppliedConfigurationHandler(applied))
 	registerStoreRoutes(mux, newStoreHandler(stores))
+	if mcpServer != nil {
+		registerMCPTools(mcpServer, &gatewayTools{gateways: service, versions: versions, applied: applied,
+			stores: stores})
+	}
 
 	// A gateway can also be declared in a file rather than registered through the API. The files are
 	// read on every start into the in-memory store, so the file is the whole truth about what it

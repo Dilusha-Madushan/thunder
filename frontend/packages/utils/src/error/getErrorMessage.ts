@@ -44,9 +44,11 @@ export default function getErrorMessage(
   const apiError = (error as {response?: {data?: ApiError}}).response?.data;
 
   if (apiError?.code) {
+    // The server sends its description as an i18n object with optional params; interpolate them so a
+    // localized key (e.g. a usage summary) fills in, while unused params are ignored by i18next.
+    const options = {...apiErrorParams(apiError), defaultValue: ''};
     // Feature namespace first, then the shared catalog for codes shared across services (e.g. SSE-4030).
-    const specific =
-      t(`errors.${apiError.code}`, {defaultValue: ''}) || t(`common:errors.${apiError.code}`, {defaultValue: ''});
+    const specific = t(`errors.${apiError.code}`, options) || t(`common:errors.${apiError.code}`, options);
 
     if (specific) {
       return specific;
@@ -69,6 +71,17 @@ export default function getErrorMessage(
   }
 
   return t(fallbackKey);
+}
+
+/**
+ * Reads the interpolation params the server attaches to an API error's `description`. The wire sends
+ * `description` as an i18n object (`{key, defaultValue, params}`) but tolerates a plain string, so
+ * return params only when the object shape is present.
+ */
+function apiErrorParams(apiError: ApiError): Record<string, string> | undefined {
+  const {description} = apiError;
+
+  return typeof description === 'object' ? description.params : undefined;
 }
 
 /**

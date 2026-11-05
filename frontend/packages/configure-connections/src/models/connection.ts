@@ -1,6 +1,7 @@
 // Copyright 2025 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import type {ServerConfigLayers} from '@thunderid/utils';
 import type {JSX} from 'react';
 
 /**
@@ -16,6 +17,7 @@ export const ConnectionTypes = {
   SMS_GATEWAY: 'sms-gateway',
   AUTHZEN_PDP: 'authzen-pdp',
   SMTP: 'email-smtp',
+  HTTP: 'http',
 } as const;
 
 export type ConnectionType = (typeof ConnectionTypes)[keyof typeof ConnectionTypes];
@@ -45,6 +47,7 @@ export const ConnectionInstanceCategories = {
   SMS_PROVIDER: 'sms-provider',
   AUTHORIZATION_PDP: 'authorization-pdp',
   EMAIL_PROVIDER: 'email-provider',
+  HTTP: 'http',
 } as const;
 
 export type ConnectionInstanceCategory =
@@ -58,6 +61,8 @@ export interface ConnectionInstance {
   name: string;
   description?: string;
   type: ConnectionType;
+  /** The organization unit the connection belongs to. */
+  ouId?: string;
   categories: ConnectionInstanceCategory[];
   /**
    * Present only for trust-only OIDC instances (trusted issuers); absent for plain federation
@@ -85,6 +90,13 @@ export interface ConnectionListResponse {
   connections: ConnectionInstance[];
   links: ConnectionListLink[];
 }
+
+/**
+ * Resource types reported in a connection's usages.
+ */
+export const ConnectionUsageResourceTypes = {
+  FLOW: 'flow',
+} as const;
 
 /**
  * A single resource that references a connection (e.g. a flow that uses it).
@@ -373,6 +385,27 @@ export interface AuthZENPDPConnectionRequest {
 export type OutboundAuthentication = OutboundAuthConfig;
 export type OutboundAuthenticationResponse = OutboundAuthConfig;
 
+/**
+ * Request payload for an HTTP endpoint connection, a service that flow steps call.
+ */
+export interface HTTPConnectionRequest {
+  name: string;
+  description?: string;
+  /** Must be https when authentication is set. */
+  url: string;
+  /** 1 to 20000. Omit for the 10000 default. */
+  timeoutMs?: number;
+  /** Plain headers sent with every request. A PUT replaces the whole list. */
+  headers?: HTTPHeader[];
+  /** Omit to send no credentials. A method other than `none` requires an https URL. */
+  authentication?: OutboundAuthConfig;
+}
+
+export interface HTTPHeader {
+  name: string;
+  value: string;
+}
+
 export interface AuthZENPDPSubjectAttributeMapping {
   entityType: string;
   attributes: AuthZENPDPSubjectAttribute[];
@@ -395,7 +428,17 @@ export type ConnectionRequest =
   | VonageConnectionRequest
   | SMSGatewayConnectionRequest
   | AuthZENPDPConnectionRequest
-  | SMTPConnectionRequest;
+  | SMTPConnectionRequest
+  | HTTPConnectionRequest;
+
+/**
+ * Request payload for creating a connection of any type. Every connection is owned by an organization unit,
+ * chosen once at creation; an update does not carry it, since the owner cannot change.
+ */
+export type CreateConnectionRequest = ConnectionRequest & {
+  /** The organization unit that will own the connection. */
+  ouId: string;
+};
 
 /**
  * Vendor response — secrets are never returned. A superset carrying every vendor's
@@ -405,6 +448,8 @@ export interface ConnectionResponse extends Partial<OIDCConnectionRequest> {
   id: string;
   type: ConnectionType;
   name: string;
+  /** The organization unit the connection belongs to. */
+  ouId: string;
   /** SMS (Twilio) fields. */
   accountSid?: string;
   authToken?: string;
@@ -430,6 +475,8 @@ export interface ConnectionResponse extends Partial<OIDCConnectionRequest> {
   fromAddress?: string;
   fromName?: string;
   tls?: string;
+  /** HTTP endpoint plain headers. The URL and timeout share the fields above. */
+  headers?: HTTPHeader[] | null;
   /** Outbound authentication returned with credential values masked. */
   authentication?: OutboundAuthenticationResponse;
 }
@@ -462,12 +509,18 @@ export interface ConnectionVendorMeta {
   supportsAttributeMapping?: boolean;
   /** Whether this connection exposes outbound service authentication settings. */
   supportsAuthentication?: boolean;
+  /** Changing the `url` origin requires the stored credentials to be entered again. */
+  reentersCredentialsOnOriginChange?: boolean;
+  /** Whether the detail page lists the resources that use this connection. */
+  showsUsages?: boolean;
   /** Whether this connection exposes subject attribute mappings for authorization requests. */
   supportsSubjectMapping?: boolean;
   /** Copy variant for the General tab settings card. */
   generalSettingsCardCopy?: ConnectionGeneralSettingsCardCopy;
   /** i18n key for the create-wizard setup hint (vendors that need an OAuth app registered first). */
   createHintKey?: string;
+  /** i18n key for the Danger zone delete description, for connections that are not used to sign in. */
+  deleteDescriptionKey?: string;
 }
 
 /**
@@ -486,6 +539,8 @@ export interface ConnectionCardModel {
   comingSoon: boolean;
   /** Route to navigate to when the card is activated; null for coming-soon. */
   navTarget: string | null;
+  /** Whether this card is the default email sender. */
+  isDefault?: boolean;
 }
 
 /**
@@ -515,6 +570,11 @@ export interface OutboundAuthMethod {
   displayName: string;
   /** The method's fields, in render order. Absent for a method that takes none. */
   fields?: OutboundAuthField[];
+  /**
+   * Describes properties whose names the administrator chooses, such as API-key header names.
+   * Its `key` is unused; each entered name becomes a property.
+   */
+  additionalProperties?: OutboundAuthField;
 }
 
 /**
@@ -535,3 +595,12 @@ export interface ConnectionMetaVendor {
 export interface ConnectionMetaResponse {
   vendors: ConnectionMetaVendor[];
 }
+
+/**
+ * Value of the `notification` server-config section.
+ */
+export interface NotificationConfigValue {
+  defaultEmailSenderId?: string;
+}
+
+export type NotificationConfigResponse = ServerConfigLayers<NotificationConfigValue>;

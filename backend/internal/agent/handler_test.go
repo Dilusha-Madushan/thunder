@@ -6,6 +6,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,11 +15,13 @@ import (
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 
 	"github.com/thunder-id/thunderid/internal/agent/model"
 	inboundmodel "github.com/thunder-id/thunderid/internal/inboundclient/model"
 	"github.com/thunder-id/thunderid/internal/system/resourcedependency"
 	"github.com/thunder-id/thunderid/internal/system/utils"
+	"github.com/thunder-id/thunderid/tests/mocks/agentmock"
 )
 
 type InlineStubAgentService struct {
@@ -34,6 +37,9 @@ type InlineStubAgentService struct {
 	OnDeleteAgent  func(ctx context.Context, id string) *tidcommon.ServiceError
 	OnGetAgentList func(
 		ctx context.Context, limit, offset int, filters map[string]interface{}, inc bool,
+	) (*model.AgentListResponse, *tidcommon.ServiceError)
+	OnGetAgentListByProject func(
+		ctx context.Context, projectID string, limit, offset int, filters map[string]interface{}, inc bool,
 	) (*model.AgentListResponse, *tidcommon.ServiceError)
 	OnGetAgentGroups func(
 		ctx context.Context, id string, limit, offset int,
@@ -85,6 +91,15 @@ func (s *InlineStubAgentService) GetAgentList(
 	return &model.AgentListResponse{Agents: []model.BasicAgentResponse{}, Links: []utils.Link{}}, nil
 }
 
+func (s *InlineStubAgentService) GetAgentListByProject(
+	ctx context.Context, projectID string, limit, offset int, filters map[string]interface{}, inc bool,
+) (*model.AgentListResponse, *tidcommon.ServiceError) {
+	if s.OnGetAgentListByProject != nil {
+		return s.OnGetAgentListByProject(ctx, projectID, limit, offset, filters, inc)
+	}
+	return &model.AgentListResponse{Agents: []model.BasicAgentResponse{}, Links: []utils.Link{}}, nil
+}
+
 func (s *InlineStubAgentService) GetAgentGroups(
 	ctx context.Context, id string, limit, offset int) (*model.AgentGroupListResponse, *tidcommon.ServiceError) {
 	if s.OnGetAgentGroups != nil {
@@ -131,10 +146,116 @@ func TestHandleAgentPostRequest_Success(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, w.Code)
 }
 
+func TestHandleAgentPostRequest_PassesDelegatedToTheService(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		delegated bool
+	}{
+		{"DelegatedSet", `{"ouId": "ou-123", "type": "worker", "delegated": true}`, true},
+		{"DelegatedAbsent", `{"ouId": "ou-123", "type": "worker"}`, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var received *providers.Agent
+			stubService := &InlineStubAgentService{
+				OnCreateAgent: func(
+					ctx context.Context, agent *providers.Agent,
+				) (*model.AgentCompleteResponse, *tidcommon.ServiceError) {
+					received = agent
+					return &model.AgentCompleteResponse{ID: "agent-123"}, nil
+				},
+			}
+			handler := newAgentHandler(stubService)
+			req := httptest.NewRequest(http.MethodPost, "/agents", bytes.NewBufferString(tt.body))
+			w := httptest.NewRecorder()
+
+			handler.HandleAgentPostRequest(w, req)
+
+			assert.Equal(t, http.StatusCreated, w.Code)
+			if assert.NotNil(t, received) {
+				assert.Equal(t, tt.delegated, received.Delegated)
+			}
+		})
+	}
+}
+
+func TestHandleAgentPostRequest_PassesValidUntil(t *testing.T) {
+	var received *string
+	stubService := &InlineStubAgentService{
+		OnCreateAgent: func(
+			ctx context.Context, agent *providers.Agent,
+		) (*model.AgentCompleteResponse, *tidcommon.ServiceError) {
+			received = agent.ValidUntil
+			return &model.AgentCompleteResponse{ID: "agent-123"}, nil
+		},
+	}
+	handler := newAgentHandler(stubService)
+	body := `{"ouId": "ou-123", "type": "worker", "validUntil": "2027-03-31T00:00:00Z"}`
+	req := httptest.NewRequest(http.MethodPost, "/agents", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+
+	handler.HandleAgentPostRequest(w, req)
+	assert.Equal(t, http.StatusCreated, w.Code)
+	if assert.NotNil(t, received) {
+		assert.Equal(t, "2027-03-31T00:00:00Z", *received)
+	}
+}
+
+func TestHandleAgentPutRequest_DistinguishesAbsentAndNullValidUntil(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"type": "worker"}`:                     "",
+		`{"type": "worker", "validUntil": null}`: "null",
+	} {
+		var received json.RawMessage
+		stubService := &InlineStubAgentService{
+			OnUpdateAgent: func(
+				ctx context.Context, id string, req *model.UpdateAgentRequest,
+			) (*model.AgentCompleteResponse, *tidcommon.ServiceError) {
+				received = req.ValidUntil
+				return &model.AgentCompleteResponse{ID: id}, nil
+			},
+		}
+		handler := newAgentHandler(stubService)
+		req := httptest.NewRequest(http.MethodPut, "/agents/agent-123", bytes.NewBufferString(body))
+		req.SetPathValue("id", "agent-123")
+		w := httptest.NewRecorder()
+
+		handler.HandleAgentPutRequest(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, want, string(received))
+	}
+}
+
+func TestHandleAgentPostRequest_PassesTheProject(t *testing.T) {
+	var received *providers.Agent
+	stubService := &InlineStubAgentService{
+		OnCreateAgent: func(
+			ctx context.Context, agent *providers.Agent,
+		) (*model.AgentCompleteResponse, *tidcommon.ServiceError) {
+			received = agent
+			return &model.AgentCompleteResponse{ID: "agent-123"}, nil
+		},
+	}
+	handler := newAgentHandler(stubService)
+	req := httptest.NewRequest(http.MethodPost, "/agents",
+		bytes.NewBufferString(`{"projectId": "project-1", "type": "worker"}`))
+	w := httptest.NewRecorder()
+
+	handler.HandleAgentPostRequest(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	if assert.NotNil(t, received) {
+		assert.Equal(t, "project-1", received.ProjectID)
+		assert.Empty(t, received.OUID)
+	}
+}
+
 func TestHandleAgentPostRequest_ValidationError(t *testing.T) {
 	stubService := &InlineStubAgentService{}
 	handler := newAgentHandler(stubService)
-	badJSON := `{"type": "worker", "attributes": {"name": "ab"}}`
+	badJSON := `{"ouId": "ou-123", "attributes": {"name": "ab"}}`
 	req := httptest.NewRequest(http.MethodPost, "/agents", bytes.NewBufferString(badJSON))
 	w := httptest.NewRecorder()
 
@@ -162,6 +283,28 @@ func TestHandleAgentPutRequest_Success(t *testing.T) {
 
 	handler.HandleAgentPutRequest(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleAgentPutRequest_ReportsTheDerivedStatus(t *testing.T) {
+	mockSvc := agentmock.NewAgentServiceInterfaceMock(t)
+	mockSvc.EXPECT().UpdateAgent(mock.Anything, "agent-123", mock.MatchedBy(func(req *model.UpdateAgentRequest) bool {
+		return string(req.Attributes) == `{"name":"Updated Valid Name"}`
+	})).Return(&model.AgentCompleteResponse{ID: "agent-123",
+		Status: &providers.AccessStatusReport{Value: providers.AccessStatusActive}}, nil).Once()
+	handler := newAgentHandler(mockSvc)
+	body := `{"attributes":{"name":"Updated Valid Name"},"status":{"value":"SUSPENDED"}}`
+	req := httptest.NewRequest(http.MethodPut, "/agents/agent-123", bytes.NewBufferString(body))
+	req.SetPathValue("id", "agent-123")
+	w := httptest.NewRecorder()
+
+	handler.HandleAgentPutRequest(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var response struct {
+		Status json.RawMessage `json:"status"`
+	}
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.JSONEq(t, `{"value":"ACTIVE"}`, string(response.Status))
 }
 
 func TestHandleAgentPutRequest_ValidationError(t *testing.T) {
@@ -267,6 +410,53 @@ func TestHandleAgentListRequest_Success(t *testing.T) {
 
 	handler.HandleAgentListRequest(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleAgentListRequest_WithOrganizationUnitFilter(t *testing.T) {
+	var gotFilters map[string]interface{}
+	stubService := &InlineStubAgentService{
+		OnGetAgentList: func(
+			ctx context.Context, limit, offset int, filters map[string]interface{}, inc bool,
+		) (*model.AgentListResponse, *tidcommon.ServiceError) {
+			gotFilters = filters
+			return &model.AgentListResponse{}, nil
+		},
+	}
+	handler := newAgentHandler(stubService)
+	req := httptest.NewRequest(http.MethodGet, `/agents?filter=ouId+eq+%22ou-1%22`, nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleAgentListRequest(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, map[string]interface{}{"ouId": "ou-1"}, gotFilters)
+}
+
+func TestHandleAgentListRequest_WithProject(t *testing.T) {
+	var gotProjectID string
+	var gotFilters map[string]interface{}
+	stubService := &InlineStubAgentService{
+		OnGetAgentList: func(
+			ctx context.Context, limit, offset int, filters map[string]interface{}, inc bool,
+		) (*model.AgentListResponse, *tidcommon.ServiceError) {
+			t.Fatal("GetAgentList must not be called when a project is given")
+			return nil, nil
+		},
+		OnGetAgentListByProject: func(
+			ctx context.Context, projectID string, limit, offset int, filters map[string]interface{}, inc bool,
+		) (*model.AgentListResponse, *tidcommon.ServiceError) {
+			gotProjectID = projectID
+			gotFilters = filters
+			return &model.AgentListResponse{}, nil
+		},
+	}
+	handler := newAgentHandler(stubService)
+	req := httptest.NewRequest(http.MethodGet, `/agents?projectId=project-1&filter=ouId+eq+%22ou-1%22`, nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleAgentListRequest(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "project-1", gotProjectID)
+	assert.Equal(t, map[string]interface{}{"ouId": "ou-1"}, gotFilters)
 }
 
 func TestHandleAgentListRequest_InvalidFilter(t *testing.T) {

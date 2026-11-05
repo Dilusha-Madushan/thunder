@@ -6,9 +6,16 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
+	"time"
 
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 )
+
+// DeviceCodeVerifier verifies a Device Grant user code and returns its trusted request context.
+type DeviceCodeVerifier interface {
+	VerifyUserCode(ctx context.Context, applicationID, userCode string) (*DeviceVerificationResult, error)
+}
 
 // AuthnProviderManager defines the interface for the authentication provider manager.
 type AuthnProviderManager interface {
@@ -89,24 +96,23 @@ type ActorProvider interface {
 	AuthenticateActor(
 		ctx context.Context, identifiers, credentials map[string]interface{},
 	) *common.ServiceError
-	GetActor(actorID string) (*Entity, *common.ServiceError)
-	GetActorGroups(actorID string) ([]EntityGroup, *common.ServiceError)
-	GetActorRoles(actorID string, groupIDs []string) ([]string, *common.ServiceError)
-	GetTransitiveGroupAncestors(groupID string) ([]string, *common.ServiceError)
+	GetActor(ctx context.Context, actorID string) (*Entity, *common.ServiceError)
+	GetActorGroups(ctx context.Context, actorID string) ([]EntityGroup, *common.ServiceError)
+	GetActorRoles(ctx context.Context, actorID string, groupIDs []string) ([]string, *common.ServiceError)
+	GetTransitiveGroupAncestors(ctx context.Context, groupID string) ([]string, *common.ServiceError)
 }
 
 // AgentMgtProvider provisions agents on behalf of runtime capabilities. The rules and semantics of an
 // agent remain owned by the agent management service; this exposes only what the runtime needs.
 type AgentMgtProvider interface {
-	// CreateAgent provisions the supplied agent, deriving its inbound auth profile and OAuth client
-	// configuration. Redirect URIs are the one OAuth value a caller may supply; any other
-	// authentication field left unset is the provider's to fill. Delegated is separate because it
-	// selects the authentication shape rather than describing the agent.
+	// CreateAgent provisions the supplied agent through the agent management service, which applies
+	// its OAuth defaults and validates the agent. Agent.Delegated selects the grant types the agent
+	// is given and allowed.
 	//
 	// The returned agent carries the generated identifier and, on InboundAuthConfig, the generated
 	// client credentials. Fields the agent service does not echo come back zero, so the result is
 	// not a full round-trip. Owner falls back to the authenticated caller when unset.
-	CreateAgent(ctx context.Context, agent *Agent, delegated bool) (*Agent, *common.ServiceError)
+	CreateAgent(ctx context.Context, agent *Agent) (*Agent, *common.ServiceError)
 }
 
 // UserMgtProvider provisions users on behalf of runtime capabilities. The rules and semantics of a
@@ -152,6 +158,9 @@ type FlowProvider interface {
 	GetFlowByHandle(ctx context.Context, handle string, flowType FlowType) (
 		*CompleteFlowDefinition, *common.ServiceError)
 	GetFlow(ctx context.Context, flowID string) (*CompleteFlowDefinition, *common.ServiceError)
+	// GetSystemFlow returns the system flow with the given handle. A provider that serves no system
+	// flows returns a not-found error.
+	GetSystemFlow(ctx context.Context, handle string) (*CompleteFlowDefinition, *common.ServiceError)
 }
 
 // ResourceServerProvider defines the interface for the resource provider.
@@ -181,22 +190,63 @@ type IDPProvider interface {
 // record user consent decisions during runtime authentication flows.
 type ConsentProvider interface {
 	// ResolveConsent checks whether the user has provided required consents for the given
-	// application, attribute set, and authorized permission set. Returns nil if all required
-	// consents are active; otherwise returns ConsentPromptData describing which purposes /
-	// elements still need user consent. When forceReprompt is true, consent is re-prompted for
-	// all required claims regardless of existing active consent.
+	// application, attribute set, authorized permission set, and authorization details. Returns nil
+	// if all required consents are active; otherwise returns ConsentPromptData describing which
+	// purposes / elements still need user consent. When forceReprompt is true, consent is re-prompted
+	// for all required claims and details regardless of existing active consent. Returning nil grants
+	// every requested authorization detail, so a provider must prompt for or refuse any detail no
+	// earlier approval covers.
 	ResolveConsent(ctx context.Context, ouID, appID, appName, userID string,
 		essentialAttributes, optionalAttributes, authorizedPermissions []string,
+		authorizationDetails []AuthorizationDetail,
 		availableAttributes *AttributesResponse, forceReprompt bool,
 		runtimeMetadata map[string][]string) (
 		*ConsentPromptData, *common.ServiceError)
 
 	// RecordConsent records the user's consent decisions and returns the persisted consent record.
-	// If the user denied any essential attribute, ErrorEssentialConsentDenied is returned.
+	// If the user denied any essential attribute, ErrorEssentialConsentDenied is returned. The returned
+	// record's GrantedAuthorizationDetails must hold every authorization detail the decision grants: the
+	// covered details when the prompt is approved, and the prompted details the user approved, with
+	// their changes. Each is matched to the requested detail by ID, and only its Value is used.
 	RecordConsent(ctx context.Context, ouID, appID, userID string,
 		decisions *ConsentDecisions, sessionToken string, validityPeriod int64,
 		runtimeMetadata map[string][]string) (
 		*Consent, *common.ServiceError)
+}
+
+// AuthorizationDetailProvider validates, prepares and processes RFC 9396 authorization details at runtime.
+type AuthorizationDetailProvider interface {
+	// ValidateAuthorizationDetails validates the authorization_details a client requested.
+	ValidateAuthorizationDetails(ctx context.Context, raw string) (json.RawMessage, *common.ServiceError)
+	// PrepareAuthorizationDetails validates details, as ValidateAuthorizationDetails does, and stamps them with
+	// identifiers and type versions for a flow.
+	PrepareAuthorizationDetails(ctx context.Context, validated json.RawMessage) (
+		[]AuthorizationDetail, *common.ServiceError)
+	// ProcessAuthorizationDetails runs the type processors on the details and returns those admitted, each with
+	// Admitted set: the consent executor refuses a detail of a type that declares a processor unless it is
+	// admitted. A detail is returned with any value the processor filled in or lowered. It fails with a client
+	// error when every detail is refused. client is the requesting application or agent, and clientID its OAuth
+	// client_id.
+	ProcessAuthorizationDetails(ctx context.Context, details []AuthorizationDetail, client EntityReference,
+		clientID string, subject EntityReference, resourceServer string) ([]AuthorizationDetail, *common.ServiceError)
+	// RefreshableAuthorizationDetails returns the granted details a refresh token may carry. It must drop
+	// the details of types that do not allow reuse and of types that changed since the grant.
+	RefreshableAuthorizationDetails(ctx context.Context, granted []AuthorizationDetail) (
+		[]AuthorizationDetail, *common.ServiceError)
+	// ModifyAuthorizationDetails checks a token request's authorization_details against a grant and returns
+	// the details to issue. A request may only narrow granted details within their field policies, and
+	// must never widen them.
+	ModifyAuthorizationDetails(ctx context.Context, granted []AuthorizationDetail,
+		raw string) (json.RawMessage, *common.ServiceError)
+}
+
+// AuthorizationDetailTypeProvider provides the registered RFC 9396 authorization details types.
+type AuthorizationDetailTypeProvider interface {
+	// GetAuthorizationDetailTypeByValue returns the type registered under the given value, or nil if none.
+	GetAuthorizationDetailTypeByValue(ctx context.Context, value string) (
+		*AuthorizationDetailType, *common.ServiceError)
+	// ListAllAuthorizationDetailTypes returns every registered type.
+	ListAllAuthorizationDetailTypes(ctx context.Context) ([]AuthorizationDetailType, *common.ServiceError)
 }
 
 // CaptchaValidationProvider defines the contract for verifying captcha tokens.
@@ -297,6 +347,14 @@ type RuntimeStoreProvider interface {
 	CompareFieldAndSwap(
 		ctx context.Context, namespace RuntimeStoreNamespace, key, field, expected string, newValue []byte,
 	) (bool, error)
+
+	// CompareFieldAndSwapBeforeExpiry atomically replaces the value at key only when the top-level
+	// JSON string field equals expected and the supplied application-level expiry is still in the
+	// future. It preserves the existing store TTL and returns whether the swap occurred.
+	CompareFieldAndSwapBeforeExpiry(
+		ctx context.Context, namespace RuntimeStoreNamespace, key, field, expected string,
+		expiresAt time.Time, newValue []byte,
+	) (bool, error)
 }
 
 // Transactioner provides transaction management with automatic nesting detection.
@@ -332,4 +390,38 @@ type RuntimeCryptoProvider interface {
 
 	// GetSupportedEncryptionAlgorithms returns the list of algorithms supported by Encrypt and Decrypt.
 	GetSupportedEncryptionAlgorithms() []string
+}
+
+// IdentityGovernanceProvider checks access, records granted activity, and applies lifecycle operations.
+type IdentityGovernanceProvider interface {
+	// EvaluateAccess reports whether the identity may be used at the plane and authentication method;
+	// a refusal names its hold in the decision. An empty or unknown entityID is admitted. An error
+	// means the provider could not decide, and the caller must refuse.
+	EvaluateAccess(ctx context.Context, entityID string, plane AccessPlane,
+		method AuthenticationMethod) (AccessDecision, *common.ServiceError)
+
+	// AdmitSignIn is EvaluateAccess at AccessPlaneSession for a completing sign-in. When it admits, it
+	// also clears a lapsed account-wide failure record.
+	AdmitSignIn(ctx context.Context, entityID string) (AccessDecision, *common.ServiceError)
+
+	// RecordLogin stamps when the identity was last granted access. Callers do not fail the grant on
+	// its error.
+	RecordLogin(ctx context.Context, entityID string) *common.ServiceError
+
+	// Unlock releases every automatic lock. It does not release a suspension.
+	Unlock(ctx context.Context, entityID string) *common.ServiceError
+
+	// Suspend places an administrative hold. It writes state only, so the caller composes revocation,
+	// and writes nothing for an identity already suspended. operatorNote is optional, at most 100
+	// characters, and never disclosed.
+	Suspend(ctx context.Context, entityID, operatorNote string) *common.ServiceError
+
+	// ValidateSuspend checks that the caller may suspend the identity with operatorNote, and writes
+	// nothing. An identity already suspended passes.
+	ValidateSuspend(ctx context.Context, entityID, operatorNote string) *common.ServiceError
+
+	// Unsuspend releases the hold. A user is left with a non-expiring account-wide lock, which a
+	// recovery or an unlock clears; an agent keeps any automatic lock still in force, and an
+	// application becomes active.
+	Unsuspend(ctx context.Context, entityID string) *common.ServiceError
 }

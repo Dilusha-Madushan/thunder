@@ -5,7 +5,7 @@ package v2_0_0_1
 
 import "github.com/thunder-id/thunderid/internal/system/migration/engine"
 
-const createUserShareMigrationTableOperationID engine.OperationID = "2.0.0-m1-pidp.1/entitydb/" +
+const createUserShareMigrationTableOperationID engine.OperationID = "2.0.0-m1-pidp/entitydb/" +
 	"07_create_user_share_migration_table"
 
 // userShareMigrationTable is a working table that lives only for the duration of this release. It records,

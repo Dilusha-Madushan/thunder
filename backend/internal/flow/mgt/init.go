@@ -5,6 +5,7 @@ package flowmgt
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/flow/core"
 	"github.com/thunder-id/thunderid/internal/flow/graphbuilder"
 	"github.com/thunder-id/thunderid/internal/flow/interceptor"
+	"github.com/thunder-id/thunderid/internal/sharing"
 
 	"github.com/thunder-id/thunderid/internal/system/cache"
 	"github.com/thunder-id/thunderid/internal/system/config"
@@ -30,7 +32,8 @@ type serverConfigProvider interface {
 	GetMergedConfig(ctx context.Context, name string) (any, *tidcommon.ServiceError)
 }
 
-// Initialize initializes the flow management service and registers HTTP routes.
+// Initialize initializes the flow management service and registers HTTP routes. withSystemFlows loads
+// the system flows, for a server that executes flows.
 func Initialize(
 	mux *http.ServeMux,
 	mcpServer *mcp.Server,
@@ -41,20 +44,44 @@ func Initialize(
 	graphBuilder graphbuilder.GraphBuilderInterface,
 	serverConfigSvc serverConfigProvider,
 	ouSvc ouProvider,
+	templateResolver notificationTemplateProvider,
+	connectionProvider httpConnectionProvider,
 	configHandler *FlowConfigHandler,
+	idpProvider idpProvider,
+	withSystemFlows bool,
+	sharingSvc sharing.SharingServiceInterface,
 	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface,
 ) (FlowMgtServiceInterface, declarativeresource.ResourceExporter, error) {
-	flowValidator := newFlowValidator(executorRegistry, interceptorRegistry, graphBuilder)
-	store, compositeStore, transactioner, err := initializeStore(cacheManager, flowValidator, entityTypeNormalizer)
+	flowValidator := newFlowValidator(
+		executorRegistry, interceptorRegistry, graphBuilder, connectionProvider, idpProvider)
+	store, compositeStore, transactioner, err := initializeStore(cacheManager, flowValidator, ouSvc,
+		entityTypeNormalizer)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	// Registered before the declarative flows load, because loading seeds the sharing policies they declare.
+	sharingSvc.RegisterResourceType(newFlowSharingDeclaration(store, sharingSvc))
+
+	// A server that executes no flows has no system flows to load.
+	var systemFlows map[string]json.RawMessage
+	if withSystemFlows {
+		// Startup has no request to take a context from.
+		systemFlows, err = loadSystemFlows(context.Background(), systemFlowFiles, flowValidator)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	inferenceService := newFlowInferenceService()
 	service := newFlowMgtService(
 		store, inferenceService, graphBuilder, executorRegistry,
 		interceptorRegistry, flowValidator, compositeStore, transactioner, serverConfigSvc, ouSvc,
+		templateResolver, systemFlows, sharingSvc, idpProvider,
 	)
+	if err := service.loadDeclarativeSharing(); err != nil {
+		return nil, nil, err
+	}
 
 	// TODO: Check whether this can be improved to avoid injecting configHandler to flow mgt service
 	if configHandler != nil {
@@ -66,6 +93,7 @@ func Initialize(
 
 	handler := newFlowMgtHandler(service)
 	registerRoutes(mux, handler)
+	registerSharingRoutes(mux, handler)
 
 	// Register MCP tools
 	if mcpServer != nil {
@@ -73,8 +101,7 @@ func Initialize(
 	}
 
 	// Create and return exporter
-	exporter := newFlowGraphExporter(service)
-	return service, exporter, nil
+	return service, newFlowGraphExporter(service, sharingSvc), nil
 }
 
 // Store Selection (based on flow.store configuration):
@@ -98,7 +125,8 @@ func Initialize(
 //   - Declarative flows cannot be updated or deleted
 func initializeStore(
 	cacheManager cache.CacheManagerInterface,
-	flowValidator FlowValidatorInterface,
+	validator FlowValidatorInterface,
+	ouSvc ouProvider,
 	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface,
 ) (flowStoreInterface, *compositeFlowStore, providers.Transactioner, error) {
 	var compositeStore *compositeFlowStore
@@ -116,14 +144,14 @@ func initializeStore(
 			return nil, nil, nil, err
 		}
 		compositeStore = newCompositeFlowStore(fileStore, dbStore)
-		if err := loadDeclarativeResources(fileStore, flowValidator); err != nil {
+		if err := loadDeclarativeResources(fileStore, compositeStore, validator, ouSvc); err != nil {
 			return nil, nil, nil, err
 		}
 		return compositeStore, compositeStore, transactioner, nil
 
 	case serverconst.StoreModeDeclarative:
 		fileStore, transactioner := newFileBasedStore()
-		if err := loadDeclarativeResources(fileStore, flowValidator); err != nil {
+		if err := loadDeclarativeResources(fileStore, fileStore, validator, ouSvc); err != nil {
 			return nil, nil, nil, err
 		}
 		return fileStore, nil, transactioner, nil
@@ -132,6 +160,9 @@ func initializeStore(
 		store, transactioner, err := newCacheBackedFlowStore(flowByIDCache, flowByHandleCache, entityTypeNormalizer)
 		if err != nil {
 			return nil, nil, nil, err
+		}
+		if flowValidator, ok := validator.(*flowValidator); ok {
+			flowValidator.flowStore = store
 		}
 		return store, nil, transactioner, nil
 	}

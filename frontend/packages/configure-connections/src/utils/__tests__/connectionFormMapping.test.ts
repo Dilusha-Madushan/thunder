@@ -4,17 +4,22 @@
 import {describe, expect, it} from 'vitest';
 import {CONNECTION_FORM_FIELDS, type ConnectionFieldDef} from '../../config/connectionFormFields';
 import {AUTHENTICATION_METHOD_FIELD_NAMES} from '../../models/authentication-methods';
-import type {ConnectionResponse} from '../../models/connection';
+import type {ConnectionResponse, OutboundAuthMethod} from '../../models/connection';
 import {
+  AUTH_ADDITIONAL_PROPERTIES_FIELD,
   AUTH_TYPE_FIELD,
+  authenticationAdditionalPropertiesError,
   authPropertyField,
   emptyFormValues,
   formValuesToRequest,
   MASKED_SECRET,
   outboundAuthenticationFromFormValues,
+  HTTPS_REQUIRED_WITH_AUTHENTICATION_ERROR,
   responseToFormValues,
+  urlOriginChanged,
   validateConnectionForm,
 } from '../connectionFormMapping';
+import {encodeKeyValuePairs} from '../keyValuePairs';
 
 const GOOGLE_FIELDS = CONNECTION_FORM_FIELDS.google;
 const OIDC_FIELDS = CONNECTION_FORM_FIELDS.oidc;
@@ -24,6 +29,7 @@ const SMS_GATEWAY_FIELDS = CONNECTION_FORM_FIELDS['sms-gateway'];
 const SMS_GENERAL_FIELDS = SMS_GATEWAY_FIELDS.filter((field) => !AUTHENTICATION_METHOD_FIELD_NAMES.has(field.name));
 const AUTHZEN_PDP_FIELDS = CONNECTION_FORM_FIELDS['authzen-pdp'];
 const SMTP_FIELDS = CONNECTION_FORM_FIELDS['email-smtp'];
+const HTTP_FIELDS = CONNECTION_FORM_FIELDS.http;
 const REDIRECT = 'https://id.acme.io/oauth/callback/google';
 const VALID_ACCOUNT_SID = `AC${'a1b2c3d4e5f6'.repeat(2)}01234567`;
 
@@ -80,6 +86,7 @@ describe('responseToFormValues', () => {
     const response = {
       id: '1',
       type: 'sms-gateway',
+      ouId: 'ou-1',
       name: 'SMS Gateway',
       authentication: {
         type: 'api_key',
@@ -96,6 +103,7 @@ describe('responseToFormValues', () => {
     const response = {
       id: '1',
       type: 'sms-gateway',
+      ouId: 'ou-1',
       name: 'SMS Gateway',
       httpHeaders: 'X-Campaign: campaign-1',
       authentication: {type: 'api_key', properties: {'X-Api-Key': '******'}},
@@ -111,7 +119,7 @@ describe('responseToFormValues', () => {
     expect(request).toMatchObject({
       httpHeaders: 'X-Campaign: campaign-1',
     });
-    expect(request.authentication).toBeUndefined();
+    expect(request).not.toHaveProperty('authentication');
     expect(outboundAuthenticationFromFormValues(values)).toEqual({
       type: 'api_key',
       properties: {'X-Api-Key': '******'},
@@ -151,6 +159,7 @@ describe('responseToFormValues', () => {
     const response = {
       id: '1',
       type: 'authzen-pdp',
+      ouId: 'ou-1',
       name: 'Cerbos PDP',
       endpoint: 'http://localhost:3592/.well-known/authzen-configuration',
       batchEndpoint: 'http://localhost:3592/access/v1/evaluations',
@@ -167,6 +176,7 @@ describe('responseToFormValues', () => {
     const response = {
       id: '1',
       type: 'authzen-pdp',
+      ouId: 'ou-1',
       name: 'Cerbos PDP',
       endpoint: 'https://pdp.example.com/access/v1/evaluation',
       authentication: {
@@ -339,8 +349,8 @@ describe('formValuesToRequest', () => {
       mode: 'edit',
       excludeGenericAuthentication: true,
     });
-    expect(general.httpHeaders).toBe('X-Campaign: campaign-1');
-    expect(general.authentication).toBeUndefined();
+    expect(general).toMatchObject({httpHeaders: 'X-Campaign: campaign-1'});
+    expect(general).not.toHaveProperty('authentication');
     expect(outboundAuthenticationFromFormValues(values)).toEqual({
       type: 'api_key',
       properties: {'X-API-Key': 'secret'},
@@ -855,5 +865,284 @@ describe('outbound authentication mapping', () => {
       properties: {clientId: 'abc', tokenEndpoint: 'https://idp.acme.io/token'},
       type: 'client_credentials',
     });
+  });
+});
+
+describe('HTTP endpoint mapping', () => {
+  const response = {
+    id: 'h1',
+    type: 'http',
+    name: 'Risk Engine',
+    url: 'https://risk.example.com/evaluate',
+    timeoutMs: 5000,
+    headers: [
+      {name: 'X-Tenant', value: 'acme'},
+      {name: 'Accept', value: 'application/json, text/plain'},
+    ],
+    authentication: {type: 'basic', properties: {username: 'svc', password: MASKED_SECRET}},
+  } as unknown as ConnectionResponse;
+  const valid = {name: 'Risk Engine', url: 'https://risk.example.com', timeoutMs: '10000'};
+  const headers = (...pairs: [string, string][]): string =>
+    encodeKeyValuePairs(
+      pairs.map(([name, value]) => ({name, value})),
+      'pairs',
+    );
+
+  it('round-trips the plain headers array, commas included, and keeps the stored password by omitting it', () => {
+    const values = responseToFormValues(response, HTTP_FIELDS, REDIRECT);
+
+    expect(values['timeoutMs']).toBe('5000');
+    expect(values[AUTH_TYPE_FIELD]).toBe('basic');
+    expect(values[authPropertyField('username')]).toBe('svc');
+    expect(values[authPropertyField('password')]).toBe('');
+
+    expect(formValuesToRequest(values, HTTP_FIELDS, {mode: 'edit'})).toEqual({
+      name: 'Risk Engine',
+      url: 'https://risk.example.com/evaluate',
+      timeoutMs: 5000,
+      headers: response.headers,
+      authentication: {type: 'basic', properties: {username: 'svc'}},
+    });
+  });
+
+  it('reads missing headers as empty and sends an empty list on edit so the last header can be removed', () => {
+    const values = responseToFormValues({...response, headers: null}, HTTP_FIELDS, REDIRECT);
+
+    expect(values['headers']).toBe('');
+    expect(formValuesToRequest(values, HTTP_FIELDS, {mode: 'edit'})).toMatchObject({headers: []});
+  });
+
+  it('sends only the name and URL on create, leaving timeout and authentication to the server defaults', () => {
+    const values = {...emptyFormValues(HTTP_FIELDS, REDIRECT), name: 'Risk Engine', url: 'https://risk.example.com'};
+    const createFields = HTTP_FIELDS.filter((field) => field.visibility !== 'edit');
+
+    expect(formValuesToRequest(values, createFields, {mode: 'create'})).toEqual({
+      name: 'Risk Engine',
+      url: 'https://risk.example.com',
+    });
+  });
+
+  it('rejects a timeout outside 1 to 20000', () => {
+    expect(validateConnectionForm({...valid, timeoutMs: '20001'}, HTTP_FIELDS, 'edit')).toEqual({
+      timeoutMs: 'connections:validation.httpEndpointTimeoutRange',
+    });
+    expect(validateConnectionForm({...valid, timeoutMs: '20000'}, HTTP_FIELDS, 'edit')).toEqual({});
+  });
+
+  it('accepts an http URL when no authentication is set', () => {
+    expect(validateConnectionForm({...valid, url: 'http://risk.example.com'}, HTTP_FIELDS, 'edit')).toEqual({});
+    expect(
+      validateConnectionForm({...valid, url: 'http://localhost:8090', [AUTH_TYPE_FIELD]: 'none'}, HTTP_FIELDS, 'edit'),
+    ).toEqual({});
+  });
+
+  it('requires an https URL when authentication is set, loopback included', () => {
+    for (const url of ['http://risk.example.com/evaluate', 'http://localhost:8090/evaluate', 'http://127.0.0.1']) {
+      expect(validateConnectionForm({...valid, url, [AUTH_TYPE_FIELD]: 'basic'}, HTTP_FIELDS, 'edit')).toEqual({
+        url: HTTPS_REQUIRED_WITH_AUTHENTICATION_ERROR,
+      });
+    }
+    expect(validateConnectionForm({...valid, [AUTH_TYPE_FIELD]: 'basic'}, HTTP_FIELDS, 'edit')).toEqual({});
+  });
+
+  it('rejects a user name or password in the URL', () => {
+    for (const url of ['https://svc@risk.example.com', 'https://svc:pw@risk.example.com/evaluate']) {
+      expect(validateConnectionForm({...valid, url}, HTTP_FIELDS, 'create')).toEqual({
+        url: 'connections:validation.httpEndpointUrlUserInfo',
+      });
+    }
+  });
+
+  it('rejects reserved header names in any letter case', () => {
+    for (const name of ['Authorization', 'proxy-authorization', 'COOKIE', 'Host', 'content-length', 'Content-Type']) {
+      expect(validateConnectionForm({...valid, headers: headers([name, 'x'])}, HTTP_FIELDS, 'edit')).toEqual({
+        headers: 'connections:validation.httpEndpointHeaderReserved',
+      });
+    }
+    for (const name of ['Transfer-Encoding', 'Connection', 'TE', 'Trailer', 'Upgrade', 'Keep-Alive', 'Expect']) {
+      expect(validateConnectionForm({...valid, headers: headers([name, 'x'])}, HTTP_FIELDS, 'edit')['headers']).toBe(
+        'connections:validation.httpEndpointHeaderReserved',
+      );
+    }
+    expect(validateConnectionForm({...valid, headers: headers(['X-Tenant', 'acme'])}, HTTP_FIELDS, 'edit')).toEqual({});
+  });
+
+  it('rejects header names that commonly carry credentials in any letter case', () => {
+    for (const name of ['X-Api-Key', 'api-key', 'X-AUTH-TOKEN', 'x-access-token']) {
+      expect(validateConnectionForm({...valid, headers: headers([name, 'x'])}, HTTP_FIELDS, 'edit')).toEqual({
+        headers: 'connections:validation.httpEndpointHeaderReserved',
+      });
+    }
+  });
+
+  it('flags a header row that has only a name or only a value', () => {
+    for (const row of [
+      ['X-Tenant', ''],
+      ['', 'acme'],
+    ] as [string, string][]) {
+      expect(
+        validateConnectionForm({...valid, headers: headers(['X-Region', 'eu'], row)}, HTTP_FIELDS, 'edit'),
+      ).toEqual({headers: 'connections:validation.keyValuePair'});
+    }
+  });
+
+  it('accepts header values that contain commas and colons', () => {
+    expect(
+      validateConnectionForm(
+        {...valid, headers: headers(['Accept', 'application/json, text/plain: q=1'])},
+        HTTP_FIELDS,
+        'edit',
+      ),
+    ).toEqual({});
+  });
+
+  it('never sends a half-filled header row', () => {
+    const values = {...valid, headers: headers(['X-Tenant', 'acme'], ['X-Region', ''])};
+
+    expect(formValuesToRequest(values, HTTP_FIELDS, {mode: 'edit'})).toMatchObject({
+      headers: [{name: 'X-Tenant', value: 'acme'}],
+    });
+  });
+
+  it('rejects duplicate header names ignoring case', () => {
+    expect(
+      validateConnectionForm({...valid, headers: headers(['X-Tenant', 'a'], ['x-tenant', 'b'])}, HTTP_FIELDS, 'edit'),
+    ).toEqual({
+      headers: 'connections:validation.httpEndpointHeaderDuplicate',
+    });
+  });
+
+  it('limits the name to 255 characters and the description to 500', () => {
+    expect(validateConnectionForm({...valid, name: 'n'.repeat(255)}, HTTP_FIELDS, 'edit')).toEqual({});
+    expect(validateConnectionForm({...valid, name: 'n'.repeat(256)}, HTTP_FIELDS, 'edit')).toEqual({
+      name: 'connections:validation.httpEndpointNameLength',
+    });
+    expect(validateConnectionForm({...valid, description: 'd'.repeat(500)}, HTTP_FIELDS, 'edit')).toEqual({});
+    expect(validateConnectionForm({...valid, description: 'd'.repeat(501)}, HTTP_FIELDS, 'edit')).toEqual({
+      description: 'connections:validation.httpEndpointDescriptionLength',
+    });
+  });
+
+  it('counts characters as the server does, so a name of 255 emoji is accepted', () => {
+    expect(validateConnectionForm({...valid, name: '🚀'.repeat(255)}, HTTP_FIELDS, 'edit')).toEqual({});
+  });
+});
+
+describe('HTTP endpoint authentication methods', () => {
+  const methods: OutboundAuthMethod[] = [
+    {type: 'none', displayName: 'None'},
+    {
+      type: 'basic',
+      displayName: 'Username and Password',
+      fields: [
+        {key: 'username', type: 'string', required: true, displayName: 'Username'},
+        {key: 'password', type: 'string', required: true, credential: true, displayName: 'Password'},
+      ],
+    },
+    {
+      type: 'bearer',
+      displayName: 'Bearer token',
+      fields: [{key: 'token', type: 'string', required: true, credential: true, displayName: 'Bearer token'}],
+    },
+    {
+      type: 'api_key',
+      displayName: 'API key',
+      fields: [],
+      additionalProperties: {key: '', type: 'string', required: true, credential: true, displayName: 'API key headers'},
+    },
+  ];
+  const base = {name: 'Risk Engine', url: 'https://risk.example.com', timeoutMs: '10000', headers: ''};
+  const apiKeyHeaders = (...pairs: [string, string][]): string =>
+    encodeKeyValuePairs(
+      pairs.map(([name, value]) => ({name, value})),
+      'pairs',
+    );
+
+  it('sends a bearer token in the generic shape, leaving out values another method left behind', () => {
+    const values = {
+      ...base,
+      [AUTH_TYPE_FIELD]: 'bearer',
+      [authPropertyField('username')]: 'svc',
+      [authPropertyField('token')]: 'tok-1',
+    };
+
+    expect(formValuesToRequest(values, HTTP_FIELDS, {mode: 'create', authenticationMethods: methods})).toMatchObject({
+      authentication: {type: 'bearer', properties: {token: 'tok-1'}},
+    });
+  });
+
+  it('sends API-key headers in the generic shape, each header as a property', () => {
+    const values = {
+      ...base,
+      [AUTH_TYPE_FIELD]: 'api_key',
+      [authPropertyField('username')]: 'svc',
+      [AUTH_ADDITIONAL_PROPERTIES_FIELD]: apiKeyHeaders(['X-Api-Key', 'k-1'], ['X-Client', 'c, d']),
+    };
+
+    expect(formValuesToRequest(values, HTTP_FIELDS, {mode: 'create', authenticationMethods: methods})).toMatchObject({
+      authentication: {type: 'api_key', properties: {'X-Api-Key': 'k-1', 'X-Client': 'c, d'}},
+    });
+  });
+
+  it('restates stored API-key headers masked, so the server keeps their values', () => {
+    const response = {
+      id: 'h1',
+      type: 'http',
+      name: 'Risk Engine',
+      url: 'https://risk.example.com',
+      authentication: {type: 'api_key', properties: {'X-Api-Key': MASKED_SECRET}},
+    } as unknown as ConnectionResponse;
+
+    const values = responseToFormValues(response, HTTP_FIELDS, REDIRECT, methods);
+
+    expect(values[authPropertyField('X-Api-Key')]).toBeUndefined();
+    expect(formValuesToRequest(values, HTTP_FIELDS, {mode: 'edit', authenticationMethods: methods})).toMatchObject({
+      authentication: {type: 'api_key', properties: {'X-Api-Key': MASKED_SECRET}},
+    });
+  });
+
+  it('flags a half-filled or repeated API-key header and accepts a complete list', () => {
+    const errorFor = (raw: string): string | undefined =>
+      authenticationAdditionalPropertiesError(
+        {[AUTH_TYPE_FIELD]: 'api_key', [AUTH_ADDITIONAL_PROPERTIES_FIELD]: raw},
+        methods,
+      );
+
+    expect(errorFor(apiKeyHeaders(['X-Api-Key', '']))).toBe('connections:validation.keyValuePair');
+    expect(errorFor(apiKeyHeaders(['', 'k-1']))).toBe('connections:validation.keyValuePair');
+    expect(errorFor(apiKeyHeaders(['X-Api-Key', 'a'], ['x-api-key', 'b']))).toBe(
+      'connections:validation.httpEndpointHeaderDuplicate',
+    );
+    expect(errorFor(apiKeyHeaders(['X-Api-Key', 'a']))).toBeUndefined();
+    expect(
+      authenticationAdditionalPropertiesError(
+        {[AUTH_TYPE_FIELD]: 'bearer', [AUTH_ADDITIONAL_PROPERTIES_FIELD]: apiKeyHeaders(['X-Api-Key', ''])},
+        methods,
+      ),
+    ).toBeUndefined();
+  });
+});
+
+describe('urlOriginChanged', () => {
+  it('ignores a change to the path, query or letter case of the host', () => {
+    expect(urlOriginChanged('https://risk.example.com/evaluate', 'https://RISK.example.com/v2/evaluate?x=1')).toBe(
+      false,
+    );
+  });
+
+  it('treats an explicit default port as the same origin', () => {
+    expect(urlOriginChanged('https://risk.example.com/evaluate', 'https://risk.example.com:443/evaluate')).toBe(false);
+  });
+
+  it('detects a change of scheme, host or port', () => {
+    const stored = 'https://risk.example.com/evaluate';
+
+    expect(urlOriginChanged(stored, 'http://risk.example.com/evaluate')).toBe(true);
+    expect(urlOriginChanged(stored, 'https://collector.example.net/evaluate')).toBe(true);
+    expect(urlOriginChanged(stored, 'https://risk.example.com:8443/evaluate')).toBe(true);
+  });
+
+  it('treats a URL that cannot be parsed as changed', () => {
+    expect(urlOriginChanged('https://risk.example.com', 'risk.example.com')).toBe(true);
   });
 });

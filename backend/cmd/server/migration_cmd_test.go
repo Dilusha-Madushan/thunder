@@ -116,7 +116,7 @@ func TestRunMigrationStatusReportsMissingMetadata(t *testing.T) {
 	}
 }
 
-func TestRunMigrationStatusReportsRouteThroughPreviousRelease(t *testing.T) {
+func TestRunMigrationStatusReportsADirectRouteFromTheBaselineLevel(t *testing.T) {
 	dataSource := testPostgresDataSource("thunderid")
 	cfg := &config.Config{Database: config.DatabaseConfig{
 		Config: dataSource, Entity: dataSource, RuntimeTransient: dataSource, RuntimePersistent: dataSource,
@@ -149,8 +149,8 @@ func TestRunMigrationStatusReportsRouteThroughPreviousRelease(t *testing.T) {
 	require.ErrorIs(t, err, errMigrationStatusIncompatible)
 	require.NotNil(t, result)
 	require.NotNil(t, result.compatibility)
-	assert.Equal(t, testPreviousReleaseLevel, result.compatibility.NextMigrationRelease)
-	assert.Equal(t, []string{testPreviousReleaseLevel, testCurrentReleaseLevel}, result.compatibility.MigrationRoute)
+	assert.Equal(t, testCurrentReleaseLevel, result.compatibility.NextMigrationRelease)
+	assert.Equal(t, []string{testCurrentReleaseLevel}, result.compatibility.MigrationRoute)
 	assert.NoError(t, result.compatibility.RouteErr)
 }
 
@@ -666,8 +666,8 @@ func TestParseMigrationCommandOptionsRejectsConflictingRollbackScopes(t *testing
 // testPreviousReleaseLevel is the level the current release accepts as its source, and testCurrentReleaseLevel
 // the level it migrates changed stores to.
 const (
-	testPreviousReleaseLevel = "2.0.0-m1-pidp"
-	testCurrentReleaseLevel  = "2.0.0-m1-pidp.1"
+	testPreviousReleaseLevel = "1.0.0"
+	testCurrentReleaseLevel  = "2.0.0-m1-pidp"
 )
 
 func testMigrationStateRow(storeID engine.StoreID) map[string]interface{} {

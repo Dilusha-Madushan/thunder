@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	clearSSOSessionContextOperationID engine.OperationID = "2.0.0-m1-pidp.1/runtime_persistent/" +
+	clearSSOSessionContextOperationID engine.OperationID = "2.0.0-m1-pidp/runtime_persistent/" +
 		"11_clear_sso_session_context"
 
 	// clearSSOSessionContextBatchSize is the number of context rows deleted per batch.

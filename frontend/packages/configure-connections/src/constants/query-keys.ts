@@ -64,6 +64,21 @@ const ConnectionQueryKeys = {
    * Key for all user and agent types used by the Subject Mapping tab.
    */
   SUBJECT_MAPPING_TYPES: 'subject-mapping-types',
+
+  /**
+   * Key prefix for server-config sections (GET /server-config/{name})
+   */
+  SERVER_CONFIG: 'server-config',
+
+  /**
+   * Name of the server-config section that holds the default email sender
+   */
+  NOTIFICATION_CONFIG: 'notification',
+
+  /**
+   * Key for the runtime's authorization server metadata (GET /.well-known/oauth-authorization-server)
+   */
+  AUTHORIZATION_SERVER_METADATA: 'authorization-server-metadata',
 } as const;
 
 export const SUBJECT_MAPPING_TYPES_PAGE_SIZE = 100;

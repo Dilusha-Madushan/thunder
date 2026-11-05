@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
+  AccessStatusBanner,
+  AccountStatusAction,
+  DocumentTitle,
   PageLoadingAnimation,
   QueryErrorNotice,
   ResourceAvatar,
@@ -9,8 +12,10 @@ import {
   UnsavedChangesBar,
   getInitials,
 } from '@thunderid/components';
+import {useOrganizationAccess} from '@thunderid/configure-resource-sharing';
 import {useResolveDisplayName} from '@thunderid/hooks';
 import {useLogger} from '@thunderid/logger/react';
+import {useThunderID} from '@thunderid/react';
 import type {User} from '@thunderid/types';
 import {isEqualIgnoringEmpty} from '@thunderid/utils';
 import {
@@ -28,8 +33,6 @@ import {
   IconButton,
   PageContent,
   PageTitle,
-  FormControl,
-  FormLabel,
 } from '@wso2/oxygen-ui';
 import {ArrowLeft, Copy, Check} from '@wso2/oxygen-ui-icons-react';
 import {useState, useEffect, useMemo, useCallback, useRef, type SyntheticEvent, type ReactNode, type JSX} from 'react';
@@ -42,9 +45,11 @@ import useUpdateUser from '../api/useUpdateUser';
 import AttributesSummarySection from '../components/edit-user/AttributesSummarySection';
 import CredentialsTabPanel, {type CredentialFieldInfo} from '../components/edit-user/CredentialsTabPanel';
 import EditUserAttributes from '../components/edit-user/EditUserAttributes';
+import EditOrganizationAccessSettings from '../components/edit-user/organization-access/EditOrganizationAccessSettings';
 import QuickCopySection from '../components/edit-user/QuickCopySection';
 import UserDeleteDialog from '../components/UserDeleteDialog';
 import UserConstants from '../constants/user-constants';
+import UserQueryKeys from '../constants/user-query-keys';
 import useUserRoutes from '../hooks/useUserRoutes';
 import {dropNonConformingOptionalAttributes} from '../utils/dropNonConformingAttributes';
 import getUserErrorMessage from '../utils/getUserErrorMessage';
@@ -94,6 +99,12 @@ export default function UserEditPage() {
 
   const {data: user, isLoading: isUserLoading, error: userError, refetch} = useGetUser(userId);
   const updateUserMutation = useUpdateUser();
+  const {user: signedInUser} = useThunderID() as {user?: Record<string, unknown> | null};
+  // The server refuses every lifecycle operation on the operator's own account.
+  const isSignedInUser = Boolean(userId && (signedInUser?.['sub'] === userId || signedInUser?.['id'] === userId));
+  const handleStatusChanged = useCallback((): void => {
+    void refetch();
+  }, [refetch]);
 
   // Get all schemas to find the schema ID from the schema handle
   const {
@@ -155,6 +166,14 @@ export default function UserEditPage() {
     setActiveTab(newValue);
   };
 
+  // Held here rather than in its tab, because inactive tabs unmount and the draft must survive them.
+  const organizationAccess = useOrganizationAccess({
+    resourcePath: `users/${userId}`,
+    enabled: Boolean(userId),
+    // The tab's sentences say what access means for a user (affiliation): `users:organizationAccess.*`.
+    wordingNamespace: 'users',
+  });
+
   // useMutation returns a fresh object every render, so depending on the mutation itself gave
   // this callback a new identity every render, which looped consumers that stage from an effect.
   const {isError: isUpdateUserError, reset: resetUpdateUser} = updateUserMutation;
@@ -170,8 +189,19 @@ export default function UserEditPage() {
     [isUpdateUserError, resetUpdateUser],
   );
 
+  const hasUserChanges = useMemo(
+    () => Object.entries(editedUser).some(([key, value]) => !isEqualIgnoringEmpty(value, user?.[key as keyof User])),
+    [editedUser, user],
+  );
+  const hasChanges = hasUserChanges || organizationAccess.hasChanges;
+
+  // One flag over the whole save (user update, refetch, then access save), so the bar's Save and Reset
+  // stay disabled between the steps. The ref also drops a second click before the re-render lands.
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+
   const handleSave = useCallback(async () => {
-    if (!userId || !user?.ouId || !user.type) return;
+    if (submittingRef.current || !userId || !user?.ouId || !user.type) return;
 
     // Drop stale optional attribute values so an untouched mismatch doesn't block the update.
     const attributes = dropNonConformingOptionalAttributes(
@@ -179,27 +209,44 @@ export default function UserEditPage() {
       userTypeDetails?.schema,
     );
 
+    // The user is saved first, so a refused access change leaves the user's own changes saved and
+    // only the access draft waiting to be retried.
+    submittingRef.current = true;
+    setIsSubmitting(true);
     try {
-      await updateUserMutation.mutateAsync({
-        userId,
-        data: {
-          ouId: user.ouId,
-          type: user.type,
-          attributes,
-        },
-      });
-      setEditedUser({});
-      await refetch();
-      setAttributesResetKey((key) => key + 1);
+      if (hasUserChanges) {
+        await updateUserMutation.mutateAsync({
+          userId,
+          data: {
+            ouId: user.ouId,
+            type: user.type,
+            attributes,
+          },
+        });
+        setEditedUser({});
+        await refetch();
+        setAttributesResetKey((key) => key + 1);
+      }
+      if (organizationAccess.hasChanges) {
+        await organizationAccess.save();
+      }
     } catch (err) {
       logger.error('Failed to update user', {error: err});
+    } finally {
+      submittingRef.current = false;
+      setIsSubmitting(false);
     }
-  }, [user, userId, editedUser, userTypeDetails, updateUserMutation, refetch, logger]);
-
-  const hasChanges = useMemo(
-    () => Object.entries(editedUser).some(([key, value]) => !isEqualIgnoringEmpty(value, user?.[key as keyof User])),
-    [editedUser, user],
-  );
+  }, [
+    user,
+    userId,
+    editedUser,
+    hasUserChanges,
+    userTypeDetails,
+    updateUserMutation,
+    organizationAccess,
+    refetch,
+    logger,
+  ]);
 
   const handleBack = async () => {
     await navigate(routes.list());
@@ -215,13 +262,19 @@ export default function UserEditPage() {
 
   // Loading state
   if (isUserLoading || isUserTypeListLoading || isSchemaLoading) {
-    return <PageLoadingAnimation />;
+    return (
+      <>
+        <DocumentTitle title={t('navigation:pages.users', 'Users')} />
+        <PageLoadingAnimation />
+      </>
+    );
   }
 
   // Error state
   if (userError ?? userTypeListError ?? schemaError) {
     return (
       <PageContent>
+        <DocumentTitle title={t('navigation:pages.users', 'Users')} />
         <QueryErrorNotice
           error={(userError ?? userTypeListError ?? schemaError)!}
           t={(key, options) => t(key.includes(':') ? key : `users:${key}`, options)}
@@ -241,7 +294,7 @@ export default function UserEditPage() {
               }}
               startIcon={<ArrowLeft size={16} />}
             >
-              {t('users:manageUser.back', 'Back to Users')}
+              {t('users:manageUser.back', 'Back to users')}
             </Button>
           }
         />
@@ -253,6 +306,7 @@ export default function UserEditPage() {
   if (!user) {
     return (
       <PageContent>
+        <DocumentTitle title={t('navigation:pages.users', 'Users')} />
         <Alert severity="warning" sx={{mb: 2}}>
           {t('users:manageUser.notFound', 'User not found')}
         </Alert>
@@ -282,98 +336,92 @@ export default function UserEditPage() {
 
           {/* Organization Unit */}
           <SettingsCard
-            title={t('users:manageUser.sections.organizationUnit.title', 'Organization Unit')}
+            title={t('users:manageUser.sections.organizationUnit.title', 'Organization unit')}
             description={t(
               'users:manageUser.sections.organizationUnit.description',
               'The organization unit this user belongs to.',
             )}
           >
             <Stack spacing={2}>
-              <FormControl fullWidth>
-                <FormLabel htmlFor="ou-handle-input">
-                  {t('users:manageUser.sections.organizationUnit.handleLabel', 'Handle')}
-                </FormLabel>
-                <TextField
-                  id="ou-handle-input"
-                  value={user.ouHandle ?? '-'}
-                  fullWidth
-                  size="small"
-                  slotProps={{
-                    input: {
-                      readOnly: true,
-                      endAdornment: user.ouHandle ? (
-                        <InputAdornment position="end">
-                          <Tooltip
-                            title={
-                              copiedField === 'ouHandle'
-                                ? t('common:actions.copied')
-                                : t(
-                                    'users:manageUser.sections.organizationUnit.copyHandle',
-                                    'Copy Organization Unit Handle',
-                                  )
-                            }
+              <TextField
+                labelPlacement="top"
+                label={t('users:manageUser.sections.organizationUnit.handleLabel', 'Handle')}
+                id="ou-handle-input"
+                value={user.ouHandle ?? '-'}
+                fullWidth
+                size="small"
+                slotProps={{
+                  input: {
+                    readOnly: true,
+                    endAdornment: user.ouHandle ? (
+                      <InputAdornment position="end">
+                        <Tooltip
+                          title={
+                            copiedField === 'ouHandle'
+                              ? t('common:actions.copied')
+                              : t(
+                                  'users:manageUser.sections.organizationUnit.copyHandle',
+                                  'Copy organization unit handle',
+                                )
+                          }
+                        >
+                          <IconButton
+                            aria-label={t(
+                              'users:manageUser.sections.organizationUnit.copyHandle',
+                              'Copy organization unit handle',
+                            )}
+                            onClick={() => {
+                              handleCopyToClipboard(user.ouHandle!, 'ouHandle').catch(() => null);
+                            }}
+                            edge="end"
                           >
-                            <IconButton
-                              aria-label={t(
-                                'users:manageUser.sections.organizationUnit.copyHandle',
-                                'Copy Organization Unit Handle',
-                              )}
-                              onClick={() => {
-                                handleCopyToClipboard(user.ouHandle!, 'ouHandle').catch(() => null);
-                              }}
-                              edge="end"
-                            >
-                              {copiedField === 'ouHandle' ? <Check size={16} /> : <Copy size={16} />}
-                            </IconButton>
-                          </Tooltip>
-                        </InputAdornment>
-                      ) : undefined,
-                    },
-                  }}
-                  sx={{'& input': {fontFamily: 'monospace', fontSize: '0.875rem'}}}
-                />
-              </FormControl>
-              <FormControl fullWidth>
-                <FormLabel htmlFor="ou-id-input">
-                  {t('users:manageUser.sections.organizationUnit.idLabel', 'ID')}
-                </FormLabel>
-                <TextField
-                  id="ou-id-input"
-                  value={user.ouId}
-                  fullWidth
-                  size="small"
-                  slotProps={{
-                    input: {
-                      readOnly: true,
-                      endAdornment: (
-                        <InputAdornment position="end">
-                          <Tooltip
-                            title={
-                              copiedField === 'ouId'
-                                ? t('common:actions.copied')
-                                : t('users:manageUser.sections.organizationUnit.copyId', 'Copy Organization Unit ID')
-                            }
+                            {copiedField === 'ouHandle' ? <Check size={16} /> : <Copy size={16} />}
+                          </IconButton>
+                        </Tooltip>
+                      </InputAdornment>
+                    ) : undefined,
+                  },
+                }}
+                sx={{'& input': {fontFamily: 'monospace', fontSize: '0.875rem'}}}
+              />
+              <TextField
+                labelPlacement="top"
+                label={t('users:manageUser.sections.organizationUnit.idLabel', 'ID')}
+                id="ou-id-input"
+                value={user.ouId}
+                fullWidth
+                size="small"
+                slotProps={{
+                  input: {
+                    readOnly: true,
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <Tooltip
+                          title={
+                            copiedField === 'ouId'
+                              ? t('common:actions.copied')
+                              : t('users:manageUser.sections.organizationUnit.copyId', 'Copy organization unit ID')
+                          }
+                        >
+                          <IconButton
+                            aria-label={t(
+                              'users:manageUser.sections.organizationUnit.copyId',
+                              'Copy organization unit ID',
+                            )}
+                            onClick={() => {
+                              handleCopyToClipboard(user.ouId, 'ouId').catch(() => null);
+                            }}
+                            edge="end"
                           >
-                            <IconButton
-                              aria-label={t(
-                                'users:manageUser.sections.organizationUnit.copyId',
-                                'Copy Organization Unit ID',
-                              )}
-                              onClick={() => {
-                                handleCopyToClipboard(user.ouId, 'ouId').catch(() => null);
-                              }}
-                              edge="end"
-                            >
-                              {copiedField === 'ouId' ? <Check size={16} /> : <Copy size={16} />}
-                            </IconButton>
-                          </Tooltip>
-                        </InputAdornment>
-                      ),
-                    },
-                  }}
-                  sx={{'& input': {fontFamily: 'monospace', fontSize: '0.875rem'}}}
-                />
-              </FormControl>
+                            {copiedField === 'ouId' ? <Check size={16} /> : <Copy size={16} />}
+                          </IconButton>
+                        </Tooltip>
+                      </InputAdornment>
+                    ),
+                  },
+                }}
+                sx={{'& input': {fontFamily: 'monospace', fontSize: '0.875rem'}}}
+              />
             </Stack>
           </SettingsCard>
         </Stack>
@@ -401,6 +449,12 @@ export default function UserEditPage() {
     });
   }
 
+  tabs.push({
+    key: 'affiliations',
+    label: t('users:manageUser.tabs.affiliations', 'Affiliations'),
+    render: () => <EditOrganizationAccessSettings user={user} access={organizationAccess} />,
+  });
+
   if (!user.isReadOnly) {
     tabs.push({
       key: 'advanced',
@@ -408,11 +462,11 @@ export default function UserEditPage() {
       render: () => (
         <Stack spacing={3}>
           <SettingsCard
-            title={t('users:manageUser.sections.dangerZone.title', 'Danger Zone')}
+            title={t('users:manageUser.sections.dangerZone.title', 'Danger zone')}
             description={t('users:manageUser.sections.dangerZone.description', 'Irreversible and destructive actions.')}
           >
             <Typography variant="h6" gutterBottom color="error">
-              {t('users:manageUser.sections.dangerZone.deleteUser', 'Delete User')}
+              {t('users:manageUser.sections.dangerZone.deleteUser', 'Delete user')}
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{mb: 3}}>
               {t(
@@ -429,19 +483,24 @@ export default function UserEditPage() {
     });
   }
 
+  const tForUserErrors = (key: string, options?: Record<string, unknown>): string =>
+    t(key.includes(':') ? key : `users:${key}`, options);
+
   const safeActiveTab = activeTab >= tabs.length ? 0 : activeTab;
 
   return (
     <PageContent>
+      <DocumentTitle title={displayName} />
       {user.isReadOnly && (
         <Alert severity="info" sx={{mb: 2}}>
           {t('common:messages.readOnlyResource', 'This resource is read-only and cannot be modified.')}
         </Alert>
       )}
+      <AccessStatusBanner status={user.status} sx={{mb: 2}} />
       {/* Header */}
       <PageTitle>
         <PageTitle.BackButton component={<Link to={routes.list()} />}>
-          {t('users:manageUser.back', 'Back to Users')}
+          {t('users:manageUser.back', 'Back to users')}
         </PageTitle.BackButton>
         <PageTitle.Avatar>
           <ResourceAvatar
@@ -458,6 +517,18 @@ export default function UserEditPage() {
             <Chip label={matchedSchema?.displayName ?? user.type} size="small" sx={{px: 0.5}} />
           </Stack>
         </PageTitle.SubHeader>
+        {/* Read-only records too: the flows change only runtime state. */}
+        {!isSignedInUser && (
+          <PageTitle.Actions>
+            <AccountStatusAction
+              category="user"
+              subject={user.id}
+              status={user.status}
+              listQueryKey={[UserQueryKeys.USERS]}
+              onChanged={handleStatusChanged}
+            />
+          </PageTitle.Actions>
+        )}
       </PageTitle>
 
       {/* Tabs */}
@@ -487,28 +558,40 @@ export default function UserEditPage() {
         onSuccess={handleDeleteSuccess}
       />
 
-      {hasChanges && (
+      {/* Kept up until the whole save finishes: an attributes save clears the staged edit before the
+          refetch, so `hasChanges` alone would drop the bar while the form still shows the old values. */}
+      {(hasChanges || isSubmitting) && (
         <UnsavedChangesBar
           message={t('users:manageUser.unsavedChanges', 'You have unsaved changes')}
           resetLabel={t('users:manageUser.reset', 'Reset')}
           saveLabel={t('users:manageUser.save', 'Save')}
           savingLabel={t('users:manageUser.saving', 'Saving…')}
-          isSaving={updateUserMutation.isPending}
+          isSaving={isSubmitting || updateUserMutation.isPending || organizationAccess.isSaving}
+          resetDisabled={isSubmitting || updateUserMutation.isPending || organizationAccess.isSaving}
           saveDisabled={user.isReadOnly === true}
           error={
-            updateUserMutation.error
+            (updateUserMutation.error
               ? getUserErrorMessage(
                   updateUserMutation.error,
-                  (key, options) => t(key.includes(':') ? key : `users:${key}`, options),
+                  tForUserErrors,
                   'update.error',
                   'Failed to update user. Please try again.',
                 )
-              : undefined
+              : undefined) ??
+            (organizationAccess.saveError
+              ? getUserErrorMessage(
+                  organizationAccess.saveError,
+                  tForUserErrors,
+                  'organizationAccess.save.error',
+                  'Failed to update affiliations. Please try again.',
+                )
+              : undefined)
           }
           onReset={() => {
             updateUserMutation.reset();
             setEditedUser({});
             setAttributesResetKey((key) => key + 1);
+            organizationAccess.reset();
           }}
           onSave={() => {
             void handleSave();

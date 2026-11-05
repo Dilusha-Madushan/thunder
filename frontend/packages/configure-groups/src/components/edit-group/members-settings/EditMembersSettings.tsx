@@ -92,7 +92,7 @@ export default function EditMembersSettings({group}: EditMembersSettingsProps): 
                 setAddDialogOpen(true);
               }}
             >
-              {t('edit.members.sections.manage.addMember', 'Add Member')}
+              {t('edit.members.sections.manage.addMember', 'Add member')}
             </Button>
           ) : undefined
         }
@@ -107,6 +107,7 @@ export default function EditMembersSettings({group}: EditMembersSettingsProps): 
           }}
           onAdd={handleAddMembers}
           groupId={group.id}
+          ouId={group.ouId}
           excludeGroupId={group.id}
           error={addError}
           onErrorDismiss={() => setAddError(null)}

@@ -145,7 +145,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_Success() {
 		Assertion: testAssertion,
 	}
 
-	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 		Return(&tokenservice.IDJAGAssertionClaims{
 			Sub:    testUserID,
 			Iss:    testCustomIssuer,
@@ -191,7 +191,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_DPoPProof_Propagate
 		Assertion: testAssertion,
 	}
 
-	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 		Return(&tokenservice.IDJAGAssertionClaims{
 			Sub:    testUserID,
 			Iss:    testCustomIssuer,
@@ -220,6 +220,84 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_DPoPProof_Propagate
 	assert.Equal(suite.T(), constants.TokenTypeDPoP, result.AccessToken.TokenType)
 }
 
+// handleGrantCapturingBuildContext runs a successful grant for the suite's client and returns the
+// context the access token was built from.
+func (suite *JWTBearerGrantHandlerTestSuite) handleGrantCapturingBuildContext() *tokenservice.AccessTokenBuildContext {
+	tokenRequest := &model.TokenRequest{
+		GrantType: string(providers.GrantTypeJWTBearer),
+		ClientID:  testClientID,
+		Assertion: testAssertion,
+	}
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
+		Return(&tokenservice.IDJAGAssertionClaims{
+			Sub:    testUserID,
+			Iss:    testCustomIssuer,
+			Scopes: []string{"read", "write"},
+		}, nil)
+	suite.mockResourceService.On("ValidatePermissions", mock.Anything, testJWTBearerDefaultRSID,
+		[]string{"read", "write"}).Return([]string{}, nil)
+	var built *tokenservice.AccessTokenBuildContext
+	suite.mockTokenBuilder.On("BuildAccessToken", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			built = args.Get(1).(*tokenservice.AccessTokenBuildContext)
+		}).
+		Return(&model.TokenDTO{Token: testTokenExchangeJWT, Subject: testUserID}, nil)
+
+	result, errResp := suite.handler.HandleGrant(context.Background(), tokenRequest, suite.oauthApp)
+
+	suite.Require().Nil(errResp)
+	suite.Require().NotNil(result)
+	suite.Require().NotNil(built)
+	return built
+}
+
+func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_ActClaimNamesTheClientWhenItActsForTheUser() {
+	tests := []struct {
+		name            string
+		category        providers.EntityCategory
+		includeActClaim bool
+		wantActor       bool
+	}{
+		{"Agent", providers.EntityCategoryAgent, false, true},
+		{"ApplicationThatIncludesTheActClaim", providers.EntityCategoryApp, true, true},
+		{"ApplicationThatDoesNotIncludeTheActClaim", providers.EntityCategoryApp, false, false},
+	}
+
+	for _, tt := range tests {
+		suite.Run(tt.name, func() {
+			suite.SetupTest()
+			suite.oauthApp.EntityCategory = tt.category
+			suite.oauthApp.IncludeActClaim = tt.includeActClaim
+
+			built := suite.handleGrantCapturingBuildContext()
+
+			if tt.wantActor {
+				suite.Require().NotNil(built.ActorClaims)
+				suite.Equal(suite.oauthApp.ID, built.ActorClaims.Sub)
+			} else {
+				suite.Nil(built.ActorClaims)
+			}
+		})
+	}
+}
+
+func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_UsesTheUserAccessTokenValidity() {
+	suite.oauthApp.Token.AccessToken.UserConfig.ValidityPeriod = 1234
+	suite.oauthApp.Token.AccessToken.ClientConfig = &providers.AccessTokenSubConfig{ValidityPeriod: 99}
+
+	built := suite.handleGrantCapturingBuildContext()
+
+	suite.Equal(int64(1234), built.ValidityPeriod)
+}
+
+func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_NoUserAccessTokenConfigLeavesTheServerDefault() {
+	suite.oauthApp.Token = nil
+
+	built := suite.handleGrantCapturingBuildContext()
+
+	suite.Zero(built.ValidityPeriod)
+}
+
 func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_InvalidAssertion() {
 	tokenRequest := &model.TokenRequest{
 		GrantType: string(providers.GrantTypeJWTBearer),
@@ -227,7 +305,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_InvalidAssertion() 
 		Assertion: testAssertion,
 	}
 
-	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 		Return(nil, errors.New("assertion audience does not match server issuer"))
 
 	result, errResp := suite.handler.HandleGrant(context.Background(), tokenRequest, suite.oauthApp)
@@ -277,7 +355,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_AssertionRejectionR
 				ClientID:  testClientID,
 				Assertion: testAssertion,
 			}
-			suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+			suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 				Return(nil, tc.validationErr)
 
 			result, errResp := suite.handler.HandleGrant(context.Background(), tokenRequest, suite.oauthApp)
@@ -303,7 +381,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_ScopeIntersection()
 
 	// Assertion carries [read write], request narrows to [read admin]. Only "read" survives the
 	// intersection; "write" was not requested, "admin" was not asserted.
-	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 		Return(&tokenservice.IDJAGAssertionClaims{
 			Sub:    testUserID,
 			Iss:    testCustomIssuer,
@@ -343,7 +421,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_EmptyAppScopes_Asse
 		Assertion: testAssertion,
 	}
 
-	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 		Return(&tokenservice.IDJAGAssertionClaims{
 			Sub:    testUserID,
 			Iss:    testCustomIssuer,
@@ -382,7 +460,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_AssertionResource_A
 		Assertion: testAssertion,
 	}
 
-	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 		Return(&tokenservice.IDJAGAssertionClaims{
 			Sub:       testUserID,
 			Iss:       testCustomIssuer,
@@ -434,7 +512,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_AssertionNoResource
 		Assertion: testAssertion,
 	}
 
-	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 		Return(&tokenservice.IDJAGAssertionClaims{
 			Sub:    testUserID,
 			Iss:    testCustomIssuer,
@@ -460,7 +538,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_RequestResourceNarr
 		Resources: []string{testRS01URI},
 	}
 
-	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 		Return(&tokenservice.IDJAGAssertionClaims{
 			Sub:       testUserID,
 			Iss:       testCustomIssuer,
@@ -500,7 +578,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_RequestResourceNotI
 		Resources: []string{"https://not-granted.example.com"},
 	}
 
-	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 		Return(&tokenservice.IDJAGAssertionClaims{
 			Sub:       testUserID,
 			Iss:       testCustomIssuer,
@@ -522,7 +600,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_TokenBuildError() {
 		Assertion: testAssertion,
 	}
 
-	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 		Return(&tokenservice.IDJAGAssertionClaims{
 			Sub:    testUserID,
 			Iss:    testCustomIssuer,
@@ -564,7 +642,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_MappedRoleCannotGra
 		authzService:    mockAuthzService,
 	}
 
-	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 		Return(&tokenservice.IDJAGAssertionClaims{
 			Sub:    testUserID,
 			Iss:    testCustomIssuer,
@@ -611,7 +689,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_MappedRoleGrantsSco
 		authzService:    mockAuthzService,
 	}
 
-	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 		Return(&tokenservice.IDJAGAssertionClaims{
 			Sub:    testUserID,
 			Iss:    testCustomIssuer,
@@ -671,7 +749,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_MappedPermissionGra
 		authzService:    mockAuthzService,
 	}
 
-	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 		Return(&tokenservice.IDJAGAssertionClaims{
 			Sub:    testUserID,
 			Iss:    testCustomIssuer,
@@ -721,7 +799,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_MappedAuthorization
 		authzService:    mockAuthzService,
 	}
 
-	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 		Return(&tokenservice.IDJAGAssertionClaims{
 			Sub:    testUserID,
 			Iss:    testCustomIssuer,
@@ -765,7 +843,7 @@ func (suite *JWTBearerGrantHandlerTestSuite) TestHandleGrant_MappedRoleGrantsSco
 		authzService:    mockAuthzService,
 	}
 
-	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion).
+	suite.mockTokenValidator.On("ValidateIDJAGAssertion", mock.Anything, testAssertion, testClientID).
 		Return(&tokenservice.IDJAGAssertionClaims{
 			Sub:    testUserID,
 			Iss:    testCustomIssuer,

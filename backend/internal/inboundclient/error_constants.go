@@ -39,6 +39,10 @@ var (
 	ErrFKInvalidRecoveryFlow = errors.New("invalid recovery flow ID")
 	// ErrFKInvalidSignOutFlow is returned when the sign-out flow ID does not exist.
 	ErrFKInvalidSignOutFlow = errors.New("invalid sign-out flow ID")
+	// ErrFKInvalidDeviceGrantFlow is returned when a Device Grant flow ID is invalid.
+	ErrFKInvalidDeviceGrantFlow = errors.New("invalid Device Grant flow ID")
+	// ErrFKDeviceGrantFlowRequired is returned when Device Code is enabled without an assigned flow.
+	ErrFKDeviceGrantFlowRequired = errors.New("device grant flow is required when Device Code grant is enabled")
 	// ErrFKFlowDefinitionRetrievalFailed is returned when a flow definition cannot be retrieved.
 	ErrFKFlowDefinitionRetrievalFailed = errors.New("error retrieving flow definition")
 	// ErrFKFlowServerError is returned when a server error occurs while resolving a flow.
@@ -121,6 +125,13 @@ var (
 	// ErrOAuthClientIDJAGCannotUseNoneAuth is returned when an ID-JAG configuration uses none auth method.
 	// Requesting ID-JAGs requires a confidential client.
 	ErrOAuthClientIDJAGCannotUseNoneAuth = errors.New("ID-JAG configuration cannot use none auth method")
+	// ErrOAuthClientIDJAGRequiresTokenExchange is returned when an ID-JAG configuration is enabled without
+	// the token-exchange grant, the only grant that issues ID-JAGs.
+	ErrOAuthClientIDJAGRequiresTokenExchange = errors.New("ID-JAG configuration requires the token-exchange grant")
+	// ErrOAuthClientIDJAGRequiresAllowedAudience is returned when an ID-JAG configuration is enabled
+	// without an allowed audience, so no ID-JAG request can be granted, or with a blank one.
+	ErrOAuthClientIDJAGRequiresAllowedAudience = errors.New(
+		"ID-JAG configuration requires at least one allowed audience and no blank ones")
 	// ErrOAuthPublicClientMustUseNoneAuth is returned when a public client uses an auth method other than none.
 	ErrOAuthPublicClientMustUseNoneAuth = errors.New("public client must use none auth method")
 	// ErrOAuthPublicClientMustHavePKCE is returned when a public client does not have PKCE required.

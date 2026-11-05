@@ -1,4 +1,4 @@
-// Copyright 2025 The ThunderID Authors
+// Copyright 2025-2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package utils
@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
@@ -405,6 +406,12 @@ func IsValidURI(uri string) bool {
 	return true
 }
 
+// IsLoopbackRedirectHost reports whether a redirect URI host is one of the loopback hosts an http
+// redirect URI may name: localhost, 127.0.0.1 or ::1.
+func IsLoopbackRedirectHost(host string) bool {
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
 // IsValidLogoURI checks if the provided URI is valid for use as a logo URL.
 // It enforces a scheme allowlist: http/https require a non-empty host, data/blob/emoji/avatar
 // schemes are always accepted, and relative paths (no scheme, non-empty path) are accepted.
@@ -584,13 +591,14 @@ func FilterSensitiveHeaders(h map[string][]string) map[string][]string {
 // so they never reach the flow-context store or a {{request(query.*)}} placeholder. The query-param
 // counterpart of sensitiveHeaders.
 var sensitiveQueryParams = map[string]bool{
-	constants.ClientSecretParamName:        true,
-	constants.ClientAssertionParamName:     true,
-	constants.ClientAssertionTypeParamName: true,
+	constants.ClientSecretParamName:         true,
+	constants.ClientAssertionParamName:      true,
+	constants.ClientAssertionTypeParamName:  true,
+	constants.AuthorizationDetailsParamName: true,
 }
 
-// IsSensitiveQueryParam reports whether a request query parameter carries client credentials and
-// must not be exposed through a captured InitiatorRequest.QueryParams.
+// IsSensitiveQueryParam reports whether a request query parameter carries client credentials or
+// raw authorization details and must not be exposed through a captured InitiatorRequest.QueryParams.
 func IsSensitiveQueryParam(name string) bool {
 	return sensitiveQueryParams[name]
 }
@@ -687,4 +695,14 @@ func WriteErrorResponse(ctx context.Context, w http.ResponseWriter, statusCode i
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write(b)
 	}
+}
+
+// ExtendWriteDeadline gives a request d from now to write its response, in place of the server's
+// write timeout, for a route known to run longer than the rest. A zero d leaves the server's timeout
+// in place. It fails when no writer between the handler and the connection lets the deadline through.
+func ExtendWriteDeadline(w http.ResponseWriter, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	return http.NewResponseController(w).SetWriteDeadline(time.Now().Add(d))
 }

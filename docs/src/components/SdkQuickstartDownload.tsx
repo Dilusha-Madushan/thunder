@@ -37,10 +37,14 @@ interface SdkQuickstartDownloadProps {
    */
   packageId: string;
   /**
-   * Which kind of release `packageId` names. Defaults to `sdk`, whose quickstart sample ships in the SDK's
-   * own release.
+   * Which kind of release `packageId` names. Defaults to `sdk`.
    */
   type?: 'sdk' | 'sample';
+  /**
+   * The samples-repo sample whose released archive to offer (e.g. `quickstarts/react`), for an SDK
+   * `packageId` whose quickstart lives in the samples repo. `packageId` still selects the prompt.
+   */
+  sample?: string;
   /**
    * The package the sample is wired with, shown as "prewired with ...". Defaults to the release's package
    * name, which suits SDK releases; a sample's release name is not a package, so pass one for samples.
@@ -128,6 +132,7 @@ const Actions = styled('div')({
 export default function SdkQuickstartDownload({
   packageId,
   type = 'sdk',
+  sample = undefined,
   prewiredWith = undefined,
   icon = undefined,
   promptFlow = undefined,
@@ -149,17 +154,25 @@ export default function SdkQuickstartDownload({
     fetch(withBaseUrl('/data/ecosystem-releases.json'), {signal: controller.signal})
       .then((r) => r.json() as Promise<EcosystemReleasesData>)
       .then((data) => {
-        const entry = data.releases?.find((release) => release.type === type && release.packageId === packageId);
+        const entry = data.releases?.find((release) =>
+          sample
+            ? release.type === 'sample' && release.packageId === sample
+            : release.type === type && release.packageId === packageId,
+        );
         const match = entry?.assets.find((a) => a.downloadUrl.endsWith('.zip'));
         if (!entry || !match) return;
-        setPackageName(prewiredWith ?? entry.packageName ?? '');
+        // A sample's release name is not a package, so fall back to the SDK's own package name.
+        const sdkPackageName = sample
+          ? data.releases.find((release) => release.type === 'sdk' && release.packageId === packageId)?.packageName
+          : entry.packageName;
+        setPackageName(prewiredWith ?? sdkPackageName ?? '');
         setAsset(match);
       })
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === 'AbortError') return;
       });
     return () => controller.abort();
-  }, [withBaseUrl, packageId, type, prewiredWith]);
+  }, [withBaseUrl, packageId, type, sample, prewiredWith]);
 
   const handleCopyPrompt = async (): Promise<void> => {
     if (!promptFlow || copyState === 'copying') return;

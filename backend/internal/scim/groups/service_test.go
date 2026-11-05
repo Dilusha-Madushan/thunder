@@ -127,7 +127,7 @@ func (suite *ServiceTestSuite) TestListGroups_Success() {
 			{ID: "group-1", Name: "Administrators"},
 		},
 	}
-	mockGroupService.On("GetGroupList", mock.Anything, 20, 0, true).
+	mockGroupService.On("GetGroupList", mock.Anything, 20, 0, map[string]interface{}(nil), true).
 		Return(listResp, (*tidcommon.ServiceError)(nil))
 
 	members := &group.MemberListResponse{
@@ -159,7 +159,7 @@ func (suite *ServiceTestSuite) TestListGroups_ExplicitZeroCountReturnsNoResource
 			{ID: "group-1", Name: "Administrators"},
 		},
 	}
-	mockGroupService.On("GetGroupList", mock.Anything, 1, 0, true).
+	mockGroupService.On("GetGroupList", mock.Anything, 1, 0, map[string]interface{}(nil), true).
 		Return(listResp, (*tidcommon.ServiceError)(nil))
 
 	resp, err := service.ListGroups(context.Background(), 1, 0, testBaseURL)
@@ -706,6 +706,7 @@ func (suite *ServiceTestSuite) TestMapGroupServiceErrorToSCIM() {
 		{"declarative readonly", &group.ErrorImmutableGroup, scim.ErrorMutabilityViolation.Code},
 		{"invalid member id", &group.ErrorInvalidMemberID, scim.ErrorInvalidGroupMember.Code},
 		{"invalid group member id", &group.ErrorInvalidGroupMemberID, scim.ErrorInvalidGroupMember.Code},
+		{"member outside group OU", &group.ErrorMemberOUMismatch, scim.ErrorInvalidGroupMember.Code},
 		{"unauthorized passthrough", &tidcommon.ErrorUnauthorized, tidcommon.ErrorUnauthorized.Code},
 		{"server error maps to internal", &tidcommon.ServiceError{Type: tidcommon.ServerErrorType, Code: "GRP-9999"},
 			tidcommon.InternalServerError.Code},

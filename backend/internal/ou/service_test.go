@@ -8,8 +8,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
-
 	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 
 	"github.com/stretchr/testify/mock"
@@ -252,21 +250,6 @@ func (suite *OrganizationUnitServiceTestSuite) newServiceWithRoleResolver(
 	}
 }
 
-func (suite *OrganizationUnitServiceTestSuite) newServiceWithFlowResolver(
-	store *organizationUnitStoreInterfaceMock,
-	authzService *sysauthzmock.SystemAuthorizationServiceInterfaceMock,
-	flowResolver ouFlowResolver,
-) *organizationUnitService {
-	mtx := new(mockTransactioner)
-	mtx.On("Transact", mock.Anything, mock.Anything).Return(nil).Maybe()
-	return &organizationUnitService{
-		ouStore:       store,
-		authzService:  authzService,
-		transactioner: mtx,
-		flowResolver:  flowResolver,
-	}
-}
-
 type mockTransactioner struct {
 	mock.Mock
 }
@@ -423,15 +406,12 @@ func (suite *OrganizationUnitServiceTestSuite) TestOUService_SetResolvers() {
 
 	userResolver := new(OUUserResolverMock)
 	groupResolver := new(OUGroupResolverMock)
-	flowResolver := newOuFlowResolverMock(suite.T())
 
 	service.SetOUUserResolver(userResolver)
 	service.SetOUGroupResolver(groupResolver)
-	service.SetOUFlowResolver(flowResolver)
 
 	suite.Require().Equal(userResolver, service.userResolver)
 	suite.Require().Equal(groupResolver, service.groupResolver)
-	suite.Require().Equal(flowResolver, service.flowResolver)
 }
 
 func (suite *OrganizationUnitServiceTestSuite) TestOUService_CreateOrganizationUnit() {
@@ -633,26 +613,6 @@ func (suite *OrganizationUnitServiceTestSuite) TestOUService_CreateOrganizationU
 			store.AssertExpectations(suite.T())
 		})
 	}
-}
-
-func (suite *OrganizationUnitServiceTestSuite) TestOUService_CreateOrganizationUnit_InvalidDefaultFlow() {
-	store := newOrganizationUnitStoreInterfaceMock(suite.T())
-	flowResolver := newOuFlowResolverMock(suite.T())
-	flowResolver.On("IsValidFlow", mock.Anything, "bad-auth-flow", providers.FlowTypeAuthentication).
-		Return(false, nil).Once()
-
-	service := suite.newServiceWithFlowResolver(store, newAllowAllAuthz(suite.T()), flowResolver)
-	result, err := service.CreateOrganizationUnit(context.Background(), OrganizationUnitRequestWithID{
-		Handle:     "finance",
-		Name:       "Finance",
-		AuthFlowID: "bad-auth-flow",
-	})
-
-	suite.Require().NotNil(err)
-	suite.Require().Equal(ErrorInvalidAuthFlowID, *err)
-	suite.Require().Equal(OrganizationUnit{}, result)
-	store.AssertNumberOfCalls(suite.T(), "CheckOrganizationUnitNameConflict", 0)
-	store.AssertNumberOfCalls(suite.T(), "CreateOrganizationUnit", 0)
 }
 
 func (suite *OrganizationUnitServiceTestSuite) TestOUService_GetOrganizationUnit() {
@@ -1274,33 +1234,6 @@ func (suite *OrganizationUnitServiceTestSuite) TestOUService_UpdateOrganizationU
 	}
 }
 
-func (suite *OrganizationUnitServiceTestSuite) TestOUService_UpdateOrganizationUnit_InvalidDefaultFlow() {
-	store := newOrganizationUnitStoreInterfaceMock(suite.T())
-	existing := OrganizationUnit{ID: "ou-1", Handle: "root", Name: "Root"}
-	store.On("GetOrganizationUnit", mock.Anything, "ou-1").
-		Return(existing, nil).
-		Once()
-	store.On("IsOrganizationUnitDeclarative", mock.Anything, "ou-1").
-		Return(false).
-		Once()
-
-	flowResolver := newOuFlowResolverMock(suite.T())
-	flowResolver.On("IsValidFlow", mock.Anything, "bad-signout-flow", providers.FlowTypeSignOut).
-		Return(false, nil).Once()
-
-	service := suite.newServiceWithFlowResolver(store, newAllowAllAuthz(suite.T()), flowResolver)
-	result, err := service.UpdateOrganizationUnit(context.Background(), "ou-1", OrganizationUnitRequestWithID{
-		Handle:        "root",
-		Name:          "Root",
-		SignOutFlowID: "bad-signout-flow",
-	})
-
-	suite.Require().NotNil(err)
-	suite.Require().Equal(ErrorInvalidSignOutFlowID, *err)
-	suite.Require().Equal(OrganizationUnit{}, result)
-	store.AssertNumberOfCalls(suite.T(), "UpdateOrganizationUnit", 0)
-}
-
 func (suite *OrganizationUnitServiceTestSuite) TestOUService_UpdateOrganizationUnitByPath() {
 	request := OrganizationUnitRequestWithID{Handle: "root", Name: "Root"}
 
@@ -1789,111 +1722,6 @@ func (suite *OrganizationUnitServiceTestSuite) TestOUService_validateOUHandle() 
 	})
 }
 
-func (suite *OrganizationUnitServiceTestSuite) TestOUService_validateDefaultFlows() {
-	suite.Run("no flow resolver configured skips validation", func() {
-		service := &organizationUnitService{}
-		err := service.validateDefaultFlows(context.Background(), OrganizationUnitRequestWithID{
-			AuthFlowID: "auth-flow-1",
-		})
-		suite.Require().Nil(err)
-	})
-
-	suite.Run("empty flow IDs are not validated", func() {
-		flowResolver := newOuFlowResolverMock(suite.T())
-		service := &organizationUnitService{flowResolver: flowResolver}
-		err := service.validateDefaultFlows(context.Background(), OrganizationUnitRequestWithID{})
-		suite.Require().Nil(err)
-		flowResolver.AssertNumberOfCalls(suite.T(), "IsValidFlow", 0)
-	})
-
-	suite.Run("all valid flows", func() {
-		flowResolver := newOuFlowResolverMock(suite.T())
-		flowResolver.On("IsValidFlow", mock.Anything, "auth-flow-1", providers.FlowTypeAuthentication).
-			Return(true, nil).Once()
-		flowResolver.On("IsValidFlow", mock.Anything, "reg-flow-1", providers.FlowTypeRegistration).
-			Return(true, nil).Once()
-		flowResolver.On("IsValidFlow", mock.Anything, "recovery-flow-1", providers.FlowTypeRecovery).
-			Return(true, nil).Once()
-		flowResolver.On("IsValidFlow", mock.Anything, "signout-flow-1", providers.FlowTypeSignOut).
-			Return(true, nil).Once()
-		service := &organizationUnitService{flowResolver: flowResolver}
-
-		err := service.validateDefaultFlows(context.Background(), OrganizationUnitRequestWithID{
-			AuthFlowID:         "auth-flow-1",
-			RegistrationFlowID: "reg-flow-1",
-			RecoveryFlowID:     "recovery-flow-1",
-			SignOutFlowID:      "signout-flow-1",
-		})
-
-		suite.Require().Nil(err)
-	})
-
-	suite.Run("invalid auth flow", func() {
-		flowResolver := newOuFlowResolverMock(suite.T())
-		flowResolver.On("IsValidFlow", mock.Anything, "bad-flow", providers.FlowTypeAuthentication).
-			Return(false, nil).Once()
-		service := &organizationUnitService{flowResolver: flowResolver}
-
-		err := service.validateDefaultFlows(context.Background(), OrganizationUnitRequestWithID{
-			AuthFlowID: "bad-flow",
-		})
-
-		suite.Require().Equal(ErrorInvalidAuthFlowID, *err)
-	})
-
-	suite.Run("invalid registration flow", func() {
-		flowResolver := newOuFlowResolverMock(suite.T())
-		flowResolver.On("IsValidFlow", mock.Anything, "bad-flow", providers.FlowTypeRegistration).
-			Return(false, nil).Once()
-		service := &organizationUnitService{flowResolver: flowResolver}
-
-		err := service.validateDefaultFlows(context.Background(), OrganizationUnitRequestWithID{
-			RegistrationFlowID: "bad-flow",
-		})
-
-		suite.Require().Equal(ErrorInvalidRegistrationFlowID, *err)
-	})
-
-	suite.Run("invalid recovery flow", func() {
-		flowResolver := newOuFlowResolverMock(suite.T())
-		flowResolver.On("IsValidFlow", mock.Anything, "bad-flow", providers.FlowTypeRecovery).
-			Return(false, nil).Once()
-		service := &organizationUnitService{flowResolver: flowResolver}
-
-		err := service.validateDefaultFlows(context.Background(), OrganizationUnitRequestWithID{
-			RecoveryFlowID: "bad-flow",
-		})
-
-		suite.Require().Equal(ErrorInvalidRecoveryFlowID, *err)
-	})
-
-	suite.Run("invalid signout flow", func() {
-		flowResolver := newOuFlowResolverMock(suite.T())
-		flowResolver.On("IsValidFlow", mock.Anything, "bad-flow", providers.FlowTypeSignOut).
-			Return(false, nil).Once()
-		service := &organizationUnitService{flowResolver: flowResolver}
-
-		err := service.validateDefaultFlows(context.Background(), OrganizationUnitRequestWithID{
-			SignOutFlowID: "bad-flow",
-		})
-
-		suite.Require().Equal(ErrorInvalidSignOutFlowID, *err)
-	})
-
-	suite.Run("flow resolver server error propagates", func() {
-		flowResolver := newOuFlowResolverMock(suite.T())
-		flowResolver.On("IsValidFlow", mock.Anything, "auth-flow-1", providers.FlowTypeAuthentication).
-			Return(false, &tidcommon.InternalServerError).Once()
-		service := &organizationUnitService{flowResolver: flowResolver}
-
-		err := service.validateDefaultFlows(context.Background(), OrganizationUnitRequestWithID{
-			AuthFlowID: "auth-flow-1",
-		})
-
-		suite.Require().Equal(tidcommon.InternalServerError, *err)
-	})
-}
-
 func (suite *OrganizationUnitServiceTestSuite) TestOUService_GetOrganizationUnitChildrenByPath() {
 	config := newDefaultPathListConfig[*OrganizationUnitListResponse](
 		" ",
@@ -1961,22 +1789,7 @@ func (suite *OrganizationUnitServiceTestSuite) TestOUService_GetOrganizationUnit
 			},
 			resolverSetup: func(ur *OUUserResolverMock) {
 				ur.On("GetUserListByOUID", mock.Anything, "ou-1", 5, 0, false).
-					Return([]User(nil), errors.New("list")).Once()
-			},
-			wantErr: &tidcommon.InternalServerError,
-		},
-		{
-			name:  "count error",
-			limit: 5,
-			storeSetup: func(store *organizationUnitStoreInterfaceMock) {
-				store.On("IsOrganizationUnitExists", mock.Anything, "ou-1").
-					Return(true, nil).Once()
-			},
-			resolverSetup: func(ur *OUUserResolverMock) {
-				ur.On("GetUserListByOUID", mock.Anything, "ou-1", 5, 0, false).
-					Return([]User{{ID: "user-1"}}, nil).Once()
-				ur.On("GetUserCountByOUID", mock.Anything, "ou-1").
-					Return(0, errors.New("count")).Once()
+					Return([]User(nil), 0, errors.New("list")).Once()
 			},
 			wantErr: &tidcommon.InternalServerError,
 		},
@@ -1989,9 +1802,7 @@ func (suite *OrganizationUnitServiceTestSuite) TestOUService_GetOrganizationUnit
 			},
 			resolverSetup: func(ur *OUUserResolverMock) {
 				ur.On("GetUserListByOUID", mock.Anything, "ou-1", 5, 0, false).
-					Return([]User{{ID: "user-1"}, {ID: "user-2"}}, nil).Once()
-				ur.On("GetUserCountByOUID", mock.Anything, "ou-1").
-					Return(2, nil).Once()
+					Return([]User{{ID: "user-1", IsOwnedByOU: true}, {ID: "user-2"}}, 2, nil).Once()
 			},
 		},
 	}
@@ -2042,11 +1853,9 @@ func (suite *OrganizationUnitServiceTestSuite) TestOUService_GetOrganizationUnit
 	userRes := NewOUUserResolverMock(suite.T())
 	userRes.On("GetUserListByOUID", mock.Anything, "ou-1", 5, 0, true).
 		Return([]User{
-			{ID: "user-1", Type: "employee", Display: "alice@example.com"},
+			{ID: "user-1", Type: "employee", Display: "alice@example.com", IsOwnedByOU: true},
 			{ID: "user-2", Type: "contractor", Display: "Bob Smith"},
-		}, nil).Once()
-	userRes.On("GetUserCountByOUID", mock.Anything, "ou-1").
-		Return(2, nil).Once()
+		}, 2, nil).Once()
 
 	service := suite.newServiceWithResolvers(
 		store, newAllowAllAuthz(suite.T()), userRes, nil,
@@ -2059,6 +1868,8 @@ func (suite *OrganizationUnitServiceTestSuite) TestOUService_GetOrganizationUnit
 	suite.Equal("alice@example.com", resp.Users[0].Display)
 	suite.Equal("contractor", resp.Users[1].Type)
 	suite.Equal("Bob Smith", resp.Users[1].Display)
+	suite.True(resp.Users[0].IsOwnedByOU)
+	suite.False(resp.Users[1].IsOwnedByOU)
 }
 
 func (suite *OrganizationUnitServiceTestSuite) TestOUService_GetOrganizationUnitUsers_WithDisplay_FallbackToID() {
@@ -2072,9 +1883,7 @@ func (suite *OrganizationUnitServiceTestSuite) TestOUService_GetOrganizationUnit
 	userRes.On("GetUserListByOUID", mock.Anything, "ou-1", 5, 0, true).
 		Return([]User{
 			{ID: "user-1", Type: "employee", Display: "user-1"},
-		}, nil).Once()
-	userRes.On("GetUserCountByOUID", mock.Anything, "ou-1").
-		Return(1, nil).Once()
+		}, 1, nil).Once()
 
 	service := suite.newServiceWithResolvers(
 		store, newAllowAllAuthz(suite.T()), userRes, nil,
@@ -2285,15 +2094,13 @@ func (suite *OrganizationUnitServiceTestSuite) TestOUService_GetOrganizationUnit
 		func() (OUUserResolver, OUGroupResolver) {
 			userRes := NewOUUserResolverMock(suite.T())
 			userRes.On("GetUserListByOUID", mock.Anything, "ou-1", 5, 0, false).
-				Return(nil, errors.New("resolver unavailable")).Once()
+				Return(nil, 0, errors.New("resolver unavailable")).Once()
 			return userRes, nil
 		},
 		func() (OUUserResolver, OUGroupResolver) {
 			userRes := new(OUUserResolverMock)
 			userRes.On("GetUserListByOUID", mock.Anything, "ou-1", 5, 0, false).
-				Return([]User{}, nil).Once()
-			userRes.On("GetUserCountByOUID", mock.Anything, "ou-1").
-				Return(0, nil).Once()
+				Return([]User{}, 0, nil).Once()
 			return userRes, nil
 		},
 		func(svc *organizationUnitService, path string, limit,
@@ -2315,9 +2122,7 @@ func (suite *OrganizationUnitServiceTestSuite) TestOUService_GetOrganizationUnit
 		Return([]User{
 			{ID: "user-1", Type: "employee", Display: "alice@example.com"},
 			{ID: "user-2", Type: "employee", Display: "bob@example.com"},
-		}, nil).Once()
-	userRes.On("GetUserCountByOUID", mock.Anything, "ou-1").
-		Return(4, nil).Once()
+		}, 4, nil).Once()
 
 	service := suite.newServiceWithResolvers(
 		store, newAllowAllAuthz(suite.T()), userRes, nil,
@@ -2576,7 +2381,7 @@ func (suite *OrganizationUnitServiceTestSuite) TestOUService_GetOrganizationUnit
 			},
 			resolverSetup: func(rr *OURoleResolverMock) {
 				rr.On("GetRoleListByOUID", mock.Anything, "ou-1", 5, 0).
-					Return([]Role(nil), errors.New("boom")).Once()
+					Return([]Role(nil), 0, errors.New("boom")).Once()
 			},
 			wantErr: &tidcommon.InternalServerError,
 		},
@@ -2589,13 +2394,14 @@ func (suite *OrganizationUnitServiceTestSuite) TestOUService_GetOrganizationUnit
 			},
 			resolverSetup: func(rr *OURoleResolverMock) {
 				rr.On("GetRoleListByOUID", mock.Anything, "ou-1", 5, 0).
-					Return([]Role{{ID: "r1", Name: "Admin"}}, nil).Once()
-				rr.On("GetRoleCountByOUID", mock.Anything, "ou-1").
-					Return(1, nil).Once()
+					Return([]Role{{ID: "r1", Name: "Admin", IsOwnedByOU: true}, {ID: "r2", Name: "Shared"}}, 2, nil).
+					Once()
 			},
 			assert: func(resp *RoleListResponse) {
-				suite.Require().Equal(1, resp.TotalResults)
+				suite.Require().Equal(2, resp.TotalResults)
 				suite.Require().Equal("Admin", resp.Roles[0].Name)
+				suite.Require().True(resp.Roles[0].IsOwnedByOU)
+				suite.Require().False(resp.Roles[1].IsOwnedByOU, "a role shared with the unit is listed after its own")
 			},
 		},
 	}
@@ -2689,9 +2495,7 @@ func (suite *OrganizationUnitServiceTestSuite) TestOUService_GetOrganizationUnit
 
 		roleRes := new(OURoleResolverMock)
 		roleRes.On("GetRoleListByOUID", mock.Anything, "ou-1", 2, 2).
-			Return([]Role{{ID: "r1", Name: "Admin"}, {ID: "r2", Name: "Editor"}}, nil).Once()
-		roleRes.On("GetRoleCountByOUID", mock.Anything, "ou-1").
-			Return(5, nil).Once()
+			Return([]Role{{ID: "r1", Name: "Admin"}, {ID: "r2", Name: "Editor"}}, 5, nil).Once()
 
 		service := suite.newServiceWithRoleResolver(store, newAllowAllAuthz(suite.T()), roleRes)
 		resp, err := service.GetOrganizationUnitRolesByPath(context.Background(), "plain-llamas-lead", 2, 2)

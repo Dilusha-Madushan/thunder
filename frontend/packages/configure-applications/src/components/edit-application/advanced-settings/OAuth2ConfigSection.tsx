@@ -4,6 +4,7 @@
 import {OAuth2Logo, SettingsCard} from '@thunderid/components';
 import {useThunderID} from '@thunderid/react';
 import {
+  Alert,
   Box,
   Stack,
   Typography,
@@ -28,18 +29,22 @@ import {useTranslation} from 'react-i18next';
 import useValidationReport from '../../../hooks/useValidationReport';
 import type {ApplicationTemplate} from '../../../models/application-templates';
 import type {OAuth2Config} from '../../../models/oauth';
-import {OAuth2ResponseTypes, TokenEndpointAuthMethods} from '../../../models/oauth';
+import {OAuth2GrantTypes, OAuth2ResponseTypes, TokenEndpointAuthMethods} from '../../../models/oauth';
 import {getGrantTypeLabel} from '../../../utils/getGrantTypeLabel';
 import isValidRedirectUriFormat from '../../../utils/isValidRedirectUriFormat';
 import {
   applyGrantTypesChange,
   applyPublicClientChange,
   applyTokenEndpointAuthMethodChange,
+  CIMD_GRANT_TYPES,
   deriveOAuth2Flags,
+  getCimdGrantRestriction,
   getPkceCaption,
   getPublicClientCaption,
   hasUserAccess,
   isGrantItemDisabled,
+  isGrantLockedByIdJag,
+  isIdJagEnabled,
 } from '../../../utils/oauth2Rules';
 import BackchannelLogoutUriField from '../../common/BackchannelLogoutUriField';
 
@@ -276,10 +281,14 @@ export default function OAuth2ConfigSection({
     }
   };
 
+  // A client registered from a metadata document takes its authentication settings from the document,
+  // and the document rules limit its grants.
+  const isCimdClient = oauth2Config.clientIdMetadataDocument === true;
   const discoveredGrantTypes = discovery?.wellKnown?.grant_types_supported ?? [];
-  const availableGrantTypes = allowedGrantTypes
-    ? discoveredGrantTypes.filter((grant) => allowedGrantTypes.includes(grant))
-    : discoveredGrantTypes;
+  const availableGrantTypes = discoveredGrantTypes.filter(
+    (grant) =>
+      (!allowedGrantTypes || allowedGrantTypes.includes(grant)) && (!isCimdClient || CIMD_GRANT_TYPES.includes(grant)),
+  );
   const availableResponseTypes = discovery?.wellKnown?.response_types_supported ?? [];
   const availableTokenEndpointAuthMethods: string[] =
     (discovery as {wellKnown?: OidcDiscovery} | undefined)?.wellKnown?.token_endpoint_auth_methods_supported ?? [];
@@ -290,13 +299,18 @@ export default function OAuth2ConfigSection({
   // Constraint helpers
   const constraint = <K extends keyof OAuth2Config>(field: K) => oauth2Constraints?.[field];
 
-  const isPublicClientLocked = constraint('publicClient')?.readOnly ?? false;
-  const isPkceLocked = constraint('pkceRequired')?.readOnly ?? false;
+  const isPublicClientLocked = isCimdClient || (constraint('publicClient')?.readOnly ?? false);
+  const isPkceLocked = isCimdClient || (constraint('pkceRequired')?.readOnly ?? false);
   const isParLocked = constraint('requirePushedAuthorizationRequests')?.readOnly ?? false;
   const tokenMethodConstraint = constraint('tokenEndpointAuthMethod');
-  const isTokenMethodLocked = tokenMethodConstraint?.readOnly ?? oauth2Config.publicClient === true;
-  const effectiveTokenMethod =
-    tokenMethodConstraint?.value ?? (oauth2Config.publicClient ? 'none' : (oauth2Config.tokenEndpointAuthMethod ?? ''));
+  const isTokenMethodLocked = isCimdClient || (tokenMethodConstraint?.readOnly ?? oauth2Config.publicClient === true);
+  const lockedTooltip = isCimdClient
+    ? t('applications:edit.advanced.lockedByMetadataDocument', "Set by the client's metadata document")
+    : t('applications:edit.advanced.lockedByTemplate', 'Set by template');
+  const effectiveTokenMethod = isCimdClient
+    ? (oauth2Config.tokenEndpointAuthMethod ?? '')
+    : (tokenMethodConstraint?.value ??
+      (oauth2Config.publicClient ? 'none' : (oauth2Config.tokenEndpointAuthMethod ?? '')));
 
   const grantTypes = oauth2Config.grantTypes ?? [];
   const flags = deriveOAuth2Flags(oauth2Config);
@@ -305,8 +319,34 @@ export default function OAuth2ConfigSection({
     isPkceDisabledByGrants,
     isPkceForcedByPublicClient,
     isPublicClientDisabledByGrants,
+    isPublicClientDisabledByIdJag,
     isParDisabledByGrants,
   } = flags;
+  const isPublicClientDisallowed = isPublicClientDisabledByGrants || isPublicClientDisabledByIdJag;
+  const idJagEnabled = isIdJagEnabled(oauth2Config);
+
+  let tokenMethodCaption: string;
+  if (isCimdClient) {
+    tokenMethodCaption = t(
+      'applications:edit.advanced.tokenEndpointAuthMethod.metadataDocumentLockedHint',
+      "Set by the client's metadata document.",
+    );
+  } else if (!isTokenMethodLocked) {
+    tokenMethodCaption = t(
+      'applications:edit.advanced.tokenEndpointAuthMethod.hint',
+      'Defines how the client authenticates at protected endpoints.',
+    );
+  } else if (tokenMethodConstraint?.readOnly) {
+    tokenMethodCaption = t(
+      'applications:edit.advanced.tokenEndpointAuthMethod.templateLockedHint',
+      'Locked by the template configuration.',
+    );
+  } else {
+    tokenMethodCaption = t(
+      'applications:edit.advanced.tokenEndpointAuthMethod.lockedHint',
+      'Locked to "none" because the client is public.',
+    );
+  }
 
   return (
     <SettingsCard
@@ -335,26 +375,55 @@ export default function OAuth2ConfigSection({
               ) : (
                 <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
                   {selected.map((v) => (
-                    <Chip key={v} label={v} size="small" />
+                    <Chip key={v} label={getGrantTypeLabel(v, t)} size="small" />
                   ))}
                 </Stack>
               )
             }
           >
-            {availableGrantTypes.map((grant) => (
-              <MenuItem key={grant} value={grant} disabled={isGrantItemDisabled(grant, grantTypes)}>
-                <Checkbox checked={grantTypes.includes(grant)} size="small" />
-                <ListItemText primary={getGrantTypeLabel(grant, t)} />
-              </MenuItem>
-            ))}
+            {availableGrantTypes.map((grant) => {
+              const cimdRestriction = getCimdGrantRestriction(grant, oauth2Config);
+              let reason: string | undefined;
+              if (isGrantLockedByIdJag(grant, grantTypes, idJagEnabled)) {
+                reason = t(
+                  'applications:edit.advanced.grantTypes.requiredByIdJag',
+                  'Required by identity assertions (ID-JAG)',
+                );
+              } else if (cimdRestriction) {
+                reason = t(...cimdRestriction);
+              }
+              return (
+                <MenuItem
+                  key={grant}
+                  value={grant}
+                  disabled={isGrantItemDisabled(grant, grantTypes, idJagEnabled) || cimdRestriction !== undefined}
+                >
+                  <Checkbox checked={grantTypes.includes(grant)} size="small" />
+                  <ListItemText primary={getGrantTypeLabel(grant, t)} secondary={reason} />
+                </MenuItem>
+              );
+            })}
           </Select>
           <Typography variant="caption" color="text.secondary" sx={{mt: 0.5}}>
-            {t(
-              'applications:edit.advanced.grantTypes.hint',
-              'OAuth 2 flows this {{entity}} can use (e.g., authorization_code, client_credentials, refresh_token).',
-              {entity: 'application'},
-            )}
+            {isCimdClient
+              ? t(
+                  'applications:edit.advanced.grantTypes.metadataDocumentHint',
+                  'Only the grant types a metadata document client can hold are offered. Token exchange and JWT bearer need a document that declares private key JWT authentication, and token exchange comes with identity assertions (ID-JAG).',
+                )
+              : t(
+                  'applications:edit.advanced.grantTypes.hint',
+                  'OAuth 2 flows this {{entity}} can use (e.g., authorization_code, client_credentials, refresh_token).',
+                  {entity: 'application'},
+                )}
           </Typography>
+          {grantTypes.includes(OAuth2GrantTypes.DEVICE_CODE) && (
+            <Alert severity="info" sx={{mt: 1}}>
+              {t(
+                'applications:edit.advanced.grantTypes.deviceGrantFlowHint',
+                'The default Device Grant flow is selected automatically. You can choose a different flow in the Flows tab before saving.',
+              )}
+            </Alert>
+          )}
         </FormControl>
 
         {/* Response Types */}
@@ -458,7 +527,7 @@ export default function OAuth2ConfigSection({
         {showRedirectUris && (
           <FormControl fullWidth>
             <FormLabel htmlFor="post-logout-redirect-uris-section">
-              {t('applications:edit.general.postLogoutRedirectUris.title', 'Post-Logout Redirect URIs')}
+              {t('applications:edit.general.postLogoutRedirectUris.title', 'Post-logout redirect URIs')}
             </FormLabel>
             <Typography variant="caption" color="text.secondary" sx={{display: 'block', mb: 2}}>
               {t(
@@ -528,7 +597,7 @@ export default function OAuth2ConfigSection({
         {/* Token Endpoint Auth Method */}
         <FormControl fullWidth size="small">
           <FormLabel htmlFor="token_endpoint_auth_method">
-            {t('applications:edit.advanced.labels.tokenEndpointAuthMethod', 'Client Authentication Method')}
+            {t('applications:edit.advanced.labels.tokenEndpointAuthMethod', 'Client authentication method')}
           </FormLabel>
           <Select
             id="token_endpoint_auth_method"
@@ -550,27 +619,14 @@ export default function OAuth2ConfigSection({
               <MenuItem
                 key={method}
                 value={method}
-                disabled={method === TokenEndpointAuthMethods.NONE && isPublicClientDisabledByGrants}
+                disabled={method === TokenEndpointAuthMethods.NONE && isPublicClientDisallowed}
               >
                 {method}
               </MenuItem>
             ))}
           </Select>
           <Typography variant="caption" color="text.secondary" sx={{mt: 0.5}}>
-            {isTokenMethodLocked
-              ? tokenMethodConstraint?.readOnly
-                ? t(
-                    'applications:edit.advanced.tokenEndpointAuthMethod.templateLockedHint',
-                    'Locked by the template configuration.',
-                  )
-                : t(
-                    'applications:edit.advanced.tokenEndpointAuthMethod.lockedHint',
-                    'Locked to "none" because the client is public.',
-                  )
-              : t(
-                  'applications:edit.advanced.tokenEndpointAuthMethod.hint',
-                  'Defines how the client authenticates at protected endpoints.',
-                )}
+            {tokenMethodCaption}
           </Typography>
         </FormControl>
 
@@ -623,7 +679,7 @@ export default function OAuth2ConfigSection({
             control={
               <Switch
                 checked={oauth2Config.publicClient ?? false}
-                disabled={!isEditable || isPublicClientLocked || isPublicClientDisabledByGrants}
+                disabled={!isEditable || isPublicClientLocked || isPublicClientDisallowed}
                 onChange={(e) => onOAuth2ConfigChange?.(applyPublicClientChange(oauth2Config, e.target.checked))}
                 inputProps={{'aria-label': t('applications:edit.advanced.labels.publicClient')}}
               />
@@ -632,7 +688,7 @@ export default function OAuth2ConfigSection({
               <Stack direction="row" alignItems="center" spacing={0.5}>
                 <Typography variant="subtitle2">{t('applications:edit.advanced.labels.publicClient')}</Typography>
                 {isPublicClientLocked && (
-                  <Tooltip title={t('applications:edit.advanced.lockedByTemplate', 'Set by template')}>
+                  <Tooltip title={lockedTooltip}>
                     <Lock size={14} />
                   </Tooltip>
                 )}
@@ -659,7 +715,7 @@ export default function OAuth2ConfigSection({
               <Stack direction="row" alignItems="center" spacing={0.5}>
                 <Typography variant="subtitle2">{t('applications:edit.advanced.labels.pkceRequired')}</Typography>
                 {isPkceLocked && (
-                  <Tooltip title={t('applications:edit.advanced.lockedByTemplate', 'Set by template')}>
+                  <Tooltip title={lockedTooltip}>
                     <Lock size={14} />
                   </Tooltip>
                 )}
@@ -682,7 +738,7 @@ export default function OAuth2ConfigSection({
                 inputProps={{
                   'aria-label': t(
                     'applications:edit.advanced.labels.requirePAR',
-                    'Require Pushed Authorization Requests',
+                    'Require pushed authorization requests',
                   ),
                 }}
               />
@@ -690,7 +746,7 @@ export default function OAuth2ConfigSection({
             label={
               <Stack direction="row" alignItems="center" spacing={0.5}>
                 <Typography variant="subtitle2">
-                  {t('applications:edit.advanced.labels.requirePAR', 'Require Pushed Authorization Requests')}
+                  {t('applications:edit.advanced.labels.requirePAR', 'Require pushed authorization requests')}
                 </Typography>
                 {isParLocked && (
                   <Tooltip title={t('applications:edit.advanced.lockedByTemplate', 'Set by template')}>

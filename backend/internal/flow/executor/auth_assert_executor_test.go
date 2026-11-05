@@ -4,6 +4,8 @@
 package executor
 
 import (
+	"encoding/json"
+
 	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 	engineconfig "github.com/thunder-id/thunderid/pkg/thunderidengine/config"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
@@ -30,6 +32,7 @@ import (
 	"github.com/thunder-id/thunderid/tests/mocks/entityprovidermock"
 	"github.com/thunder-id/thunderid/tests/mocks/entitytypemock"
 	"github.com/thunder-id/thunderid/tests/mocks/flow/coremock"
+	"github.com/thunder-id/thunderid/tests/mocks/identitygovernanceprovidermock"
 	"github.com/thunder-id/thunderid/tests/mocks/jose/jwtmock"
 	"github.com/thunder-id/thunderid/tests/mocks/ouprovidermock"
 	"github.com/thunder-id/thunderid/tests/mocks/rolemock"
@@ -80,7 +83,8 @@ func (suite *AuthAssertExecutorTestSuite) SetupTest() {
 
 	suite.executor = newAuthAssertExecutor(suite.mockFlowFactory, suite.mockJWTService,
 		suite.mockOUService, suite.mockAssertGenerator, suite.mockAuthnProvider, suite.mockEntityProvider,
-		suite.mockAttributeCacheSvc, suite.mockRoleService, suite.mockEntityTypeService)
+		suite.mockAttributeCacheSvc, suite.mockRoleService,
+		suite.mockEntityTypeService, newAccessGuard(admitAllAccess(suite.T())))
 }
 
 func createMockExecutorSimple(t *testing.T, name string,
@@ -498,6 +502,8 @@ func (suite *AuthAssertExecutorTestSuite) TestExecute_AssertionGenerationFails_S
 		Application: providers.Application{},
 	}
 
+	// The subject is resolved before the assertion is generated.
+	suite.setupGetEntityReference("", "")
 	suite.mockAssertGenerator.On("GenerateAssertion", mock.Anything, mock.Anything).
 		Return(nil, &tidcommon.ServiceError{
 			Type:  tidcommon.ServerErrorType,
@@ -918,7 +924,7 @@ func (suite *AuthAssertExecutorTestSuite) TestExecute_WithGroups() {
 		{Name: "viewer"},
 	}
 
-	suite.mockEntityProvider.On("GetTransitiveEntityGroups", "user-123").
+	suite.mockEntityProvider.On("GetTransitiveEntityGroups", mock.Anything, "user-123").
 		Return(userGroups, nil)
 	suite.mockJWTService.On("GenerateJWT", mock.Anything, "user-123", mock.Anything, mock.Anything,
 		mock.MatchedBy(func(claims map[string]interface{}) bool {
@@ -958,7 +964,7 @@ func (suite *AuthAssertExecutorTestSuite) TestExecute_WithGroups_EmptyGroups() {
 	suite.setupGetEntityReference("", "")
 	suite.setupGetUserAttributesEmpty()
 
-	suite.mockEntityProvider.On("GetTransitiveEntityGroups", "user-123").
+	suite.mockEntityProvider.On("GetTransitiveEntityGroups", mock.Anything, "user-123").
 		Return([]providers.EntityGroup{}, nil)
 	suite.mockJWTService.On("GenerateJWT", mock.Anything, "user-123", mock.Anything, mock.Anything,
 		mock.MatchedBy(func(claims map[string]interface{}) bool {
@@ -995,7 +1001,7 @@ func (suite *AuthAssertExecutorTestSuite) TestExecute_WithGroups_GetUserGroupsFa
 	suite.setupGetEntityReference("", "")
 	suite.setupGetUserAttributesEmpty()
 
-	suite.mockEntityProvider.On("GetTransitiveEntityGroups", "user-123").Return(
+	suite.mockEntityProvider.On("GetTransitiveEntityGroups", mock.Anything, "user-123").Return(
 		nil, &entityprovider.EntityProviderError{
 			Message: "failed to fetch groups", Description: "database error",
 		})
@@ -1199,6 +1205,35 @@ func (suite *AuthAssertExecutorTestSuite) TestExecute_WithoutConsentedAttributes
 	assert.NoError(suite.T(), err)
 	assert.NotNil(suite.T(), resp)
 	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
+}
+
+func (suite *AuthAssertExecutorTestSuite) TestExecute_CarriesGrantedAuthorizationDetails() {
+	granted := `[{"id":"d-1","type":"payment_initiation","value":{"amount":10}}]`
+	ctx := &providers.NodeContext{
+		ExecutionID:      "flow-123",
+		EntityID:         "app-123",
+		FlowType:         providers.FlowTypeAuthentication,
+		AuthUser:         newTestAuthenticatedAuthUser(),
+		RuntimeData:      map[string]string{common.RuntimeKeyConsentedAuthorizationDetails: granted},
+		ExecutionHistory: map[string]*providers.NodeExecutionRecord{},
+		Application:      providers.Application{},
+	}
+
+	suite.setupGetEntityReference("", "")
+	suite.setupGetUserAttributesEmpty()
+
+	suite.mockJWTService.On("GenerateJWT", mock.Anything, "user-123", mock.Anything, mock.Anything,
+		mock.MatchedBy(func(claims map[string]interface{}) bool {
+			claim, ok := claims[oauth2const.ClaimGrantedAuthorizationDetails].(json.RawMessage)
+			return ok && string(claim) == granted
+		}), mock.Anything, mock.Anything).Return("jwt-token", int64(3600), nil)
+
+	resp, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
+	assert.True(suite.T(), reservedAssertionClaims[oauth2const.ClaimGrantedAuthorizationDetails],
+		"an attribute must not replace the granted details")
 }
 
 // ----- Execute with Attribute Cache TTL in RuntimeData -----
@@ -1449,7 +1484,7 @@ func (suite *AuthAssertExecutorTestSuite) TestResolveUserAttributes_WithGroups()
 		{Name: "developer"},
 	}
 
-	suite.mockEntityProvider.On("GetTransitiveEntityGroups", "user-123").
+	suite.mockEntityProvider.On("GetTransitiveEntityGroups", mock.Anything, "user-123").
 		Return(userGroups, nil)
 
 	attrs, err := suite.executor.resolveUserAttributes(ctx, []string{oauth2const.UserAttributeGroups},
@@ -1470,7 +1505,7 @@ func (suite *AuthAssertExecutorTestSuite) TestResolveUserAttributes_WithGroups_F
 		RuntimeData: map[string]string{},
 	}
 
-	suite.mockEntityProvider.On("GetTransitiveEntityGroups", "user-123").
+	suite.mockEntityProvider.On("GetTransitiveEntityGroups", mock.Anything, "user-123").
 		Return(nil, &entityprovider.EntityProviderError{Message: "groups_fetch_failed", Description: "database error"})
 
 	attrs, err := suite.executor.resolveUserAttributes(ctx, []string{oauth2const.UserAttributeGroups},
@@ -1519,6 +1554,23 @@ func (suite *AuthAssertExecutorTestSuite) TestResolveUserAttributes_StoredProfil
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), "alice@corp.com", attrs["email"])
 	assert.Equal(suite.T(), "https://example.com/alice.png", attrs["picture"])
+}
+
+func (suite *AuthAssertExecutorTestSuite) TestResolveUserAttributes_ExtensionAnswerDoesNotReplaceProfile() {
+	ctx := &providers.NodeContext{
+		ExecutionID: "flow-123",
+		Context:     context.Background(),
+		RuntimeData: map[string]string{
+			"extension.pin_check.email": "mallory@example.com",
+			"extension.pin_check.pin":   "1234",
+		},
+	}
+
+	attrs, err := suite.executor.resolveUserAttributes(ctx, []string{"email", "pin"},
+		map[string]interface{}{"email": "alice@corp.com"}, "user-123", "", "", "")
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), map[string]interface{}{"email": "alice@corp.com"}, attrs)
 }
 
 func (suite *AuthAssertExecutorTestSuite) TestResolveUserAttributes_WithUserType() {
@@ -1750,7 +1802,7 @@ func (suite *AuthAssertExecutorTestSuite) TestExecute_WithAttributeCache_GroupsI
 		{Name: "developer"},
 	}
 
-	suite.mockEntityProvider.On("GetTransitiveEntityGroups", "user-123").
+	suite.mockEntityProvider.On("GetTransitiveEntityGroups", mock.Anything, "user-123").
 		Return(userGroups, nil)
 	suite.mockAttributeCacheSvc.On("CreateAttributeCache", mock.Anything,
 		mock.MatchedBy(func(cache *attributecache.AttributeCache) bool {
@@ -2129,4 +2181,131 @@ func (suite *AuthAssertExecutorTestSuite) TestExecute_AttributeCannotOverwriteSi
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
 	suite.mockJWTService.AssertExpectations(suite.T())
+}
+
+// newGovernedExecutor rebuilds the suite's executor over the governance provider.
+func (suite *AuthAssertExecutorTestSuite) newGovernedExecutor(governance providers.IdentityGovernanceProvider) {
+	suite.executor = newAuthAssertExecutor(suite.mockFlowFactory, suite.mockJWTService,
+		suite.mockOUService, suite.mockAssertGenerator, suite.mockAuthnProvider,
+		suite.mockEntityProvider, suite.mockAttributeCacheSvc, suite.mockRoleService,
+		suite.mockEntityTypeService, newAccessGuard(governance))
+}
+
+// governedAssertionContext is an authenticated assertion node context.
+func governedAssertionContext() *providers.NodeContext {
+	return &providers.NodeContext{
+		ExecutionID: "flow-123",
+		EntityID:    "app-123",
+		Context:     context.Background(),
+		AuthUser:    newTestAuthenticatedAuthUser(),
+		RuntimeData: map[string]string{},
+	}
+}
+
+// expectAssertedUser stubs the entity reference, attributes and JWT for a successful assertion of the
+// test user.
+func (suite *AuthAssertExecutorTestSuite) expectAssertedUser() {
+	suite.mockAuthnProvider.On("GetEntityReference", mock.Anything, mock.Anything).
+		Return(providers.AuthUser{}, &providers.EntityReference{
+			EntityID: testUserID, EntityCategory: "user", EntityType: "Person",
+		}, (*tidcommon.ServiceError)(nil)).Once()
+	suite.setupGetUserAttributesWith(map[string]*providers.AttributeResponse{})
+	suite.mockJWTService.On("GenerateJWT", mock.Anything, testUserID, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything).Return("jwt-token", int64(3600), nil)
+}
+
+// expectHeldUser stubs the entity reference of the test user for an assertion that is refused.
+func (suite *AuthAssertExecutorTestSuite) expectHeldUser() {
+	suite.mockAuthnProvider.On("GetEntityReference", mock.Anything, mock.Anything).
+		Return(providers.AuthUser{}, &providers.EntityReference{
+			EntityID: testUserID, EntityCategory: "user", EntityType: "Person",
+		}, (*tidcommon.ServiceError)(nil))
+}
+
+func (suite *AuthAssertExecutorTestSuite) TestExecute_RecordsAccessGrantedForTheAdmittedSubject() {
+	governance := expectSignIn(suite.T(), testUserID, providers.AccessDecision{Admitted: true}, nil)
+	governance.EXPECT().RecordLogin(mock.Anything, testUserID).Return(nil).Once()
+	suite.newGovernedExecutor(governance)
+	suite.expectAssertedUser()
+
+	resp, err := suite.executor.Execute(governedAssertionContext())
+
+	suite.Require().NoError(err)
+	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
+	governance.AssertExpectations(suite.T())
+}
+
+func (suite *AuthAssertExecutorTestSuite) TestExecute_WithoutGovernanceAsserts() {
+	suite.newGovernedExecutor(nil)
+	suite.expectAssertedUser()
+
+	resp, err := suite.executor.Execute(governedAssertionContext())
+
+	suite.Require().NoError(err)
+	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
+	assert.Equal(suite.T(), "jwt-token", resp.Assertion)
+}
+
+func (suite *AuthAssertExecutorTestSuite) TestExecute_UnreadableAuthorityIsAServerFault() {
+	governance := expectSignIn(suite.T(), testUserID, providers.AccessDecision{}, &tidcommon.InternalServerError)
+	suite.newGovernedExecutor(governance)
+	suite.expectHeldUser()
+
+	_, err := suite.executor.Execute(governedAssertionContext())
+
+	suite.Require().Error(err)
+	governance.AssertNotCalled(suite.T(), "RecordLogin", mock.Anything, mock.Anything)
+}
+
+func (suite *AuthAssertExecutorTestSuite) TestExecute_RefusesAHeldSubjectAndRecordsNothing() {
+	for name, test := range map[string]struct {
+		decision providers.AccessDecision
+		want     string
+	}{
+		"no hold named": {providers.AccessDecision{}, ErrInvalidCredentials.Code},
+		"lock":          {providers.AccessDecision{Reason: providers.AccessRefusalReasonLocked}, ErrAccountLocked.Code},
+		"suspension": {providers.AccessDecision{Reason: providers.AccessRefusalReasonSuspended},
+			ErrAccountSuspended.Code},
+	} {
+		suite.Run(name, func() {
+			suite.SetupTest()
+			governance := expectSignIn(suite.T(), testUserID, test.decision, nil)
+			suite.newGovernedExecutor(governance)
+			suite.expectHeldUser()
+
+			resp, err := suite.executor.Execute(governedAssertionContext())
+
+			suite.Require().NoError(err)
+			assert.Equal(suite.T(), providers.ExecFailure, resp.Status)
+			assert.Equal(suite.T(), test.want, resp.Error.Code)
+			governance.AssertNotCalled(suite.T(), "RecordLogin", mock.Anything, mock.Anything)
+		})
+	}
+}
+
+// The assertion is never signed for an entity the governance provider was not asked about.
+func (suite *AuthAssertExecutorTestSuite) TestExecute_UnresolvedEntityReferenceIsAFault() {
+	for name, test := range map[string]struct {
+		entityRef *providers.EntityReference
+		svcErr    *tidcommon.ServiceError
+	}{
+		"server error":  {nil, &tidcommon.InternalServerError},
+		"nil reference": {nil, nil},
+	} {
+		suite.Run(name, func() {
+			suite.SetupTest()
+			governance := identitygovernanceprovidermock.NewIdentityGovernanceProviderMock(suite.T())
+			suite.newGovernedExecutor(governance)
+			suite.mockAuthnProvider.On("GetEntityReference", mock.Anything, mock.Anything).
+				Return(providers.AuthUser{}, test.entityRef, test.svcErr).Once()
+
+			resp, err := suite.executor.Execute(governedAssertionContext())
+
+			suite.Require().Error(err)
+			assert.Nil(suite.T(), resp)
+			governance.AssertNotCalled(suite.T(), "AdmitSignIn", mock.Anything, mock.Anything)
+			suite.mockJWTService.AssertNotCalled(suite.T(), "GenerateJWT", mock.Anything, mock.Anything,
+				mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		})
+	}
 }

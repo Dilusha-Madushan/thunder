@@ -4,6 +4,7 @@
 package importer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -15,23 +16,25 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/thunder-id/thunderid/internal/system/config"
+	"github.com/thunder-id/thunderid/internal/system/log"
 )
 
 var fileStoreDirectoryByResourceType = map[string]string{
-	resourceTypeApplication:      "applications",
-	resourceTypeConnection:       "connections",
-	resourceTypeFlow:             "flows",
-	resourceTypeOrganizationUnit: "organization_units",
-	resourceTypeEntityType:       "user_types",
-	resourceTypeRole:             "roles",
-	resourceTypeResourceServer:   "resource_servers",
-	resourceTypeTheme:            "themes",
-	resourceTypeLayout:           "layouts",
-	resourceTypeUser:             "users",
-	resourceTypeTranslation:      "translations",
+	resourceTypeApplication:             "applications",
+	resourceTypeConnection:              "connections",
+	resourceTypeFlow:                    "flows",
+	resourceTypeOrganizationUnit:        "organization_units",
+	resourceTypeEntityType:              "user_types",
+	resourceTypeRole:                    "roles",
+	resourceTypeResourceServer:          "resource_servers",
+	resourceTypeAuthorizationDetailType: "authorization_detail_types",
+	resourceTypeTheme:                   "themes",
+	resourceTypeLayout:                  "layouts",
+	resourceTypeUser:                    "users",
+	resourceTypeTranslation:             "translations",
 }
 
-func deleteFileBackedResource(resourceType, resourceKey string) (string, *tidcommon.ServiceError) {
+func deleteFileBackedResource(ctx context.Context, resourceType, resourceKey string) (string, *tidcommon.ServiceError) {
 	directory, ok := fileStoreDirectoryByResourceType[resourceType]
 	if !ok {
 		return "", tidcommon.CustomServiceError(
@@ -45,8 +48,8 @@ func deleteFileBackedResource(resourceType, resourceKey string) (string, *tidcom
 
 	serverHome, err := getThunderHome()
 	if err != nil {
-		return "", tidcommon.CustomServiceError(tidcommon.InternalServerError,
-			tidcommon.I18nMessage{Key: "error.import.dynamic", DefaultValue: err.Error()})
+		log.GetLogger().Error(ctx, "Failed to resolve the server home", log.Error(err))
+		return "", &tidcommon.InternalServerError
 	}
 
 	targetDir := filepath.Join(serverHome, "config", "resources", directory)
@@ -58,8 +61,8 @@ func deleteFileBackedResource(resourceType, resourceKey string) (string, *tidcom
 					Key: "error.import.delete.dirNotFound", DefaultValue: "resource directory not found",
 				})
 		}
-		return "", tidcommon.CustomServiceError(tidcommon.InternalServerError,
-			tidcommon.I18nMessage{Key: "error.import.dynamic", DefaultValue: readErr.Error()})
+		log.GetLogger().Error(ctx, "Failed to read the resource directory", log.Error(readErr))
+		return "", &tidcommon.InternalServerError
 	}
 
 	for _, entry := range entries {
@@ -75,16 +78,16 @@ func deleteFileBackedResource(resourceType, resourceKey string) (string, *tidcom
 		filePath := filepath.Join(targetDir, entry.Name())
 		matches, matchErr := fileMatchesResourceKey(filePath, resourceType, resourceKey)
 		if matchErr != nil {
-			return "", tidcommon.CustomServiceError(tidcommon.InternalServerError,
-				tidcommon.I18nMessage{Key: "error.import.dynamic", DefaultValue: matchErr.Error()})
+			log.GetLogger().Error(ctx, "Failed to read a resource file", log.Error(matchErr))
+			return "", &tidcommon.InternalServerError
 		}
 		if !matches {
 			continue
 		}
 
 		if removeErr := os.Remove(filePath); removeErr != nil {
-			return "", tidcommon.CustomServiceError(tidcommon.InternalServerError,
-				tidcommon.I18nMessage{Key: "error.import.dynamic", DefaultValue: removeErr.Error()})
+			log.GetLogger().Error(ctx, "Failed to remove a resource file", log.Error(removeErr))
+			return "", &tidcommon.InternalServerError
 		}
 		return entry.Name(), nil
 	}

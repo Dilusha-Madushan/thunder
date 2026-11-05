@@ -60,7 +60,7 @@ export default function AvatarPicker({value, onChange}: AvatarPickerProps): JSX.
   const isBlank: boolean = value.variant === 'blank';
   const isLetterVariant: boolean = value.variant === 'one_letter' || value.variant === 'two_letter';
   const contentTypeLabel: string = isLetterVariant
-    ? t('avatar_picker.content_type.text_avatar', 'Text Avatar')
+    ? t('avatar_picker.content_type.text_avatar', 'Text avatar')
     : t('avatar_picker.content_type.avatar', 'Avatar');
 
   const handleSeedChange = useCallback(
@@ -197,9 +197,11 @@ export default function AvatarPicker({value, onChange}: AvatarPickerProps): JSX.
         <>
           {!isBlank && (
             <TextField
+              labelPlacement="top"
+              label={t('avatar_picker.seed_text.label', 'Seed text')}
               fullWidth
               size="small"
-              label={t('avatar_picker.seed_text.label', 'Seed text')}
+              id="avatar-picker-seed-text"
               placeholder={t('avatar_picker.seed_text.placeholder', 'e.g. your app name')}
               value={seedText}
               onChange={(e) => handleSeedChange(e.target.value)}

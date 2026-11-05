@@ -18,9 +18,7 @@ vi.mock('@thunderid/i18n', () => ({
   useGetTranslations: () => mockUseGetTranslations(),
 }));
 
-vi.mock('@thunderid/design', () => ({
-  DefaultTheme: {colorSchemes: {light: {palette: {primary: {main: '#3688ff'}}}}},
-}));
+vi.mock('@thunderid/design', () => ({}));
 
 function setTranslations(notification: Record<string, string> = {}, isSuccess = true): void {
   mockUseGetTranslations.mockReturnValue({data: {translations: {notification}}, isSuccess});
@@ -61,10 +59,24 @@ describe('NotificationTemplatePreview', () => {
 
   it('resolves {{design(key)}} against the theme in the email body', () => {
     render(
-      <NotificationTemplatePreview channel="email" body="<p>{{design(palette.primary.main)}}</p>" locale="en-US" />,
+      <NotificationTemplatePreview
+        channel="email"
+        body="<p>{{design(palette.primary.main)}}</p>"
+        locale="en-US"
+        theme={{colorSchemes: {light: {palette: {primary: {main: '#3688ff'}}}}}}
+        colorScheme="light"
+      />,
     );
 
     expect(emailSrcDoc()).toContain('#3688ff');
+  });
+
+  it('strips {{design(key)}} to empty when no theme is selected (matches delivery)', () => {
+    render(
+      <NotificationTemplatePreview channel="email" body="<p>x{{design(palette.primary.main)}}y</p>" locale="en-US" />,
+    );
+
+    expect(emailSrcDoc()).toContain('<p>xy</p>');
   });
 
   it('shows no warnings for supported, resolvable tokens', () => {

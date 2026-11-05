@@ -157,6 +157,30 @@ export const CRITERIA_REVOCATION_MODES = [
 ] as const;
 
 /**
+ * Identity Governance executor operations, matching its backend SupportedModes. `image` is the node icon.
+ */
+export const IDENTITY_GOVERNANCE_MODES = [
+  {
+    value: 'suspend',
+    translationKey: 'flows:core.executions.identityGovernance.mode.suspend',
+    displayLabel: 'Suspend Identity',
+    image: 'ShieldBan',
+  },
+  {
+    value: 'unsuspend',
+    translationKey: 'flows:core.executions.identityGovernance.mode.unsuspend',
+    displayLabel: 'Unsuspend Identity',
+    image: 'ShieldCheck',
+  },
+  {
+    value: 'unlock',
+    translationKey: 'flows:core.executions.identityGovernance.mode.unlock',
+    displayLabel: 'Unlock Identity',
+    image: 'LockKeyholeOpen',
+  },
+] as const;
+
+/**
  * Available modes for Passkey executor.
  */
 export const PASSKEY_MODES = [
@@ -196,15 +220,6 @@ export const OU_RESOLVE_FROM_OPTIONS = [
 ] as const;
 
 /**
- * Entity categories a mode-driven executor can work on. The value is the category name the backend
- * reads from the node's `mode` property.
- */
-export const ENTITY_MODE_OPTIONS = [
-  {value: 'user', translationKey: 'flows:core.executions.entityMode.user'},
-  {value: 'agent', translationKey: 'flows:core.executions.entityMode.agent'},
-] as const;
-
-/**
  * Available HTTP methods for HTTP Request executor.
  */
 export const HTTP_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] as const;
@@ -226,6 +241,8 @@ export const INPUT_TYPES = [
   {value: 'PHONE_INPUT', translationKey: 'flows:core.executions.inputs.types.phone'},
   {value: 'CONSENT_INPUT', translationKey: 'flows:core.executions.inputs.types.consent'},
   {value: 'SELECT', translationKey: 'flows:core.executions.inputs.types.select'},
+  {value: 'BOOLEAN_INPUT', translationKey: 'flows:core.executions.inputs.types.boolean'},
+  {value: 'USER_SELECT', translationKey: 'flows:core.executions.inputs.types.userSelect'},
 ] as const;
 
 /**
@@ -247,4 +264,7 @@ export const EXECUTORS_WITH_FIXED_INPUTS = new Set<string>([
   ExecutionTypes.AccessChangeValidator,
   ExecutionTypes.RoleExecutor,
   ExecutionTypes.GroupExecutor,
+  ExecutionTypes.PreSuspend,
+  ExecutionTypes.IdentityGovernance,
+  ExecutionTypes.ExtensionExecutor,
 ]);

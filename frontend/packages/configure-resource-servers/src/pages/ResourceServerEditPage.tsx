@@ -1,7 +1,13 @@
 // Copyright 2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import {PageLoadingAnimation, QueryErrorNotice, SettingsCard, UnsavedChangesBar} from '@thunderid/components';
+import {
+  DocumentTitle,
+  PageLoadingAnimation,
+  QueryErrorNotice,
+  SettingsCard,
+  UnsavedChangesBar,
+} from '@thunderid/components';
 import {useToast} from '@thunderid/contexts';
 import {useLogger} from '@thunderid/logger/react';
 import {getErrorMessage, isEqualIgnoringEmpty} from '@thunderid/utils';
@@ -34,6 +40,7 @@ import SetDefaultResourceServerDialog from '../components/SetDefaultResourceServ
 import {getResourceServerTypeLabel} from '../config/resource-server-types';
 import useResourceServerRoutes from '../hooks/useResourceServerRoutes';
 import {AuthorizationEngines, isDefaultEligibleType, type AuthorizationEngine} from '../models/resource-server';
+import {isValidMcpServerIdentifier} from '../utils/isValidMcpServerIdentifier';
 
 interface EditedFields {
   name: string;
@@ -124,6 +131,15 @@ export default function ResourceServerEditPage(): JSX.Element {
     );
   }, [editedFields, resourceServer]);
 
+  // An MCP identifier must be an http or https URL. Like the backend, only check a value the user changed,
+  // so a saved identifier from before the rule keeps the server editable.
+  const editedIdentifier = editedFields.identifier?.trim() ?? '';
+  const isIdentifierInvalid =
+    resourceServer?.type === 'MCP' &&
+    editedIdentifier.length > 0 &&
+    editedIdentifier !== (resourceServer.identifier ?? '').trim() &&
+    !isValidMcpServerIdentifier(editedIdentifier);
+
   const handleSave = (): void => {
     if (!resourceServer) return;
 
@@ -174,13 +190,21 @@ export default function ResourceServerEditPage(): JSX.Element {
 
   const listUrl = routes.list();
 
+  const resourceTypeTitle = t('resourceServers:listing.title', 'Resource servers');
+
   if (isLoading) {
-    return <PageLoadingAnimation />;
+    return (
+      <>
+        <DocumentTitle title={resourceTypeTitle} />
+        <PageLoadingAnimation />
+      </>
+    );
   }
 
   if (error) {
     return (
       <PageContent>
+        <DocumentTitle title={resourceTypeTitle} />
         <QueryErrorNotice
           error={error}
           t={tForErrors}
@@ -209,6 +233,7 @@ export default function ResourceServerEditPage(): JSX.Element {
   if (!resourceServer) {
     return (
       <PageContent>
+        <DocumentTitle title={resourceTypeTitle} />
         <Alert severity="warning" sx={{mb: 2}}>
           {t('resourceServers:edit.notFound', 'Resource server not found.')}
         </Alert>
@@ -241,6 +266,7 @@ export default function ResourceServerEditPage(): JSX.Element {
 
   return (
     <PageContent>
+      <DocumentTitle title={resourceServer.name} />
       {resourceServer.isReadOnly && (
         <Alert severity="info" sx={{mb: 2}}>
           {t('common:messages.readOnlyResource', 'This resource is read-only and cannot be modified.')}
@@ -422,6 +448,7 @@ export default function ResourceServerEditPage(): JSX.Element {
           pdpConnectionId={
             editedFields.pdpConnectionId ?? resourceServer.authorizationEngine?.properties?.pdpConnectionId ?? ''
           }
+          isIdentifierInvalid={isIdentifierInvalid}
           onIdentifierChange={(v) => handleFieldChange('identifier', v)}
           onAuthorizationEngineChange={(v) => handleFieldChange('authorizationEngine', v)}
           onPDPConnectionChange={(v) => handleFieldChange('pdpConnectionId', v)}
@@ -429,7 +456,7 @@ export default function ResourceServerEditPage(): JSX.Element {
 
         {!resourceServer.isReadOnly && (
           <SettingsCard
-            title={t('resourceServers:edit.dangerZone.title', 'Danger Zone')}
+            title={t('resourceServers:edit.dangerZone.title', 'Danger zone')}
             description={
               resourceServer.type === 'MCP'
                 ? t('resourceServers:edit.dangerZone.descriptionMcp', 'Irreversible actions for this MCP server.')
@@ -482,7 +509,7 @@ export default function ResourceServerEditPage(): JSX.Element {
           saveLabel={t('common:save', 'Save')}
           savingLabel={t('common:saving', 'Saving…')}
           isSaving={updateRs.isPending}
-          saveDisabled={resourceServer.isReadOnly}
+          saveDisabled={Boolean(resourceServer.isReadOnly) || isIdentifierInvalid}
           error={
             updateRs.error
               ? getErrorMessage(updateRs.error, tForErrors, 'edit.saveError', 'Failed to save changes.')

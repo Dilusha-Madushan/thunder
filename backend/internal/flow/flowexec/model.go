@@ -32,6 +32,7 @@ type frame struct {
 	forwardedData       map[string]interface{}
 	additionalData      map[string]string
 	resumeCallNodeID    string
+	ssoFlowVersion      int
 }
 
 // EngineContext holds the overall context used by the flow engine during execution.
@@ -126,6 +127,7 @@ func (e *EngineContext) pushFrame(resumeCallNodeID string) {
 		forwardedData:       e.ForwardedData,
 		additionalData:      e.AdditionalData,
 		resumeCallNodeID:    resumeCallNodeID,
+		ssoFlowVersion:      e.SSOFlowVersion,
 	}
 	e.frameStack = append(e.frameStack, f)
 }
@@ -148,6 +150,7 @@ func (e *EngineContext) popFrame() *frame {
 	e.RuntimeData = top.runtimeData
 	e.ForwardedData = top.forwardedData
 	e.AdditionalData = top.additionalData
+	e.SSOFlowVersion = top.ssoFlowVersion
 	e.clearPausedPromptInputs()
 	return top
 }
@@ -249,6 +252,10 @@ type FlowStep struct {
 	// after this step terminated the session (sign-out). Empty when nothing was cleared. Not part of
 	// the JSON response body.
 	SSOClearFlowID string
+	// SessionData and ClearedSessions are the SSO sessions this step started and ended, in the shape the
+	// response body returns them to a caller that holds its handles itself.
+	SessionData     []IssuedSessionData
+	ClearedSessions []string
 }
 
 // FlowData holds the data returned by a flow execution step
@@ -272,6 +279,24 @@ type FlowResponse struct {
 	Assertion      string                  `json:"assertion,omitempty"`
 	ErrorAssertion string                  `json:"errorAssertion,omitempty"`
 	Error          *apierror.ErrorResponse `json:"error,omitempty"`
+	// SessionData lists the SSO sessions this step started, in the shape the request carries them.
+	SessionData []IssuedSessionData `json:"sessionData,omitempty"`
+	// ClearedSessions lists the flow identifiers whose SSO session this step ended, for the caller to drop.
+	ClearedSessions []string `json:"clearedSessions,omitempty"`
+}
+
+// SessionData is one SSO session handle a caller holds, keyed by the identifier of the flow it belongs
+// to, as a browser holds it in a per-flow cookie.
+type SessionData struct {
+	FlowIdentifier string `json:"flowIdentifier"`
+	SessionHandle  string `json:"sessionHandle"`
+}
+
+// IssuedSessionData is the SSO session a step started, with how long its handle stays usable, as the
+// per-flow cookie's Max-Age says.
+type IssuedSessionData struct {
+	SessionData
+	ExpiresIn int64 `json:"expiresIn"`
 }
 
 // FlowRequest represents the flow execution API request body
@@ -284,6 +309,7 @@ type FlowRequest struct {
 	ChallengeToken string            `json:"challengeToken,omitempty"`
 	Action         string            `json:"action"`
 	Inputs         map[string]string `json:"inputs"`
+	SessionData    []SessionData     `json:"sessionData,omitempty"`
 }
 
 // FlowInitContext represents the context for initiating a new flow with runtime data

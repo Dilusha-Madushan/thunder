@@ -19,6 +19,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/sharing"
 	serverconst "github.com/thunder-id/thunderid/internal/system/constants"
 	"github.com/thunder-id/thunderid/internal/system/error/apierror"
+	"github.com/thunder-id/thunderid/internal/system/filter"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	sysutils "github.com/thunder-id/thunderid/internal/system/utils"
 )
@@ -57,10 +58,13 @@ func (ah *applicationHandler) HandleApplicationPostRequest(w http.ResponseWriter
 
 	appDTO := model.ApplicationDTO{
 		OUID:        appRequest.OUID,
+		ProjectID:   appRequest.ProjectID,
 		Name:        appRequest.Name,
 		Description: appRequest.Description,
 		InboundAuthProfile: providers.InboundAuthProfile{
 			AuthFlowID:                appRequest.AuthFlowID,
+			DeviceGrantFlowHandle:     appRequest.DeviceGrantFlowHandle,
+			DeviceGrantFlowID:         appRequest.DeviceGrantFlowID,
 			RegistrationFlowID:        appRequest.RegistrationFlowID,
 			IsRegistrationFlowEnabled: appRequest.IsRegistrationFlowEnabled,
 			RecoveryFlowID:            appRequest.RecoveryFlowID,
@@ -94,37 +98,7 @@ func (ah *applicationHandler) HandleApplicationPostRequest(w http.ResponseWriter
 		return
 	}
 
-	returnApp := model.ApplicationCompleteResponse{
-		ID:          createdAppDTO.ID,
-		OUID:        createdAppDTO.OUID,
-		Name:        createdAppDTO.Name,
-		Description: createdAppDTO.Description,
-		InboundAuthProfileReq: inboundmodel.InboundAuthProfileReq{
-			AuthFlowID:                createdAppDTO.AuthFlowID,
-			RegistrationFlowID:        createdAppDTO.RegistrationFlowID,
-			IsRegistrationFlowEnabled: createdAppDTO.IsRegistrationFlowEnabled,
-			RecoveryFlowID:            createdAppDTO.RecoveryFlowID,
-			IsRecoveryFlowEnabled:     createdAppDTO.IsRecoveryFlowEnabled,
-			SignOutFlowID:             createdAppDTO.SignOutFlowID,
-			ThemeID:                   createdAppDTO.ThemeID,
-			LayoutID:                  createdAppDTO.LayoutID,
-			Assertion:                 createdAppDTO.Assertion,
-			LoginConsent:              createdAppDTO.LoginConsent,
-			AllowedUserTypes:          createdAppDTO.AllowedUserTypes,
-			AllowedAgentTypes:         createdAppDTO.AllowedAgentTypes,
-			PasskeyAllowedOrigins:     createdAppDTO.PasskeyAllowedOrigins,
-			Attestation:               createdAppDTO.Attestation,
-		},
-		Type:       createdAppDTO.Type,
-		Template:   createdAppDTO.Template,
-		FlowSecret: createdAppDTO.FlowSecret,
-		URL:        createdAppDTO.URL,
-		LogoURL:    createdAppDTO.LogoURL,
-		TosURI:     createdAppDTO.TosURI,
-		PolicyURI:  createdAppDTO.PolicyURI,
-		Contacts:   createdAppDTO.Contacts,
-		Metadata:   createdAppDTO.Metadata,
-	}
+	returnApp := applicationCompleteResponseFromDTO(createdAppDTO, true)
 
 	// TODO: Need to refactor when supporting other/multiple inbound auth types.
 	if len(createdAppDTO.InboundAuthConfig) > 0 {
@@ -146,7 +120,20 @@ func (ah *applicationHandler) HandleApplicationPostRequest(w http.ResponseWriter
 // HandleApplicationListRequest handles the application request.
 func (ah *applicationHandler) HandleApplicationListRequest(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	listResponse, svcErr := ah.service.GetApplicationList(ctx)
+	query := r.URL.Query()
+	filters, err := filter.ParseEqualityFilterParam(query)
+	if err != nil {
+		ah.handleError(ctx, w, r, &ErrorInvalidFilter)
+		return
+	}
+
+	var listResponse *model.ApplicationListResponse
+	var svcErr *tidcommon.ServiceError
+	if query.Has(projectIDQueryParam) {
+		listResponse, svcErr = ah.service.GetApplicationListByProject(ctx, query.Get(projectIDQueryParam), filters)
+	} else {
+		listResponse, svcErr = ah.service.GetApplicationList(ctx, filters)
+	}
 	if svcErr != nil {
 		ah.handleError(ctx, w, r, svcErr)
 		return
@@ -196,6 +183,7 @@ func toApplicationGetResponse(ctx context.Context, appDTO *providers.Application
 		Description: appDTO.Description,
 		InboundAuthProfileReq: inboundmodel.InboundAuthProfileReq{
 			AuthFlowID:                appDTO.AuthFlowID,
+			DeviceGrantFlowID:         appDTO.DeviceGrantFlowID,
 			RegistrationFlowID:        appDTO.RegistrationFlowID,
 			IsRegistrationFlowEnabled: appDTO.IsRegistrationFlowEnabled,
 			RecoveryFlowID:            appDTO.RecoveryFlowID,
@@ -210,6 +198,7 @@ func toApplicationGetResponse(ctx context.Context, appDTO *providers.Application
 			PasskeyAllowedOrigins:     appDTO.PasskeyAllowedOrigins,
 			Attestation:               appDTO.Attestation,
 		},
+		Status:    appDTO.Status,
 		Type:      model.ApplicationType(appDTO.Type),
 		Template:  appDTO.Template,
 		URL:       appDTO.URL,
@@ -321,10 +310,13 @@ func (ah *applicationHandler) HandleApplicationPutRequest(w http.ResponseWriter,
 	updateReqAppDTO := model.ApplicationDTO{
 		ID:          id,
 		OUID:        appRequest.OUID,
+		ProjectID:   appRequest.ProjectID,
 		Name:        appRequest.Name,
 		Description: appRequest.Description,
 		InboundAuthProfile: providers.InboundAuthProfile{
 			AuthFlowID:                appRequest.AuthFlowID,
+			DeviceGrantFlowHandle:     appRequest.DeviceGrantFlowHandle,
+			DeviceGrantFlowID:         appRequest.DeviceGrantFlowID,
 			RegistrationFlowID:        appRequest.RegistrationFlowID,
 			IsRegistrationFlowEnabled: appRequest.IsRegistrationFlowEnabled,
 			RecoveryFlowID:            appRequest.RecoveryFlowID,
@@ -358,36 +350,7 @@ func (ah *applicationHandler) HandleApplicationPutRequest(w http.ResponseWriter,
 		return
 	}
 
-	returnApp := model.ApplicationCompleteResponse{
-		ID:          updatedAppDTO.ID,
-		OUID:        updatedAppDTO.OUID,
-		Name:        updatedAppDTO.Name,
-		Description: updatedAppDTO.Description,
-		InboundAuthProfileReq: inboundmodel.InboundAuthProfileReq{
-			AuthFlowID:                updatedAppDTO.AuthFlowID,
-			RegistrationFlowID:        updatedAppDTO.RegistrationFlowID,
-			IsRegistrationFlowEnabled: updatedAppDTO.IsRegistrationFlowEnabled,
-			RecoveryFlowID:            updatedAppDTO.RecoveryFlowID,
-			IsRecoveryFlowEnabled:     updatedAppDTO.IsRecoveryFlowEnabled,
-			SignOutFlowID:             updatedAppDTO.SignOutFlowID,
-			ThemeID:                   updatedAppDTO.ThemeID,
-			LayoutID:                  updatedAppDTO.LayoutID,
-			Assertion:                 updatedAppDTO.Assertion,
-			LoginConsent:              updatedAppDTO.LoginConsent,
-			AllowedUserTypes:          updatedAppDTO.AllowedUserTypes,
-			AllowedAgentTypes:         updatedAppDTO.AllowedAgentTypes,
-			PasskeyAllowedOrigins:     updatedAppDTO.PasskeyAllowedOrigins,
-			Attestation:               updatedAppDTO.Attestation,
-		},
-		Type:      updatedAppDTO.Type,
-		Template:  updatedAppDTO.Template,
-		URL:       updatedAppDTO.URL,
-		LogoURL:   updatedAppDTO.LogoURL,
-		TosURI:    updatedAppDTO.TosURI,
-		PolicyURI: updatedAppDTO.PolicyURI,
-		Contacts:  updatedAppDTO.Contacts,
-		Metadata:  updatedAppDTO.Metadata,
-	}
+	returnApp := applicationCompleteResponseFromDTO(updatedAppDTO, false)
 
 	// TODO: Need to refactor when supporting other/multiple inbound auth types.
 	if len(updatedAppDTO.InboundAuthConfig) > 0 {
@@ -578,71 +541,19 @@ func (ah *applicationHandler) processInboundAuthConfigFromRequest(
 	return inboundAuthConfigDTOs
 }
 
-// toFrameworkSharingRequest turns the wire shape into the one the framework takes. The framework is
-// what validates it, so a mode or a reach the schema does not list is carried across as it was sent
-// and refused there.
-func toFrameworkSharingRequest(p model.SharingPolicyUpdateRequest) sharing.PolicyRequest {
-	req := sharing.PolicyRequest{Version: p.Version}
-	if p.AllUnits != nil {
-		req.AllUnits = &sharing.AllUnitsRequest{ExcludedOUIDs: p.AllUnits.ExcludedOUIDs}
-	}
-	if c := p.ChildUnits; c != nil {
-		req.ChildUnits = &sharing.ChildUnitsRequest{
-			Mode:          sharing.ChildUnitsMode(c.Mode),
-			ExcludedOUIDs: c.ExcludedOUIDs,
-		}
-		for _, u := range c.Units {
-			req.ChildUnits.Units = append(req.ChildUnits.Units, sharing.ChildUnitRequest{
-				OUID:  u.OUID,
-				Reach: sharing.UnitReach(u.Reach),
-			})
-		}
-	}
-	if t := p.OtherTreeRoots; t != nil {
-		req.OtherTreeRoots = &sharing.OtherTreeRootsRequest{
-			Mode:          sharing.OtherTreeRootsMode(t.Mode),
-			ExcludedOUIDs: t.ExcludedOUIDs,
-		}
-		for _, u := range t.Units {
-			req.OtherTreeRoots.Units = append(req.OtherTreeRoots.Units, sharing.RootUnitRequest{OUID: u.OUID})
-		}
-	}
-	return req
-}
-
-// decodeSharingBody reads a policy request body through the shared strict decoder, which refuses a
-// field the body does not declare: a misspelled excludedOuIds would otherwise read as a section with
-// no exclusions and share the application with the organization unit the caller named to keep it
-// from. It answers the malformed body itself.
-func decodeSharingBody[T any](ctx context.Context, w http.ResponseWriter, r *http.Request) (*T, bool) {
-	wire, err := sysutils.DecodeJSONBodyStrict[T](r)
-	if err != nil {
-		errResp := apierror.ErrorResponse{
-			Code:        ErrorInvalidRequestFormat.Code,
-			Message:     ErrorInvalidRequestFormat.Error,
-			Description: ErrorInvalidRequestFormat.ErrorDescription,
-		}
-		sysutils.WriteErrorResponse(ctx, w, http.StatusBadRequest, errResp)
-		return nil, false
-	}
-	return wire, true
-}
-
 // HandleSharingPolicyPostRequest records a sharing policy on an application.
 func (ah *applicationHandler) HandleSharingPolicyPostRequest(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	wire, ok := decodeSharingBody[model.SharingPolicyRequest](ctx, w, r)
+	wire, ok := sharing.DecodePolicyBody[sharing.PolicyCreateBody](ctx, w, r, ErrorInvalidRequestFormat)
 	if !ok {
 		return
 	}
-	req := toFrameworkSharingRequest(wire.SharingPolicyUpdateRequest)
-	req.InitiatingOUID = wire.InitiatingOUID
+	req := wire.ToPolicyRequest()
 	// A reach not bounded by where the issuer sits is a deployment decision, so this API leaves it
 	// to a resource file or an import. An edit may still restate such a section to move its
 	// exclusions, and the framework refuses any edit that would introduce one.
-	if req.AllUnits != nil ||
-		(req.OtherTreeRoots != nil && req.OtherTreeRoots.Mode == sharing.OtherTreeRootsAll) {
+	if req.IsDeploymentWide() {
 		errResp := apierror.ErrorResponse{
 			Code:        ErrorDeploymentWideSharingNotAllowed.Code,
 			Message:     ErrorDeploymentWideSharingNotAllowed.Error,
@@ -697,13 +608,13 @@ func (ah *applicationHandler) HandleSharingPolicyGetRequest(w http.ResponseWrite
 func (ah *applicationHandler) HandleSharingPolicyPutRequest(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	wire, ok := decodeSharingBody[model.SharingPolicyUpdateRequest](ctx, w, r)
+	wire, ok := sharing.DecodePolicyBody[sharing.PolicyUpdateBody](ctx, w, r, ErrorInvalidRequestFormat)
 	if !ok {
 		return
 	}
 
 	policy, svcErr := ah.service.UpdateSharingPolicy(
-		ctx, r.PathValue("id"), r.PathValue("policyId"), toFrameworkSharingRequest(*wire))
+		ctx, r.PathValue("id"), r.PathValue("policyId"), wire.ToPolicyRequest())
 	if svcErr != nil {
 		ah.handleError(ctx, w, r, svcErr)
 		return
@@ -760,4 +671,45 @@ func parsePaginationParams(query url.Values) (int, int, *tidcommon.ServiceError)
 		limit = serverconst.DefaultPageSize
 	}
 	return limit, offset, nil
+}
+
+func applicationCompleteResponseFromDTO(
+	dto *model.ApplicationDTO, includeFlowSecret bool,
+) model.ApplicationCompleteResponse {
+	response := model.ApplicationCompleteResponse{
+		ID:          dto.ID,
+		OUID:        dto.OUID,
+		Name:        dto.Name,
+		Description: dto.Description,
+		InboundAuthProfileReq: inboundmodel.InboundAuthProfileReq{
+			AuthFlowID:                dto.AuthFlowID,
+			DeviceGrantFlowID:         dto.DeviceGrantFlowID,
+			RegistrationFlowID:        dto.RegistrationFlowID,
+			IsRegistrationFlowEnabled: dto.IsRegistrationFlowEnabled,
+			RecoveryFlowID:            dto.RecoveryFlowID,
+			IsRecoveryFlowEnabled:     dto.IsRecoveryFlowEnabled,
+			SignOutFlowID:             dto.SignOutFlowID,
+			ThemeID:                   dto.ThemeID,
+			LayoutID:                  dto.LayoutID,
+			Assertion:                 dto.Assertion,
+			LoginConsent:              dto.LoginConsent,
+			AllowedUserTypes:          dto.AllowedUserTypes,
+			AllowedAgentTypes:         dto.AllowedAgentTypes,
+			PasskeyAllowedOrigins:     dto.PasskeyAllowedOrigins,
+			Attestation:               dto.Attestation,
+		},
+		Type:      dto.Type,
+		Template:  dto.Template,
+		URL:       dto.URL,
+		LogoURL:   dto.LogoURL,
+		TosURI:    dto.TosURI,
+		PolicyURI: dto.PolicyURI,
+		Contacts:  dto.Contacts,
+		Status:    dto.Status,
+		Metadata:  dto.Metadata,
+	}
+	if includeFlowSecret {
+		response.FlowSecret = dto.FlowSecret
+	}
+	return response
 }

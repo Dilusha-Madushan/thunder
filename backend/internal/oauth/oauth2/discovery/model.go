@@ -1,7 +1,13 @@
-// Copyright 2025 The ThunderID Authors
+// Copyright 2025-2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package discovery
+
+import (
+	"encoding/json"
+
+	authzdetail "github.com/thunder-id/thunderid/internal/authzdetail/common"
+)
 
 // OAuth2AuthorizationServerMetadata represents OAuth2 Authorization Server Metadata (RFC 8414)
 type OAuth2AuthorizationServerMetadata struct {
@@ -15,6 +21,7 @@ type OAuth2AuthorizationServerMetadata struct {
 	PushedAuthorizationRequestEndpoint         string   `json:"pushed_authorization_request_endpoint,omitempty"`
 	RequirePushedAuthorizationRequests         bool     `json:"require_pushed_authorization_requests,omitempty"`
 	BackchannelAuthenticationEndpoint          string   `json:"backchannel_authentication_endpoint,omitempty"`
+	DeviceAuthorizationEndpoint                string   `json:"device_authorization_endpoint,omitempty"`
 	BackchannelTokenDeliveryModesSupported     []string `json:"backchannel_token_delivery_modes_supported,omitempty"`
 	BackchannelUserCodeParameterSupported      bool     `json:"backchannel_user_code_parameter_supported"`
 	ResponseTypesSupported                     []string `json:"response_types_supported"`
@@ -26,6 +33,8 @@ type OAuth2AuthorizationServerMetadata struct {
 	DPoPSigningAlgValuesSupported              []string `json:"dpop_signing_alg_values_supported,omitempty"`
 	AuthorizationGrantProfilesSupported        []string `json:"authorization_grant_profiles_supported,omitempty"`
 	ClientIDMetadataDocumentSupported          bool     `json:"client_id_metadata_document_supported,omitempty"`
+	AuthorizationDetailsTypesSupported         []string `json:"authorization_details_types_supported,omitempty"`
+	AuthorizationDetailsTypesEndpoint          string   `json:"authorization_details_types_endpoint,omitempty"`
 }
 
 // OIDCProviderMetadata represents OpenID Connect Provider Metadata (OIDC Discovery 1.0)
@@ -50,4 +59,19 @@ type OIDCProviderMetadata struct {
 	// meaning of an absent flag, and stating it keeps the document explicit.
 	BackchannelLogoutSupported        bool `json:"backchannel_logout_supported"`
 	BackchannelLogoutSessionSupported bool `json:"backchannel_logout_session_supported"`
+}
+
+// AuthorizationDetailsTypeMetadata is the client-facing view of a registered authorization details type.
+type AuthorizationDetailsTypeMetadata struct {
+	Type          string                           `json:"type"`
+	Name          string                           `json:"name"`
+	Description   string                           `json:"description,omitempty"`
+	Version       int                              `json:"version"`
+	Schema        json.RawMessage                  `json:"schema"`
+	Modifications []authzdetail.ClientModification `json:"modifications"`
+}
+
+// AuthorizationDetailsTypesResponse lists the request view of every registered type.
+type AuthorizationDetailsTypesResponse struct {
+	Types []AuthorizationDetailsTypeMetadata `json:"types"`
 }

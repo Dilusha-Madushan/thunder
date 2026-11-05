@@ -55,13 +55,16 @@ prepare:
 clean:
 	./build.sh clean $(OS) $(ARCH)
 
-build: build_frontend build_backend package_samples
+build: build_frontend build_backend build_cp_backend package_samples build_quickstart
 
 build_backend:
 	./build.sh build_backend $(OS) $(ARCH)
 
 build_cp_backend:
 	./build.sh build_cp_backend $(OS) $(ARCH)
+
+build_quickstart:
+	./build.sh build_quickstart $(OS) $(ARCH)
 
 build_frontend:
 	./build.sh build_frontend
@@ -71,6 +74,12 @@ build_docs:
 
 package_samples:
 	./build.sh package_samples
+
+package_cp:
+	./build.sh package_cp $(OS) $(ARCH)
+
+package_quickstart:
+	./build.sh package_quickstart $(OS) $(ARCH)
 
 test:
 	./build.sh test $(OS) $(ARCH)
@@ -107,6 +116,12 @@ build_with_coverage_only:
 
 run:
 	./build.sh run $(OS) $(ARCH)
+
+run_dp:
+	./build.sh run_dp $(OS) $(ARCH)
+
+run_cp:
+	./build.sh run_cp $(OS) $(ARCH)
 
 run_backend:
 	./build.sh run_backend $(OS) $(ARCH)
@@ -233,16 +248,22 @@ help:
 	@echo "  clean                         - Remove build artifacts."
 	@echo "  build                         - Build $(PRODUCT_NAME) (backend + frontend + samples)."
 	@echo "  build_backend                 - Build the backend Go application."
+	@echo "  build_cp_backend              - Build and package the Control Plane server (backend/cmd/cpserver)."
+	@echo "  build_quickstart              - Build and package a combined Control Plane + Data Plane quickstart, pre-wired together."
 	@echo "  build_frontend                - Build the frontend applications."
 	@echo "  build_docs                    - Build the documentation."
 	@echo "  package_samples               - Package sample applications."
+	@echo "  package_cp                    - Package the Control Plane server (assumes build_cp_backend already ran)."
+	@echo "  package_quickstart            - Package the combined quickstart (assumes build_backend and build_cp_backend already ran)."
 	@echo "  test_unit                     - Run unit tests."
 	@echo "  test_integration              - Run integration tests. Use RUN= for test filter, PACKAGE= for package filter."
 	@echo "  test_integration_cp           - Run the Control Plane integration tests. Needs build_backend and build_cp_backend first."
 	@echo "  build_with_coverage  		   - Build with coverage flags, run unit and integration tests, and generate combined coverage report."
 	@echo "  build_with_coverage_only      - Build with coverage instrumentation (unit tests only, no integration tests)."
 	@echo "  test                          - Run all tests (unit and integration)."
-	@echo "  run                           - Build and run the $(PRODUCT_NAME) server locally."
+	@echo "  run                           - Build and run the quickstart (auth-dp, Data Plane and Control Plane) locally."
+	@echo "  run_dp                        - Build and run the Data Plane and its Admin Console locally."
+	@echo "  run_cp                        - Build and run the Control Plane, its console and auth-dp locally."
 	@echo "  run_backend                   - Build and run the $(PRODUCT_NAME) backend locally."
 	@echo "  debug_backend                 - Build and run the $(PRODUCT_NAME) backend locally in debug mode."
 	@echo "  run_frontend                  - Build and run the frontend applications locally."
@@ -278,7 +299,7 @@ help:
 	@echo "  generate_i18n                 - Extract i18n messages and generate defaults.go."
 	@echo "  help                          - Show this help message."
 
-.PHONY: all prepare clean build build_backend build_cp_backend build_frontend build_docs package_samples run
+.PHONY: all prepare clean build build_backend build_cp_backend build_quickstart build_frontend build_docs package_samples package_cp package_quickstart run
 .PHONY: docker-build docker-build-latest docker-build-multiarch
 .PHONY: docker-build-multiarch-latest docker-build-multiarch-push
 .PHONY: test_unit test_integration test_integration_cp build_with_coverage build_with_coverage_only test
@@ -288,7 +309,7 @@ help:
 .PHONY: tools_build_i18n_extractor tools_test_i18n_extractor tools_lint_i18n_extractor
 .PHONY: tools_test_cli_e2e tools_checks_cli tools_checks
 .PHONY: verify_mocks format_check test_frontend security_audit test_e2e pr_checks
-.PHONY: run_backend debug_backend run_frontend run_docs
+.PHONY: run_dp run_cp run_backend debug_backend run_frontend run_docs
 
 define go_install_tool
 	cd /tmp && \

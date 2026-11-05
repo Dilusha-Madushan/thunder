@@ -166,8 +166,13 @@ export default function ResourceServersList(): JSX.Element {
         renderCell: (params: DataGrid.GridRenderCellParams<ResourceServer>): JSX.Element => (
           <ListingTable.RowActions>
             {params.row.isReadOnly ? (
-              <Tooltip title={t('common:status.readOnly', 'Read Only')}>
-                <IconButton size="small" disableRipple sx={{cursor: 'default'}}>
+              <Tooltip title={t('common:status.readOnly', 'Read only')}>
+                <IconButton
+                  aria-label={t('common:status.readOnly', 'Read only')}
+                  size="small"
+                  disableRipple
+                  sx={{cursor: 'default'}}
+                >
                   <Eye size={16} />
                 </IconButton>
               </Tooltip>
@@ -175,6 +180,7 @@ export default function ResourceServersList(): JSX.Element {
               <>
                 <Tooltip title={t('common:actions.edit', 'Edit')}>
                   <IconButton
+                    aria-label={t('common:actions.edit', 'Edit')}
                     size="small"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -190,6 +196,7 @@ export default function ResourceServersList(): JSX.Element {
                 </Tooltip>
                 <Tooltip title={t('common:actions.delete', 'Delete')}>
                   <IconButton
+                    aria-label={t('common:actions.delete', 'Delete')}
                     size="small"
                     color="error"
                     onClick={(e) => {

@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	deleteDuplicateUserAssignmentsOperationID engine.OperationID = "2.0.0-m1-pidp.1/configdb/" +
+	deleteDuplicateUserAssignmentsOperationID engine.OperationID = "2.0.0-m1-pidp/configdb/" +
 		"15_delete_duplicate_user_assignments"
 
 	// deleteDuplicateUserAssignmentsBatchSize is the number of originals whose duplicates' configuration rows

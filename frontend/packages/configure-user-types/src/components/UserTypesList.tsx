@@ -101,7 +101,7 @@ export default function UserTypesList() {
       },
       {
         field: 'id',
-        headerName: t('userTypes:listing.columns.id', 'User Type ID'),
+        headerName: t('userTypes:listing.columns.id', 'User type ID'),
         width: 350,
         renderCell: (params: DataGrid.GridRenderCellParams<UserTypeListItem>) => (
           <Typography variant="body2" sx={{fontFamily: 'monospace', fontSize: '0.875rem'}}>
@@ -111,7 +111,7 @@ export default function UserTypesList() {
       },
       {
         field: 'ouHandle',
-        headerName: t('userTypes:listing.columns.organizationUnit', 'Organization Unit'),
+        headerName: t('userTypes:listing.columns.organizationUnit', 'Organization unit'),
         flex: 1,
         minWidth: 220,
         renderCell: (params: DataGrid.GridRenderCellParams<UserTypeListItem>) => (
@@ -122,7 +122,7 @@ export default function UserTypesList() {
       },
       {
         field: 'allowSelfRegistration',
-        headerName: t('userTypes:listing.columns.allowSelfRegistration', 'Self Registration'),
+        headerName: t('userTypes:listing.columns.allowSelfRegistration', 'Self registration'),
         width: 200,
         renderCell: (params: GridRenderCellParams<UserTypeListItem>) => (
           <Chip
@@ -144,15 +144,21 @@ export default function UserTypesList() {
         renderCell: (params: GridRenderCellParams<UserTypeListItem>) => (
           <ListingTable.RowActions>
             {params.row.isReadOnly ? (
-              <Tooltip title={t('common:status.readOnly', 'Read Only')}>
-                <IconButton size="small" disableRipple sx={{cursor: 'default'}}>
+              <Tooltip title={t('common:status.readOnly', 'Read only')}>
+                <IconButton
+                  aria-label={t('common:status.readOnly', 'Read only')}
+                  size="small"
+                  disableRipple
+                  sx={{cursor: 'default'}}
+                >
                   <Eye size={16} />
                 </IconButton>
               </Tooltip>
             ) : (
               <>
-                <Tooltip title={t('common:actions.edit')}>
+                <Tooltip title={t('common:actions.edit', 'Edit')}>
                   <IconButton
+                    aria-label={t('common:actions.edit', 'Edit')}
                     size="small"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -162,8 +168,9 @@ export default function UserTypesList() {
                     <Pencil size={16} />
                   </IconButton>
                 </Tooltip>
-                <Tooltip title={t('common:actions.delete')}>
+                <Tooltip title={t('common:actions.delete', 'Delete')}>
                   <IconButton
+                    aria-label={t('common:actions.delete', 'Delete')}
                     size="small"
                     color="error"
                     onClick={(e) => {

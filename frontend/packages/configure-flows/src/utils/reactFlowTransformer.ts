@@ -3,12 +3,14 @@
 
 import type {Edge, Node} from '@xyflow/react';
 import generateResourceId from './generateResourceId';
-import {toApiInputType} from './inputTypeMapping';
+import {getInputIdentifier, INPUT_ELEMENT_TYPES, toApiInputType} from './inputTypeMapping';
+import {getPromptInputDefault} from './promptInputDefault';
 import VisualFlowConstants from '../constants/VisualFlowConstants';
 import {ActionTypes} from '../models/actions';
 import type {Element} from '../models/elements';
 import {ElementCategories, ElementTypes, ActionEventTypes, ButtonTypes} from '../models/elements';
-import type {StepAction, StepData} from '../models/steps';
+import type {FlowNodeCondition} from '../models/responses';
+import type {StepData} from '../models/steps';
 import {ExecutionTypes, StepTypes, StaticStepTypes} from '../models/steps';
 
 /**
@@ -55,13 +57,13 @@ interface FlowNode {
     inputs?: FlowInput[];
     [key: string]: unknown;
   };
+  inputs?: Record<string, unknown>[];
   onSuccess?: string;
   onFailure?: string;
   onIncomplete?: string;
   next?: string;
-  flow?: {
-    ref: string;
-  };
+  condition?: FlowNodeCondition;
+  flow?: {ref: string};
 }
 
 /**
@@ -72,6 +74,10 @@ interface FlowInput {
   type: string;
   identifier: string;
   required: boolean;
+  /** Value written to the flow when none is available, or always for a constant. */
+  defaultValue?: string;
+  /** Makes `defaultValue` replace any existing value. */
+  constant?: boolean;
 }
 
 /**
@@ -142,6 +148,7 @@ const STEP_TO_NODE_TYPE_MAP: Record<string, string> = {
   [StepTypes.Call]: 'CALL',
   [StaticStepTypes.Start]: 'START',
   [StaticStepTypes.UserOnboard]: 'END',
+  [StaticStepTypes.Variables]: 'VARIABLES',
 };
 
 /**
@@ -154,22 +161,6 @@ const STEP_TO_NODE_TYPE_MAP: Record<string, string> = {
  *   credentials block would otherwise demand a username and password to fire.
  */
 const INPUTLESS_ACTION_TYPES = new Set<string>([ElementTypes.Resend, ElementTypes.RichText]);
-
-/**
- * Set of input element types for quick lookup
- */
-const INPUT_ELEMENT_TYPES = new Set<string>([
-  ElementTypes.TextInput,
-  ElementTypes.PasswordInput,
-  ElementTypes.EmailInput,
-  ElementTypes.PhoneInput,
-  ElementTypes.NumberInput,
-  ElementTypes.DateInput,
-  ElementTypes.OtpInput,
-  ElementTypes.Checkbox,
-  ElementTypes.Dropdown,
-  ElementTypes.Select,
-]);
 
 /**
  * Derives the eventType for ACTION category components based on buttonType
@@ -309,14 +300,7 @@ function extractInputs(components: Element[]): FlowInput[] {
       // Extract ref (attribute) from top-level properties
       // ref is the attribute selected from the dropdown (e.g., 'username', 'email')
       const componentWithProps = component as Element & {name?: string; ref?: string; required?: boolean};
-      let identifier: string;
-      if (typeof componentWithProps.name === 'string') {
-        identifier = componentWithProps.name;
-      } else if (typeof componentWithProps.ref === 'string') {
-        identifier = componentWithProps.ref;
-      } else {
-        identifier = component.id;
-      }
+      const identifier = getInputIdentifier(component);
 
       const isRequired = componentWithProps.required ?? false;
 
@@ -364,20 +348,16 @@ function extractPrompts(components: Element[], nodeId: string, edges: Edge[]): F
     function processForInputs(component: Element): void {
       if (INPUT_ELEMENT_TYPES.has(component.type)) {
         const componentWithProps = component as Element & {name?: string; ref?: string; required?: boolean};
-        let identifier: string;
-        if (typeof componentWithProps.name === 'string') {
-          identifier = componentWithProps.name;
-        } else if (typeof componentWithProps.ref === 'string') {
-          identifier = componentWithProps.ref;
-        } else {
-          identifier = component.id;
-        }
+        const identifier = getInputIdentifier(component);
+
+        const defaultValue = getPromptInputDefault(component);
 
         inputs.push({
           ref: component.id,
           type: toApiInputType(component.type),
           identifier,
           required: componentWithProps.required ?? false,
+          ...(defaultValue ? {defaultValue} : {}),
         });
       }
 
@@ -556,6 +536,11 @@ function transformNode(canvasNode: Node<StepData>, edges: Edge[]): FlowNode {
     flowNode.properties = stepData.properties;
   }
 
+  // The builder has no editor for a node's condition, so it goes back as it was read
+  if (stepData?.condition) {
+    flowNode.condition = stepData.condition;
+  }
+
   // Handle PROMPT nodes (VIEW steps with UI components)
   // Clean components to remove internal properties like variants
   if (canvasNode.type === StepTypes.View && stepData?.components) {
@@ -635,6 +620,19 @@ function transformNode(canvasNode: Node<StepData>, edges: Edge[]): FlowNode {
     }
   }
 
+  // Handle VARIABLES nodes: the declarations go back as they were read
+  if (canvasNode.type === StaticStepTypes.Variables) {
+    const declarations = stepData?.['inputs'];
+    if (Array.isArray(declarations)) {
+      flowNode.inputs = declarations as Record<string, unknown>[];
+    }
+
+    const nextNode = findNextNode(canvasNode, edges);
+    if (nextNode) {
+      flowNode.onSuccess = nextNode;
+    }
+  }
+
   // Handle START nodes
   if (canvasNode.type === StaticStepTypes.Start) {
     const nextNode = findNextNode(canvasNode, edges);
@@ -645,11 +643,9 @@ function transformNode(canvasNode: Node<StepData>, edges: Edge[]): FlowNode {
 
   // Handle CALL nodes (cross-flow invocation)
   if (canvasNode.type === StepTypes.Call) {
-    const callData = stepData as (StepData & {flow?: {ref?: string}}) | undefined;
-    const actionFlow = (callData?.action as (StepAction & {flow?: {ref?: string}}) | undefined)?.flow;
-    const flowRef: string | undefined = callData?.flow?.ref ?? actionFlow?.ref;
-    if (flowRef) {
-      flowNode.flow = {ref: flowRef};
+    const callFlow = (stepData as (StepData & {flow?: {ref?: string}}) | undefined)?.flow;
+    if (callFlow?.ref) {
+      flowNode.flow = {ref: callFlow.ref};
     }
 
     const successNode = findNextNode(canvasNode, edges);
@@ -739,6 +735,31 @@ function createConsentDecisionsInput(): FlowInput {
 }
 
 /**
+ * Returns a copy of an input derived from a prompt without the prompt's default, which applies to the
+ * prompt only.
+ */
+function withoutDefault(input: FlowInput): FlowInput {
+  const derived = {...input};
+  delete derived.defaultValue;
+  return derived;
+}
+
+/**
+ * Adds an executor's constant inputs to the inputs derived for it. A constant replaces a derived
+ * input with the same identifier.
+ */
+function withConstantInputs(inputs: FlowInput[], constants: FlowInput[]): FlowInput[] {
+  if (constants.length === 0) {
+    return inputs;
+  }
+
+  return [
+    ...inputs.filter((input) => !constants.some((constant) => constant.identifier === input.identifier)),
+    ...constants,
+  ];
+}
+
+/**
  * Collects inputs for TASK_EXECUTION nodes from their preceding PROMPT nodes.
  * This is done in a second pass after all nodes are transformed.
  * Returns a new array of flow nodes with inputs added where applicable.
@@ -756,11 +777,14 @@ function collectInputsForExecutionNodes(
       return flowNode;
     }
 
-    // If executor already has user-configured inputs, preserve them
-    if (flowNode.executor?.inputs && flowNode.executor.inputs.length > 0) {
+    // If executor already has user-configured inputs, preserve them. Constants alone do not count:
+    // they fix a value but do not say which inputs the executor takes from the preceding prompt.
+    const configuredInputs = flowNode.executor?.inputs ?? [];
+    if (configuredInputs.some((input) => !input.constant)) {
       return flowNode;
     }
 
+    const constants = configuredInputs.filter((input) => input.constant);
     const executorName = flowNode.executor?.name;
 
     // OAuth/OIDC executors get a standard 'code' input for OAuth callback
@@ -770,7 +794,7 @@ function collectInputsForExecutionNodes(
         executor: {
           ...flowNode.executor,
           name: executorName,
-          inputs: [createOAuthCodeInput()],
+          inputs: withConstantInputs([createOAuthCodeInput()], constants),
         },
       };
     }
@@ -784,7 +808,7 @@ function collectInputsForExecutionNodes(
         executor: {
           ...flowNode.executor,
           name: executorName,
-          inputs: [createConsentDecisionsInput()],
+          inputs: withConstantInputs([createConsentDecisionsInput()], constants),
         },
       };
     }
@@ -823,7 +847,7 @@ function collectInputsForExecutionNodes(
         executor: {
           ...flowNode.executor,
           name: flowNode.executor.name,
-          inputs,
+          inputs: withConstantInputs(inputs.map(withoutDefault), constants),
         },
       };
     }
@@ -947,6 +971,11 @@ export function validateFlowGraph(flowGraph: FlowGraph): string[] {
     // Check onIncomplete references
     if (node.onIncomplete && !nodeIds.has(node.onIncomplete)) {
       errors.push(`Node ${node.id}: onIncomplete references non-existent node ${node.onIncomplete}`);
+    }
+
+    // Check condition onSkip references
+    if (node.condition?.onSkip && !nodeIds.has(node.condition.onSkip)) {
+      errors.push(`Node ${node.id}: condition.onSkip references non-existent node ${node.condition.onSkip}`);
     }
 
     // Check action nextNode references (via prompts)

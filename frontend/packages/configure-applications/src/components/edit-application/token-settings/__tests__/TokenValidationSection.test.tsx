@@ -56,7 +56,7 @@ describe('TokenValidationSection', () => {
         </TestWrapper>,
       );
 
-      expect(screen.getByTestId('card-title')).toHaveTextContent('Token Validity');
+      expect(screen.getByTestId('card-title')).toHaveTextContent('Token validity');
       expect(screen.getByTestId('card-description')).toHaveTextContent(
         'Configure how long tokens remain valid before expiration',
       );
@@ -115,7 +115,7 @@ describe('TokenValidationSection', () => {
         </TestWrapper>,
       );
 
-      expect(screen.getByTestId('card-title')).toHaveTextContent('Token Validity');
+      expect(screen.getByTestId('card-title')).toHaveTextContent('Token validity');
       expect(screen.getByTestId('card-description')).toHaveTextContent(
         'Configure how long tokens remain valid before expiration',
       );
@@ -152,7 +152,7 @@ describe('TokenValidationSection', () => {
         </TestWrapper>,
       );
 
-      expect(screen.getByTestId('card-title')).toHaveTextContent('Token Validity');
+      expect(screen.getByTestId('card-title')).toHaveTextContent('Token validity');
       expect(screen.getByTestId('card-description')).toHaveTextContent(
         'Configure how long tokens remain valid before expiration',
       );
@@ -168,7 +168,7 @@ describe('TokenValidationSection', () => {
       );
 
       // Switch to ID Token tab
-      await user.click(screen.getByRole('tab', {name: /ID Token/i}));
+      await user.click(screen.getByRole('tab', {name: /ID token/i}));
 
       const input = document.getElementById('idTokenValidity-input');
       expect(input).toHaveValue(3600);
@@ -184,7 +184,7 @@ describe('TokenValidationSection', () => {
       );
 
       // Switch to ID Token tab
-      await user.click(screen.getByRole('tab', {name: /ID Token/i}));
+      await user.click(screen.getByRole('tab', {name: /ID token/i}));
 
       const input = document.getElementById('idTokenValidity-input');
       expect(input).toHaveValue(900);
@@ -201,7 +201,7 @@ describe('TokenValidationSection', () => {
         </TestWrapper>,
       );
 
-      await user.click(screen.getByRole('tab', {name: /Refresh Token/i}));
+      await user.click(screen.getByRole('tab', {name: /Refresh token/i}));
 
       const input = document.getElementById('refreshTokenValidity-input');
       expect(input).toHaveValue(86400);
@@ -216,10 +216,56 @@ describe('TokenValidationSection', () => {
         </TestWrapper>,
       );
 
-      await user.click(screen.getByRole('tab', {name: /Refresh Token/i}));
+      await user.click(screen.getByRole('tab', {name: /Refresh token/i}));
 
       const input = document.getElementById('refreshTokenValidity-input');
       expect(input).toHaveValue(172800);
+    });
+  });
+
+  describe('Rendering with tokenType="oauth" and accessTokenOnly', () => {
+    it('should show only the access token validity, labelled as such, without tabs', () => {
+      render(
+        <TestWrapper defaultValues={{accessTokenValidity: 1800}}>
+          {({control, errors}) => (
+            <TokenValidationSection control={control} errors={errors} tokenType="oauth" accessTokenOnly />
+          )}
+        </TestWrapper>,
+      );
+
+      expect(screen.queryByRole('tab')).not.toBeInTheDocument();
+      expect(screen.getByLabelText(/Access token validity/)).toHaveValue(1800);
+      expect(document.getElementById('idTokenValidity-input')).not.toBeInTheDocument();
+      expect(document.getElementById('refreshTokenValidity-input')).not.toBeInTheDocument();
+    });
+
+    it('should keep the card title and description', () => {
+      render(
+        <TestWrapper>
+          {({control, errors}) => (
+            <TokenValidationSection control={control} errors={errors} tokenType="oauth" accessTokenOnly />
+          )}
+        </TestWrapper>,
+      );
+
+      expect(screen.getByTestId('card-title')).toHaveTextContent('Token validity');
+      expect(screen.getByTestId('card-description')).toHaveTextContent(
+        'Configure how long tokens remain valid before expiration',
+      );
+    });
+
+    it('should show all three tabs when accessTokenOnly is off', () => {
+      render(
+        <TestWrapper>
+          {({control, errors}) => <TokenValidationSection control={control} errors={errors} tokenType="oauth" />}
+        </TestWrapper>,
+      );
+
+      expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+        'Access token',
+        'ID token',
+        'Refresh token',
+      ]);
     });
   });
 
@@ -282,7 +328,7 @@ describe('TokenValidationSection', () => {
       );
 
       // Switch to ID Token tab
-      await user.click(screen.getByRole('tab', {name: /ID Token/i}));
+      await user.click(screen.getByRole('tab', {name: /ID token/i}));
 
       const input = document.getElementById('idTokenValidity-input') as HTMLInputElement;
       await user.clear(input);
@@ -300,7 +346,7 @@ describe('TokenValidationSection', () => {
         </TestWrapper>,
       );
 
-      await user.click(screen.getByRole('tab', {name: /Refresh Token/i}));
+      await user.click(screen.getByRole('tab', {name: /Refresh token/i}));
 
       const input = document.getElementById('refreshTokenValidity-input') as HTMLInputElement;
       await user.clear(input);

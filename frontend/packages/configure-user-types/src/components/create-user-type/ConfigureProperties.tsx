@@ -111,7 +111,7 @@ export default function ConfigureProperties({
           eligibleDisplayProperties.length > 0 ? (
             <Paper variant="outlined" sx={{px: 3, py: 3, borderRadius: 2}}>
               <FormControl fullWidth>
-                <FormLabel>{t('userTypes:displayAttribute', 'Display Attribute')}</FormLabel>
+                <FormLabel>{t('userTypes:displayAttribute', 'Display attribute')}</FormLabel>
                 <Typography variant="body2" color="text.secondary" sx={{mb: 1}}>
                   {t(
                     'userTypes:displayAttributeHint',

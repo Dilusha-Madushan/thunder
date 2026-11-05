@@ -30,9 +30,12 @@ paths:
       tags:
         - Groups
       summary: List groups
+      description: |
+        Retrieve a list of groups. An `ouId` filter lists the groups the organization unit owns.
       parameters:
         - $ref: '#/components/parameters/limitQueryParam'
         - $ref: '#/components/parameters/offsetQueryParam'
+        - $ref: '#/components/parameters/groupFilterQueryParam'
         - $ref: '#/components/parameters/includeGroupQueryParam'
       responses:
         "200":
@@ -94,6 +97,16 @@ paths:
                     description:
                       key: "error.groupservice.invalid_offset_parameter_description"
                       defaultValue: "The offset parameter must be a non-negative integer"
+                invalid-filter:
+                  summary: Invalid filter parameter
+                  value:
+                    code: "GRP-1018"
+                    message:
+                      key: "error.groupservice.invalid_filter_parameter"
+                      defaultValue: "Invalid filter parameter"
+                    description:
+                      key: "error.groupservice.invalid_filter_parameter_description"
+                      defaultValue: "The filter must be a single ouId eq expression with a quoted organization unit ID"
         "500":
           description: Internal server error
           content:
@@ -182,6 +195,16 @@ paths:
                     description:
                       key: "error.groupservice.invalid_group_member_id_description"
                       defaultValue: "One or more group member IDs in the request do not exist"
+                member-ou-mismatch:
+                  summary: Member not available in the group's organization unit
+                  value:
+                    code: "GRP-1019"
+                    message:
+                      key: "error.groupservice.member_ou_mismatch"
+                      defaultValue: "Member not available in the group's organization unit"
+                    description:
+                      key: "error.groupservice.member_ou_mismatch_description"
+                      defaultValue: "One or more members are neither owned by the group's organization unit nor shared with it"
                 ou-not-found:
                   summary: Organization unit not found
                   value:
@@ -279,6 +302,10 @@ paths:
       tags:
         - Groups
       summary: Update a group by id
+      description: |
+        Updates a group's name, description, and organization unit. A group can be moved to another
+        organization unit only when it has no members, no other group contains it, and it is assigned
+        no roles.
       parameters:
         - in: path
           name: id
@@ -345,6 +372,16 @@ paths:
                     description:
                       key: "error.groupservice.invalid_ou_id_description"
                       defaultValue: "Organization unit does not exists"
+                group-ou-change-not-allowed:
+                  summary: Group has members, belongs to other groups, or is assigned roles
+                  value:
+                    code: "GRP-1020"
+                    message:
+                      key: "error.groupservice.group_ou_change_not_allowed"
+                      defaultValue: "Cannot change the group's organization unit"
+                    description:
+                      key: "error.groupservice.group_ou_change_not_allowed_description"
+                      defaultValue: "The group has members, belongs to other groups, or is assigned roles. Remove its members, its memberships in other groups and its role assignments before moving it"
         "404":
           description: Group not found
           content:
@@ -526,6 +563,9 @@ paths:
       tags:
         - Groups
       summary: Add members to a group
+      description: |
+        Adds members to a group. Every member must be owned by the group's organization unit or shared
+        with it. Only users and applications can be shared.
       parameters:
         - in: path
           name: id
@@ -614,6 +654,16 @@ paths:
                     description:
                       key: "error.groupservice.invalid_group_member_id_description"
                       defaultValue: "One or more group member IDs in the request do not exist"
+                member-ou-mismatch:
+                  summary: Member not available in the group's organization unit
+                  value:
+                    code: "GRP-1019"
+                    message:
+                      key: "error.groupservice.member_ou_mismatch"
+                      defaultValue: "Member not available in the group's organization unit"
+                    description:
+                      key: "error.groupservice.member_ou_mismatch_description"
+                      defaultValue: "One or more members are neither owned by the group's organization unit nor shared with it"
         "403":
           description: Forbidden
           content:
@@ -975,6 +1025,16 @@ paths:
                     description:
                       key: "error.groupservice.invalid_group_member_id_description"
                       defaultValue: "One or more group member IDs in the request do not exist"
+                member-ou-mismatch:
+                  summary: Member not available in the group's organization unit
+                  value:
+                    code: "GRP-1019"
+                    message:
+                      key: "error.groupservice.member_ou_mismatch"
+                      defaultValue: "Member not available in the group's organization unit"
+                    description:
+                      key: "error.groupservice.member_ou_mismatch_description"
+                      defaultValue: "One or more members are neither owned by the group's organization unit nor shared with it"
         "404":
           description: Organization unit not found
           content:
@@ -1048,6 +1108,20 @@ components:
         type: integer
         minimum: 0
         default: 0
+    groupFilterQueryParam:
+      in: query
+      name: filter
+      required: false
+      description: |
+        Filter groups by organization unit. The only supported expression is `ouId eq "<id>"`,
+        which lists the groups the organization unit owns. A caller that cannot list the
+        organization unit's groups gets an empty list.
+      schema:
+        type: string
+      examples:
+        organization-unit:
+          summary: Groups owned by an organization unit
+          value: 'ouId eq "a839f4bd-39dc-4eaa-b5cc-210d8ecaee87"'
     includeQueryParam:
       in: query
       name: include
@@ -1128,6 +1202,7 @@ components:
           format: uuid
         members:
           type: array
+          description: "Members of the group. Every member must be owned by the organization unit given in `ouId` or shared with it."
           items:
             $ref: '#/components/schemas/Member'
 
@@ -1205,7 +1280,7 @@ components:
           example: "Group for sports activities and events"
         members:
           type: array
-          description: "Optional list of initial members (users and groups)"
+          description: "Optional list of initial members. Every member must be owned by the organization unit at the given path or shared with it."
           items:
             $ref: '#/components/schemas/Member'
 

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 	"github.com/thunder-id/thunderid/tests/integration/testutils"
@@ -33,6 +34,9 @@ const (
 	agentTEClientSecret = "agent_token_exchange_secret"
 	agentTEUsername     = "agent_te_test_user"
 	agentTEPassword     = "AgentTE_Pass1!"
+
+	agentTENextClientID     = "agent_token_exchange_next_client"
+	agentTENextClientSecret = "agent_token_exchange_next_secret"
 
 	agentOAuthDefaultRSIdentifier = "https://agent-oauth-default.example.com"
 	ccAgentAuthzRSIdentifier      = "https://cc-agent-authz.example.com"
@@ -835,6 +839,7 @@ type AgentTokenExchangeTestSuite struct {
 	entityTypeID      string
 	agentTypeSnapshot *testutils.AgentTypeSnapshot
 	agentID           string
+	nextAgentID       string
 	userID            string
 	resourceServerID  string
 	assertionToken    string
@@ -906,7 +911,12 @@ func (s *AgentTokenExchangeTestSuite) SetupSuite() {
 	s.Require().NoError(err)
 	s.userID = userID
 
-	s.agentID, err = s.createTokenExchangeAgent()
+	s.agentID, err = s.createTokenExchangeAgent(
+		"Agent Token Exchange Test", agentTEClientID, agentTEClientSecret)
+	s.Require().NoError(err)
+
+	s.nextAgentID, err = s.createTokenExchangeAgent(
+		"Agent Token Exchange Next Test", agentTENextClientID, agentTENextClientSecret)
 	s.Require().NoError(err)
 }
 
@@ -920,6 +930,9 @@ func (s *AgentTokenExchangeTestSuite) SetupTest() {
 func (s *AgentTokenExchangeTestSuite) TearDownSuite() {
 	if s.agentID != "" {
 		_ = deleteAgent(s.agentID)
+	}
+	if s.nextAgentID != "" {
+		_ = deleteAgent(s.nextAgentID)
 	}
 	if s.userID != "" {
 		_ = testutils.DeleteUser(s.userID)
@@ -946,17 +959,17 @@ func (s *AgentTokenExchangeTestSuite) TearDownSuite() {
 	}
 }
 
-func (s *AgentTokenExchangeTestSuite) createTokenExchangeAgent() (string, error) {
+func (s *AgentTokenExchangeTestSuite) createTokenExchangeAgent(name, clientID, clientSecret string) (string, error) {
 	agent := map[string]interface{}{
-		"attributes": map[string]interface{}{"name": "Agent Token Exchange Test"},
+		"attributes": map[string]interface{}{"name": name},
 		"type":       "default",
 		"ouId":       s.ouID,
 		"inboundAuthConfig": []map[string]interface{}{
 			{
 				"type": "oauth2",
 				"config": map[string]interface{}{
-					"clientId":                agentTEClientID,
-					"clientSecret":            agentTEClientSecret,
+					"clientId":                clientID,
+					"clientSecret":            clientSecret,
 					"grantTypes":              []string{"urn:ietf:params:oauth:grant-type:token-exchange"},
 					"tokenEndpointAuthMethod": "client_secret_basic",
 				},
@@ -1023,12 +1036,18 @@ func (s *AgentTokenExchangeTestSuite) getUserAssertion() string {
 }
 
 func (s *AgentTokenExchangeTestSuite) doTokenExchange(formData url.Values) (*TokenExchangeResponse, int, error) {
+	return s.doTokenExchangeAs(agentTEClientID, agentTEClientSecret, formData)
+}
+
+// doTokenExchangeAs submits a token-exchange request authenticated as the given agent client.
+func (s *AgentTokenExchangeTestSuite) doTokenExchangeAs(
+	clientID, clientSecret string, formData url.Values) (*TokenExchangeResponse, int, error) {
 	req, err := http.NewRequest("POST", testServerURL+"/oauth2/token", strings.NewReader(formData.Encode()))
 	if err != nil {
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth(agentTEClientID, agentTEClientSecret)
+	req.SetBasicAuth(clientID, clientSecret)
 
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -1139,6 +1158,69 @@ func (s *AgentTokenExchangeTestSuite) TestAgentTE_MissingSubjectToken() {
 	s.Equal(http.StatusBadRequest, statusCode)
 	s.Equal("invalid_request", resp.Error)
 	s.Contains(resp.ErrorDescription, "subject_token")
+}
+
+// TestAgentTE_ExtendsSubjectDelegationChain verifies that an agent exchanging a token that already
+// records another agent as its actor becomes the current actor, with the earlier agent nested
+// beneath it (RFC 8693 Section 4.1).
+func (s *AgentTokenExchangeTestSuite) TestAgentTE_ExtendsSubjectDelegationChain() {
+	firstToken := s.exchangeAs(agentTEClientID, agentTEClientSecret,
+		s.assertionToken, "urn:ietf:params:oauth:token-type:jwt")
+	firstAct := s.actClaim(firstToken)
+	s.Equal(s.agentID, firstAct["sub"])
+	s.NotContains(firstAct, "act")
+
+	nextToken := s.exchangeAs(agentTENextClientID, agentTENextClientSecret,
+		firstToken, "urn:ietf:params:oauth:token-type:access_token")
+	claims, err := testutils.DecodeJWT(nextToken)
+	s.Require().NoError(err)
+	s.Equal(s.userID, claims.Sub, "Subject must stay the original user")
+
+	act := s.actClaim(nextToken)
+	s.Equal(s.nextAgentID, act["sub"], "act.sub must identify the agent that made this exchange")
+	priorAct, ok := act["act"].(map[string]interface{})
+	s.Require().True(ok, "act must keep the subject token's actor as a nested act")
+	s.Equal(s.agentID, priorAct["sub"], "act.act.sub must identify the earlier agent")
+	s.NotContains(priorAct, "act")
+}
+
+// TestAgentTE_SameAgentIsNotRepeated verifies that an agent re-exchanging a token it already acts
+// through is recorded once, not nested under itself.
+func (s *AgentTokenExchangeTestSuite) TestAgentTE_SameAgentIsNotRepeated() {
+	firstToken := s.exchangeAs(agentTEClientID, agentTEClientSecret,
+		s.assertionToken, "urn:ietf:params:oauth:token-type:jwt")
+
+	secondToken := s.exchangeAs(agentTEClientID, agentTEClientSecret,
+		firstToken, "urn:ietf:params:oauth:token-type:access_token")
+
+	act := s.actClaim(secondToken)
+	s.Equal(s.agentID, act["sub"])
+	s.NotContains(act, "act", "The same agent must not be nested under itself")
+}
+
+// exchangeAs exchanges the subject token as the given agent client for a token bound to the
+// suite's resource server, and returns the issued access token.
+func (s *AgentTokenExchangeTestSuite) exchangeAs(clientID, clientSecret, subjectToken, subjectTokenType string) string {
+	formData := url.Values{}
+	formData.Set("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange")
+	formData.Set("subject_token", subjectToken)
+	formData.Set("subject_token_type", subjectTokenType)
+	formData.Set("resource", agentTEDefaultRSIdentifier)
+
+	resp, statusCode, err := s.doTokenExchangeAs(clientID, clientSecret, formData)
+	s.Require().NoError(err)
+	s.Require().Equal(http.StatusOK, statusCode, "%s: %s", resp.Error, resp.ErrorDescription)
+	s.Require().NotEmpty(resp.AccessToken)
+	return resp.AccessToken
+}
+
+// actClaim decodes the token and returns its act claim, failing the test when it has none.
+func (s *AgentTokenExchangeTestSuite) actClaim(token string) map[string]interface{} {
+	claims, err := testutils.DecodeJWT(token)
+	s.Require().NoError(err)
+	act, ok := claims.Additional["act"].(map[string]interface{})
+	s.Require().True(ok, "Token must carry an act claim")
+	return act
 }
 
 // ============================================================================
@@ -1254,4 +1336,175 @@ func agentTokenRequest(body string, clientID, clientSecret string, inBody bool) 
 	var result map[string]interface{}
 	_ = json.Unmarshal(bodyBytes, &result)
 	return result, resp.StatusCode, nil
+}
+
+// createLifespanAgent creates a client credentials agent whose lifespan ends at validUntil, or does
+// not end when validUntil is nil.
+func (ts *AgentOAuthFlowsTestSuite) createLifespanAgent(name, clientID string, validUntil *string) string {
+	agentID, err := createAgent(Agent{
+		OUID:       ts.ouID,
+		Type:       "default",
+		Attributes: agentAttrs(name, nil),
+		AuthFlowID: ts.authFlowID,
+		ValidUntil: validUntil,
+		InboundAuthConfig: []InboundAuthConfig{
+			{
+				Type: "oauth2",
+				Config: &OAuthAgentConfig{
+					ClientID:                clientID,
+					ClientSecret:            clientID + "_secret",
+					GrantTypes:              []string{"client_credentials"},
+					TokenEndpointAuthMethod: "client_secret_basic",
+				},
+			},
+		},
+	})
+	ts.Require().NoError(err)
+	return agentID
+}
+
+func (ts *AgentOAuthFlowsTestSuite) getAgent(agentID string) Agent {
+	resp, err := doGet(testServerURL + agentBasePath + "/" + agentID)
+	ts.Require().NoError(err)
+	defer resp.Body.Close()
+	ts.Require().Equal(http.StatusOK, resp.StatusCode, readBody(resp))
+	var agent Agent
+	ts.Require().NoError(json.Unmarshal([]byte(readBody(resp)), &agent))
+	return agent
+}
+
+func lifespanEnd(in time.Duration) *string {
+	end := time.Now().UTC().Add(in).Truncate(time.Second).Format(time.RFC3339)
+	return &end
+}
+
+// TestAgentLifespan_SetChangeAndRemove covers registering an agent with a lifespan, an update that
+// leaves it out, removing the expiry with null, and the values the API refuses.
+func (ts *AgentOAuthFlowsTestSuite) TestAgentLifespan_SetChangeAndRemove() {
+	validUntil := lifespanEnd(48 * time.Hour)
+	agentID := ts.createLifespanAgent("lifespan-crud-agent", "lifespan_crud_client", validUntil)
+	defer func() { _ = deleteAgent(agentID) }()
+
+	agent := ts.getAgent(agentID)
+	ts.Require().NotNil(agent.ValidUntil)
+	ts.Equal(*validUntil, *agent.ValidUntil)
+	ts.Require().NotNil(agent.Lifespan)
+	ts.Equal("ACTIVE", agent.Lifespan.Phase)
+
+	// An update that does not carry validUntil leaves the lifespan unchanged.
+	resp, err := putAgentRaw(agentID, map[string]interface{}{
+		"type": "default", "ouId": ts.ouID, "attributes": map[string]interface{}{"name": "lifespan-crud-agent"},
+	})
+	ts.Require().NoError(err)
+	ts.Require().Equal(http.StatusOK, resp.StatusCode, readBody(resp))
+	_ = resp.Body.Close()
+	ts.Equal(*validUntil, *ts.getAgent(agentID).ValidUntil)
+
+	// A past value is refused and changes nothing.
+	resp, err = putAgentRaw(agentID, map[string]interface{}{
+		"type": "default", "ouId": ts.ouID, "attributes": map[string]interface{}{"name": "renamed-agent"},
+		"validUntil": "2020-01-01T00:00:00Z",
+	})
+	ts.Require().NoError(err)
+	ts.Equal(http.StatusBadRequest, resp.StatusCode)
+	ts.Equal("AGT-1046", errorCode(resp))
+	_ = resp.Body.Close()
+	ts.Equal("lifespan-crud-agent", ts.getAgent(agentID).AttrName(), "a refused lifespan applies no field")
+
+	// null removes the expiry.
+	resp, err = putAgentRaw(agentID, map[string]interface{}{
+		"type": "default", "ouId": ts.ouID, "attributes": map[string]interface{}{"name": "lifespan-crud-agent"},
+		"validUntil": nil,
+	})
+	ts.Require().NoError(err)
+	ts.Require().Equal(http.StatusOK, resp.StatusCode, readBody(resp))
+	_ = resp.Body.Close()
+	agent = ts.getAgent(agentID)
+	ts.Nil(agent.ValidUntil, "an unbounded lifespan omits validUntil")
+	ts.Equal("UNBOUNDED", agent.Lifespan.Phase)
+}
+
+func (ts *AgentOAuthFlowsTestSuite) TestAgentLifespan_RegistrationRefusesInvalidValues() {
+	for value, code := range map[string]string{
+		"2027-03-31":           "AGT-1045",
+		"2020-01-01T00:00:00Z": "AGT-1046",
+	} {
+		resp, err := doPost(testServerURL+agentBasePath, map[string]interface{}{
+			"ouId": ts.ouID, "type": "default", "validUntil": value,
+			"attributes": map[string]interface{}{"name": "lifespan-invalid-agent"},
+		})
+		ts.Require().NoError(err)
+		ts.Equal(http.StatusBadRequest, resp.StatusCode, value)
+		ts.Equal(code, errorCode(resp), value)
+		_ = resp.Body.Close()
+	}
+}
+
+// TestAgentLifespan_TokenCappedAtValidUntil verifies an access token never outlives the agent.
+func (ts *AgentOAuthFlowsTestSuite) TestAgentLifespan_TokenCappedAtValidUntil() {
+	agentID := ts.createLifespanAgent("lifespan-cap-agent", "lifespan_cap_client", lifespanEnd(2*time.Minute))
+	defer func() { _ = deleteAgent(agentID) }()
+
+	tokenResult, err := testutils.RequestTokenWithResource(
+		"lifespan_cap_client", "lifespan_cap_client_secret", "", "", "client_credentials",
+		agentOAuthDefaultRSIdentifier)
+	ts.Require().NoError(err)
+	ts.Require().Equal(http.StatusOK, tokenResult.StatusCode, string(tokenResult.Body))
+	ts.Greater(tokenResult.Token.ExpiresIn, float64(0))
+	ts.LessOrEqual(tokenResult.Token.ExpiresIn, float64(120))
+}
+
+// TestAgentLifespan_ExpiredAgentObtainsNoToken verifies that the agent obtains tokens before validUntil,
+// is refused once it passes, and that the agent is kept, reported as expired. Governance refuses an
+// expired agent at client resolution, which answers invalid_client.
+func (ts *AgentOAuthFlowsTestSuite) TestAgentLifespan_ExpiredAgentObtainsNoToken() {
+	// Long enough that creating the agent and its first token request finish well before validUntil,
+	// even on a slow runner.
+	validUntil := lifespanEnd(20 * time.Second)
+	agentID := ts.createLifespanAgent("lifespan-expiry-agent", "lifespan_expiry_client", validUntil)
+	defer func() { _ = deleteAgent(agentID) }()
+
+	requestToken := func() *testutils.TokenHTTPResult {
+		result, err := testutils.RequestTokenWithResource(
+			"lifespan_expiry_client", "lifespan_expiry_client_secret", "", "", "client_credentials",
+			agentOAuthDefaultRSIdentifier)
+		ts.Require().NoError(err)
+		return result
+	}
+
+	tokenResult := requestToken()
+	ts.Require().Equal(http.StatusOK, tokenResult.StatusCode, string(tokenResult.Body))
+
+	// Poll until the expired agent's client is refused, allowing generous slack past validUntil.
+	end, err := time.Parse(time.RFC3339, *validUntil)
+	ts.Require().NoError(err)
+	deadline := end.Add(15 * time.Second)
+	for tokenResult.StatusCode != http.StatusUnauthorized && time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+		tokenResult = requestToken()
+	}
+	ts.Require().Equal(http.StatusUnauthorized, tokenResult.StatusCode, string(tokenResult.Body))
+	ts.Contains(string(tokenResult.Body), "invalid_client")
+
+	agent := ts.getAgent(agentID)
+	ts.Equal("EXPIRED", agent.Lifespan.Phase)
+	ts.Require().NotNil(agent.Status)
+	ts.Equal("EXPIRED", agent.Status.Value)
+
+	// Moving validUntil into the future reactivates the agent, and the update's own response reports
+	// the new status alongside the new phase.
+	resp, err := putAgentRaw(agentID, map[string]interface{}{
+		"type": "default", "ouId": ts.ouID, "attributes": map[string]interface{}{"name": "lifespan-expiry-agent"},
+		"validUntil": *lifespanEnd(time.Hour),
+	})
+	ts.Require().NoError(err)
+	body := readBody(resp)
+	_ = resp.Body.Close()
+	ts.Require().Equal(http.StatusOK, resp.StatusCode, body)
+	var reactivated Agent
+	ts.Require().NoError(json.Unmarshal([]byte(body), &reactivated))
+	ts.Require().NotNil(reactivated.Status)
+	ts.Equal("ACTIVE", reactivated.Status.Value)
+	ts.Require().NotNil(reactivated.Lifespan)
+	ts.Equal("ACTIVE", reactivated.Lifespan.Phase)
 }

@@ -33,10 +33,10 @@ const FLOW_MISMATCH_DEFAULT_VALUE =
  * fallback default already used for the same flows on the application's Flows tab.
  */
 const FLOW_TYPE_LABELS: Record<string, {key: string; defaultValue: string}> = {
-  authentication: {key: 'edit.flows.labels.authFlow', defaultValue: 'Sign-in Flow'},
-  registration: {key: 'edit.flows.labels.registrationFlow', defaultValue: 'Sign-up Flow'},
-  recovery: {key: 'edit.flows.labels.recoveryFlow', defaultValue: 'Recovery Flow'},
-  signout: {key: 'edit.flows.labels.signOutFlow', defaultValue: 'Sign Out Flow'},
+  authentication: {key: 'edit.flows.labels.authFlow', defaultValue: 'Sign-in flow'},
+  registration: {key: 'edit.flows.labels.registrationFlow', defaultValue: 'Sign-up flow'},
+  recovery: {key: 'edit.flows.labels.recoveryFlow', defaultValue: 'Recovery flow'},
+  signout: {key: 'edit.flows.labels.signOutFlow', defaultValue: 'Sign out flow'},
 };
 
 /**

@@ -57,6 +57,8 @@ func (f *flowFactory) CreateNode(id, _type string, properties map[string]interfa
 		return newRepresentationNode(id, nodeType, properties, isStartNode, isFinalNode), nil
 	case common.NodeTypeCall:
 		return newCallNode(id, properties, isStartNode, isFinalNode), nil
+	case common.NodeTypeVariables:
+		return newVariablesNode(id, properties, isStartNode, isFinalNode), nil
 	default:
 		return nil, errors.New("unsupported node type: " + _type)
 	}
@@ -80,6 +82,9 @@ func (f *flowFactory) CreateGraph(id string, _type providers.FlowType, version i
 		version: version,
 		nodes:   make(map[string]NodeInterface),
 		edges:   make(map[string][]string),
+
+		constantInputs: make(map[string]struct{}),
+		plainInputs:    make(map[string]struct{}),
 	}
 }
 

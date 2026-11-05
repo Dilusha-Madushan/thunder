@@ -1,7 +1,14 @@
 // Copyright 2025 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import {parseKeyValuePairs, serializeKeyValuePairs} from './keyValuePairs';
+import {
+  decodeKeyValuePairs,
+  encodeKeyValuePairs,
+  isCompleteKeyValuePair,
+  type KeyValuePair,
+  parseKeyValuePairs,
+  serializeKeyValuePairs,
+} from './keyValuePairs';
 import type {ConnectionFieldDef} from '../config/connectionFormFields';
 import {
   AUTHENTICATION_METHOD_FIELD_NAMES,
@@ -13,6 +20,7 @@ import type {
   ConnectionResponse,
   OutboundAuthConfig,
   OutboundAuthentication,
+  OutboundAuthMethod,
 } from '../models/connection';
 
 /** The placeholder value the API returns for stored secrets. */
@@ -49,6 +57,13 @@ export const AUTH_TYPE_FIELD = 'authentication.type';
 /** Prefix of the form keys holding the selected method's field values. */
 const AUTH_PROPERTY_PREFIX = 'authentication.properties.';
 
+/**
+ * Form key holding, as a pairs list, the properties whose names the administrator chooses, such
+ * as API-key headers. Kept outside {@link AUTH_PROPERTY_PREFIX} so a header name cannot collide
+ * with a field key.
+ */
+export const AUTH_ADDITIONAL_PROPERTIES_FIELD = 'authentication.additionalProperties';
+
 /** Form key holding the transport security mode of a vendor that secures its own transport. */
 const TLS_FIELD = 'tls';
 
@@ -72,8 +87,15 @@ export function authPropertyField(name: string): string {
  * A blank value is omitted rather than sent. That is what "keep the stored credential" looks
  * like: a credential is blanked when the response is loaded and only becomes non-empty once the
  * user replaces it, so no separate replaced-or-not flag is needed here.
+ *
+ * With the methods known, only the selected method's own fields are sent, so a value typed under
+ * another method is not sent with this one. Its additional properties are sent as entered; a
+ * stored one still holds the mask, which the server resolves to the stored value.
  */
-function authenticationFromFormValues(values: ConnectionFormValues): OutboundAuthConfig | undefined {
+function authenticationFromFormValues(
+  values: ConnectionFormValues,
+  methods?: OutboundAuthMethod[],
+): OutboundAuthConfig | undefined {
   const type: string = values[AUTH_TYPE_FIELD] ?? '';
   if (type === '') {
     return undefined;
@@ -82,9 +104,14 @@ function authenticationFromFormValues(values: ConnectionFormValues): OutboundAut
     return {type};
   }
 
+  const method: OutboundAuthMethod | undefined = methods?.find((candidate) => candidate.type === type);
   const properties: Record<string, string> = {};
   for (const [key, value] of Object.entries(values)) {
     if (!key.startsWith(AUTH_PROPERTY_PREFIX)) {
+      continue;
+    }
+    const name: string = key.slice(AUTH_PROPERTY_PREFIX.length);
+    if (method && !(method.fields ?? []).some((field) => field.key === name)) {
       continue;
     }
     const raw: string = (value ?? '').trim();
@@ -92,17 +119,53 @@ function authenticationFromFormValues(values: ConnectionFormValues): OutboundAut
     if (raw === '' || raw === MASKED_SECRET) {
       continue;
     }
-    properties[key.slice(AUTH_PROPERTY_PREFIX.length)] = raw;
+    properties[name] = raw;
+  }
+  if (method?.additionalProperties) {
+    for (const pair of decodeKeyValuePairs(values[AUTH_ADDITIONAL_PROPERTIES_FIELD] ?? '', 'pairs')) {
+      if (isCompleteKeyValuePair(pair)) {
+        properties[pair.name.trim()] = pair.value.trim();
+      }
+    }
   }
 
   return Object.keys(properties).length > 0 ? {properties, type} : {type};
 }
 
 /**
- * Flatten a response's authentication object into namespaced form values. A credential comes
- * back masked, so it is blanked here the same way a static secret field is.
+ * Error key for the selected method's additional properties, or undefined when they are valid or
+ * the method takes none. A half-filled row is reported rather than dropped, so a cleared value
+ * never deletes its header unnoticed.
  */
-export function authenticationToFormValues(response: ConnectionResponse): ConnectionFormValues {
+export function authenticationAdditionalPropertiesError(
+  values: ConnectionFormValues,
+  methods: OutboundAuthMethod[],
+): string | undefined {
+  const type: string = values[AUTH_TYPE_FIELD] || AUTH_TYPE_NONE;
+  if (!methods.find((method) => method.type === type)?.additionalProperties) {
+    return undefined;
+  }
+  const pairs: KeyValuePair[] = decodeKeyValuePairs(values[AUTH_ADDITIONAL_PROPERTIES_FIELD] ?? '', 'pairs');
+  if (!pairs.every(isCompleteKeyValuePair)) {
+    return 'connections:validation.keyValuePair';
+  }
+  const names: string[] = pairs.map((pair) => pair.name.trim().toLowerCase());
+  if (new Set(names).size !== names.length) {
+    return 'connections:validation.httpEndpointHeaderDuplicate';
+  }
+  return undefined;
+}
+
+/**
+ * Flatten a response's authentication object into namespaced form values. A credential comes
+ * back masked, so it is blanked here the same way a static secret field is. A property that is
+ * not one of the method's fields belongs to its additional properties and keeps its mask, so the
+ * row shows as stored.
+ */
+export function authenticationToFormValues(
+  response: ConnectionResponse,
+  methods?: OutboundAuthMethod[],
+): ConnectionFormValues {
   const values: ConnectionFormValues = {};
   const authentication: Partial<OutboundAuthConfig> | undefined = response.authentication;
   // An AuthZEN PDP returns the scheme-based shape, which carries no type and is mapped by its
@@ -112,8 +175,17 @@ export function authenticationToFormValues(response: ConnectionResponse): Connec
   }
 
   values[AUTH_TYPE_FIELD] = authentication.type;
+  const method: OutboundAuthMethod | undefined = methods?.find((candidate) => candidate.type === authentication.type);
+  const additional: KeyValuePair[] = [];
   for (const [name, value] of Object.entries(authentication.properties ?? {})) {
+    if (method?.additionalProperties && !(method.fields ?? []).some((field) => field.key === name)) {
+      additional.push({name, value});
+      continue;
+    }
     values[authPropertyField(name)] = value === MASKED_SECRET ? '' : value;
+  }
+  if (additional.length > 0) {
+    values[AUTH_ADDITIONAL_PROPERTIES_FIELD] = encodeKeyValuePairs(additional, 'pairs');
   }
   return values;
 }
@@ -140,6 +212,7 @@ export function responseToFormValues(
   response: ConnectionResponse,
   fields: ConnectionFieldDef[],
   redirectUri: string,
+  authenticationMethods?: OutboundAuthMethod[],
 ): ConnectionFormValues {
   const values: ConnectionFormValues = {};
   for (const field of fields) {
@@ -171,6 +244,10 @@ export function responseToFormValues(
       continue;
     }
     const raw: unknown = valueAtPath(response, field.responsePath ?? field.name);
+    if (field.kind === 'key-value' && field.keyValueFormat === 'pairs') {
+      values[field.name] = Array.isArray(raw) ? encodeKeyValuePairs(raw as KeyValuePair[], 'pairs') : '';
+      continue;
+    }
     if (field.kind === 'switch') {
       values[field.name] = raw === true ? 'true' : 'false';
       continue;
@@ -187,7 +264,7 @@ export function responseToFormValues(
   // values are merged in separately.
   return fields.some((field) => field.name === 'apiKeyHeaders')
     ? values
-    : {...values, ...authenticationToFormValues(response)};
+    : {...values, ...authenticationToFormValues(response, authenticationMethods)};
 }
 
 /** Convert flat authentication form values into the structured outbound-authentication API contract. */
@@ -218,12 +295,29 @@ export function outboundAuthenticationFromFormValues(values: ConnectionFormValue
   return {type: 'none'};
 }
 
+/**
+ * Whether two URLs differ in scheme, host or port, with default ports normalized. A URL that does
+ * not parse counts as changed unless the text is identical.
+ */
+export function urlOriginChanged(previous: string, next: string): boolean {
+  if (previous === next) {
+    return false;
+  }
+  try {
+    return new URL(previous).origin !== new URL(next).origin;
+  } catch {
+    return true;
+  }
+}
+
 export interface ToRequestOptions {
   mode: 'create' | 'edit';
   /** On edit, whether the user chose to replace the stored secret. */
   secretReplaced?: boolean;
   /** The caller handles authentication separately from metadata-driven fields. */
   excludeGenericAuthentication?: boolean;
+  /** The vendor's authentication methods, so only the selected method's properties are sent. */
+  authenticationMethods?: OutboundAuthMethod[];
 }
 
 /**
@@ -291,6 +385,16 @@ export function formValuesToRequest(
       continue;
     }
 
+    // Sent on every edit, even when empty, so removing the last pair clears the stored list.
+    // Validation blocks a half-filled row before this point; it is never sent.
+    if (field.kind === 'key-value' && field.keyValueFormat === 'pairs') {
+      const pairs: KeyValuePair[] = decodeKeyValuePairs(raw, 'pairs').filter(isCompleteKeyValuePair);
+      if (options.mode === 'edit' || pairs.length > 0) {
+        payload[field.name] = pairs;
+      }
+      continue;
+    }
+
     // Numeric API fields must not be sent as strings.
     if (field.kind === 'number') {
       const parsed = Number(raw);
@@ -306,7 +410,10 @@ export function formValuesToRequest(
     }
   }
 
-  const authentication: OutboundAuthConfig | undefined = authenticationFromFormValues(values);
+  const authentication: OutboundAuthConfig | undefined = authenticationFromFormValues(
+    values,
+    options.authenticationMethods,
+  );
   if (
     authentication &&
     !options.excludeGenericAuthentication &&
@@ -340,13 +447,37 @@ function isLoopbackHost(hostname: string): boolean {
   );
 }
 
-function isSecureAuthenticatedEndpoint(value: string): boolean {
+function isSecureAuthenticatedEndpoint(value: string, allowLoopbackHttp: boolean): boolean {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' || (url.protocol === 'http:' && isLoopbackHost(url.hostname));
+    return url.protocol === 'https:' || (allowLoopbackHttp && url.protocol === 'http:' && isLoopbackHost(url.hostname));
   } catch {
     return false;
   }
+}
+
+/** Error key for a URL that must be https because authentication is set. */
+export const HTTPS_REQUIRED_WITH_AUTHENTICATION_ERROR = 'connections:validation.httpsRequiredWithAuthentication';
+
+function hasUserInfo(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.username !== '' || url.password !== '';
+  } catch {
+    return false;
+  }
+}
+
+function keyValueNameError(field: ConnectionFieldDef, raw: string): string | undefined {
+  const names: string[] = decodeKeyValuePairs(raw, field.keyValueFormat).map((pair) => pair.name.toLowerCase());
+  const reserved = new Set<string>((field.reservedNames ?? []).map((name) => name.toLowerCase()));
+  if (names.some((name) => reserved.has(name))) {
+    return 'connections:validation.httpEndpointHeaderReserved';
+  }
+  if (field.uniqueNames && new Set(names).size !== names.length) {
+    return 'connections:validation.httpEndpointHeaderDuplicate';
+  }
+  return undefined;
 }
 
 /**
@@ -380,8 +511,8 @@ export function validateConnectionForm(
     }
 
     if (field.kind === 'key-value' && raw !== '') {
-      const pairs = parseKeyValuePairs(raw);
-      if (pairs.some((pair) => pair.name.trim() === '' || pair.value.trim() === '')) {
+      const pairs: KeyValuePair[] = decodeKeyValuePairs(raw, field.keyValueFormat);
+      if (!pairs.every(isCompleteKeyValuePair)) {
         errors[field.name] = 'connections:validation.keyValuePair';
         continue;
       }
@@ -402,15 +533,31 @@ export function validateConnectionForm(
       continue;
     }
 
+    if (field.kind === 'url' && field.rejectsUserInfo && hasUserInfo(raw)) {
+      errors[field.name] = 'connections:validation.httpEndpointUrlUserInfo';
+      continue;
+    }
+
+    if (field.kind === 'key-value') {
+      const nameError: string | undefined = keyValueNameError(field, raw);
+      if (nameError) {
+        errors[field.name] = nameError;
+        continue;
+      }
+    }
+
     const authenticationConfigured =
-      values['authenticationScheme'] !== undefined && values['authenticationScheme'] !== AuthenticationMethods.NONE;
+      (values['authenticationScheme'] !== undefined && values['authenticationScheme'] !== AuthenticationMethods.NONE) ||
+      ((values[AUTH_TYPE_FIELD] ?? '') !== '' && values[AUTH_TYPE_FIELD] !== AUTH_TYPE_NONE);
     if (
       authenticationConfigured &&
       field.requiresHttpsWhenAuthenticated &&
       raw !== '' &&
-      !isSecureAuthenticatedEndpoint(raw)
+      !isSecureAuthenticatedEndpoint(raw, !field.rejectsLoopbackHttp)
     ) {
-      errors[field.name] = 'connections:validation.authenticatedEndpointHttps';
+      errors[field.name] = field.rejectsLoopbackHttp
+        ? HTTPS_REQUIRED_WITH_AUTHENTICATION_ERROR
+        : 'connections:validation.authenticatedEndpointHttps';
       continue;
     }
 

@@ -1,4 +1,4 @@
-// Copyright 2025 The ThunderID Authors
+// Copyright 2025-2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package graphbuilder
@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/suite"
 
 	"github.com/thunder-id/thunderid/internal/flow/common"
+	flowconfig "github.com/thunder-id/thunderid/internal/flow/config"
 	"github.com/thunder-id/thunderid/internal/flow/core"
 	"github.com/thunder-id/thunderid/internal/flow/executor"
 	"github.com/thunder-id/thunderid/internal/flow/interceptor"
@@ -181,7 +182,8 @@ func (s *GraphBuilderTestSuite) TestGetGraph_BuildFailure() {
 	s.Nil(graph)
 	s.NotNil(err)
 	s.Equal(errorGraphBuildFailure.Code, err.Code)
-	s.Contains(err.ErrorDescription.DefaultValue, "node creation error")
+	s.Equal(errorGraphBuildFailure.ErrorDescription.DefaultValue, err.ErrorDescription.DefaultValue)
+	s.NotContains(err.ErrorDescription.DefaultValue, "node creation error")
 }
 
 func (s *GraphBuilderTestSuite) TestGetGraph_CacheSetError() {
@@ -492,6 +494,10 @@ func (s *GraphBuilderTestSuite) TestBuildGraph_WithInputs() {
 					Inputs: []providers.InputDefinition{
 						{Ref: "username", Type: "string", Identifier: "user", Required: true},
 						{Ref: "password", Type: "string", Identifier: "pass", Required: true},
+						{
+							Ref: "locale", Type: "TEXT_INPUT", Identifier: "locale",
+							DefaultValue: "en-US", Constant: true,
+						},
 					},
 				},
 			},
@@ -516,6 +522,9 @@ func (s *GraphBuilderTestSuite) TestBuildGraph_WithInputs() {
 	mockTaskNode.EXPECT().SetInputs([]providers.Input{
 		{Ref: "username", Type: "string", Identifier: "user", Required: true},
 		{Ref: "password", Type: "string", Identifier: "pass", Required: true},
+		{
+			Ref: "locale", Type: "TEXT_INPUT", Identifier: "locale", DefaultValue: "en-US", Constant: true,
+		},
 	})
 
 	mockGraph.EXPECT().AddNode(mockStartNode).Return(nil)
@@ -1655,6 +1664,36 @@ func (s *GraphBuilderTestSuite) TestConfigureNodePrompts_ValidationRulesCompiled
 	s.Nil(err)
 }
 
+// Prompt inputs carry their default and constant settings to the runtime.
+func (s *GraphBuilderTestSuite) TestConfigureNodePrompts_DefaultAndConstantCopied() {
+	nodeDef := &providers.NodeDefinition{
+		ID:   "prompt-1",
+		Type: "PROMPT",
+		Prompts: []providers.PromptDefinition{
+			{
+				Inputs: []providers.InputDefinition{
+					{Identifier: "department", Type: "TEXT_INPUT", DefaultValue: "Computer Science"},
+					{Identifier: "faculty", Type: "TEXT_INPUT", DefaultValue: "Engineering", Constant: true},
+				},
+				Action: &providers.ActionDefinition{Ref: "submit", NextNode: "next"},
+			},
+		},
+	}
+
+	mockPromptNode := coremock.NewPromptNodeInterfaceMock(s.T())
+	mockPromptNode.EXPECT().SetPrompts(mock.MatchedBy(func(prompts []common.Prompt) bool {
+		if len(prompts) != 1 || len(prompts[0].Inputs) != 2 {
+			return false
+		}
+		department, faculty := prompts[0].Inputs[0], prompts[0].Inputs[1]
+		return department.DefaultValue == "Computer Science" && !department.Constant &&
+			faculty.DefaultValue == "Engineering" && faculty.Constant
+	}))
+
+	err := s.builder.configureNodePrompts(context.Background(), nodeDef, mockPromptNode, map[string][]string{})
+	s.Nil(err)
+}
+
 // CALL node tests
 
 func (s *GraphBuilderTestSuite) TestBuildGraph_CallNode_MissingFlowRef() {
@@ -2011,13 +2050,13 @@ func (s *GraphBuilderTestSuite) TestSSOFlowDefinitionBuilds() {
 	// whereas some others dereference dependencies at construction time.
 	registry, err := executor.Initialize(
 		executor.ExecutorDependencies{FlowFactory: flowFactory},
-		engineconfig.FlowConfig{Executors: []string{
+		flowconfig.Config{Flow: engineconfig.FlowConfig{Executors: []string{
 			executor.ExecutorNameSSOCheck,
 			executor.ExecutorNameSession,
 			executor.ExecutorNameCredentialsAuth,
 			executor.ExecutorNameAuthorization,
 			executor.ExecutorNameAuthAssert,
-		}})
+		}}})
 	s.Require().NoError(err)
 
 	interceptorRegistry, err := interceptor.Initialize(

@@ -53,10 +53,15 @@ describe('resolveForPreview', () => {
     );
   });
 
-  it('leaves ctx untouched and a design token literal when it does not resolve', () => {
-    expect(resolveForPreview('{{ctx(otp)}} {{design(palette.unknown)}}', {translations, theme})).toBe(
-      '{{ctx(otp)}} {{design(palette.unknown)}}',
-    );
+  it('HTML-escapes a resolved design value so the preview matches the sent email', () => {
+    const unsafeTheme = {colorSchemes: {light: {palette: {primary: {main: `#fff" onmouseover="x`}}}}};
+    expect(
+      resolveForPreview('{{design(palette.primary.main)}}', {translations, theme: unsafeTheme, colorScheme: 'light'}),
+    ).toBe('#fff&#34; onmouseover=&#34;x');
+  });
+
+  it('leaves ctx untouched and strips an unresolved design token to empty', () => {
+    expect(resolveForPreview('{{ctx(otp)}} {{design(palette.unknown)}}', {translations, theme})).toBe('{{ctx(otp)}} ');
   });
 
   it('leaves a design token literal in the subject (not allowed there)', () => {
@@ -111,16 +116,25 @@ describe('collectWarnings', () => {
     });
   });
 
-  it('does not warn when a design token resolves against the theme', () => {
-    const theme = {colorSchemes: {light: {palette: {primary: {main: '#3688FF'}}}}};
-    const warnings = collectWarnings({channel: 'email', body: '{{design(palette.primary.main)}}', translations, theme});
+  const designKeys = new Set(['palette.primary.main']);
+
+  it('does not warn for a design token in the offered catalog, regardless of theme', () => {
+    const warnings = collectWarnings({
+      channel: 'email',
+      body: '{{design(palette.primary.main)}}',
+      translations,
+      designKeys,
+    });
     expect(warnings).toEqual([]);
   });
 
-  it('warns when a design token does not resolve against the theme', () => {
-    const theme = {colorSchemes: {light: {palette: {}}}};
-    const warnings = collectWarnings({channel: 'email', body: '{{design(palette.unknown)}}', translations, theme});
+  it('warns when a design token is outside the offered catalog', () => {
+    const warnings = collectWarnings({channel: 'email', body: '{{design(palette.unknown)}}', translations, designKeys});
     expect(warnings).toEqual([{severity: 'warning', code: 'designUnresolved', token: '{{design(palette.unknown)}}'}]);
+  });
+
+  it('leaves design tokens unchecked when no catalog is supplied', () => {
+    expect(collectWarnings({channel: 'email', body: '{{design(palette.unknown)}}', translations})).toEqual([]);
   });
 
   it('reports a translation with no value as an error (missing in every language)', () => {

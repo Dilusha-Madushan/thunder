@@ -371,7 +371,7 @@ describe('ViewUserTypePage', () => {
     it('displays self registration toggle', () => {
       render(<ViewUserTypePage />);
 
-      expect(screen.getByText('Self Registration')).toBeInTheDocument();
+      expect(screen.getByText('Self registration')).toBeInTheDocument();
       // SettingsCard renders a Switch component with role="switch"
       const toggle = screen.getByRole('switch');
       expect(toggle).not.toBeChecked();
@@ -392,7 +392,7 @@ describe('ViewUserTypePage', () => {
     it('displays display attribute section', () => {
       render(<ViewUserTypePage />);
 
-      expect(screen.getByText('Display Attribute')).toBeInTheDocument();
+      expect(screen.getByText('Display attribute')).toBeInTheDocument();
     });
 
     it('displays danger zone with delete button', async () => {
@@ -401,7 +401,7 @@ describe('ViewUserTypePage', () => {
 
       await user.click(screen.getByRole('tab', {name: /advanced/i}));
 
-      expect(screen.getByText('Danger Zone')).toBeInTheDocument();
+      expect(screen.getByText('Danger zone')).toBeInTheDocument();
       expect(screen.getByRole('button', {name: /^delete$/i})).toBeInTheDocument();
     });
 
@@ -1559,7 +1559,7 @@ describe('ViewUserTypePage', () => {
     });
   });
 
-  describe('Display Attribute Eligibility', () => {
+  describe('Display attribute Eligibility', () => {
     it('clears display attribute when the selected property is removed', async () => {
       const user = userEvent.setup();
       const userTypeWithDisplay: ApiUserType = {

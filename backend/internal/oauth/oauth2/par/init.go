@@ -31,14 +31,16 @@ func Initialize(
 	cfg oauthconfig.Config,
 	storeProvider providers.RuntimeStoreProvider,
 	jtiStore jti.JTIStoreInterface,
+	governance providers.IdentityGovernanceProvider,
+	authzDetails providers.AuthorizationDetailProvider,
 ) PARServiceInterface {
 	store := newPARRequestStore(storeProvider)
-	parSvc := newPARService(store, resourceService, cfg)
+	parSvc := newPARService(store, resourceService, authzDetails, cfg)
 	parEndpoint := discoveryService.GetOAuth2AuthorizationServerMetadata(
 		context.Background()).PushedAuthorizationRequestEndpoint
 	handler := newPARHandler(parSvc, dpopVerifier, parEndpoint)
 	registerRoutes(mux, handler, actorProvider, authnProvider, jwtService, discoveryService,
-		jtiStore, cfg.OAuth.ClientAssertion, cfg.JWT.Leeway)
+		jtiStore, governance, cfg.OAuth.ClientAssertion, cfg.JWT.Leeway)
 	return parSvc
 }
 
@@ -51,6 +53,7 @@ func registerRoutes(
 	jwtService jwt.JWTServiceInterface,
 	discoveryService discovery.DiscoveryServiceInterface,
 	jtiStore jti.JTIStoreInterface,
+	governance providers.IdentityGovernanceProvider,
 	assertionCfg engineconfig.ClientAssertionConfig,
 	jwtLeeway int64,
 ) {
@@ -62,7 +65,7 @@ func registerRoutes(
 	}
 
 	issuer := discoveryService.GetOAuth2AuthorizationServerMetadata(context.Background()).Issuer
-	clientAuthMiddleware := clientauth.ClientAuthMiddleware(actorProvider, authnProvider, jwtService,
+	clientAuthMiddleware := clientauth.ClientAuthMiddleware(actorProvider, authnProvider, governance, jwtService,
 		jtiStore, issuer, assertionCfg, jwtLeeway)
 	wrappedHandler := clientAuthMiddleware(http.HandlerFunc(handler.HandlePARRequest))
 

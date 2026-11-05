@@ -1,20 +1,20 @@
 // Copyright 2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import {QueryErrorNotice, ResourceAvatar, SettingsCard, UnsavedChangesBar} from '@thunderid/components';
+import {DocumentTitle, QueryErrorNotice, ResourceAvatar, SettingsCard, UnsavedChangesBar} from '@thunderid/components';
 import {useConfig} from '@thunderid/contexts';
 import {getErrorMessage} from '@thunderid/utils';
 import {
   Alert,
   Box,
   Button,
-  FormControl,
-  FormLabel,
   ListingTable,
   PageContent,
   Skeleton,
   Stack,
+  Switch,
   TextField,
+  Tooltip,
   Typography,
 } from '@wso2/oxygen-ui';
 import {AlertCircle, ChevronLeft, Trash2} from '@wso2/oxygen-ui-icons-react';
@@ -25,8 +25,10 @@ import useDeleteConnection from '../api/useDeleteConnection';
 import useTrustedIssuer from '../api/useTrustedIssuer';
 import useUpdateTrustedIssuer from '../api/useUpdateTrustedIssuer';
 import ConnectionDeleteDialog from '../components/ConnectionDeleteDialog';
+import OrganizationUnitSection from '../components/OrganizationUnitSection';
 import ConnectionConstants from '../constants/connection-constants';
 import useConnectionRoutes from '../hooks/useConnectionRoutes';
+import useIsIdJagAcceptanceUnavailable from '../hooks/useIsIdJagAcceptanceUnavailable';
 import {ConnectionTypes} from '../models/connection';
 import type {TrustedIssuerFormData} from '../models/trusted-issuer';
 import isConflictError from '../utils/isConflictError';
@@ -47,6 +49,7 @@ export default function TrustedIssuerDetailPage(): JSX.Element {
   const trustedIssuerQuery = useTrustedIssuer(id);
   const updateMutation = useUpdateTrustedIssuer(id ?? '');
   const deleteMutation = useDeleteConnection(ConnectionTypes.OIDC);
+  const isIdJagAcceptanceUnavailable = useIsIdJagAcceptanceUnavailable();
 
   const [editedValues, setEditedValues] = useState<Partial<TrustedIssuerFormData>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
@@ -119,6 +122,25 @@ export default function TrustedIssuerDetailPage(): JSX.Element {
     setGeneralError(null);
   };
 
+  const idJagTitle = t(
+    'trustedIssuers:detail.consumption.title',
+    'Identity Assertion JWT Authorization Grant (ID-JAG)',
+  );
+  const idJagUnavailableHint = t(
+    'trustedIssuers:idJag.acceptanceUnavailable',
+    'This server does not accept identity assertions from any issuer.',
+  );
+  // While the runtime does not accept identity assertions, ID-JAG can be turned off but not on, and
+  // the card body says why whether it is on or off.
+  const idJagSwitch = (
+    <Switch
+      checked={values.idJagEnabled}
+      disabled={isIdJagAcceptanceUnavailable && !values.idJagEnabled}
+      onChange={(e) => setField('idJagEnabled', e.target.checked)}
+      slotProps={{input: {'aria-label': idJagTitle, role: 'switch'}}}
+    />
+  );
+
   const isLoading: boolean = trustedIssuerQuery.isLoading;
   const notFound: boolean = !isLoading && !data;
 
@@ -146,6 +168,7 @@ export default function TrustedIssuerDetailPage(): JSX.Element {
 
   return (
     <PageContent>
+      <DocumentTitle title={data?.name ?? t('navigation:pages.connections', 'Connections')} />
       <Button
         variant="text"
         startIcon={<ChevronLeft size={16} />}
@@ -218,67 +241,63 @@ export default function TrustedIssuerDetailPage(): JSX.Element {
               description={t('trustedIssuers:detail.general.description', 'Core identity of this trusted issuer.')}
             >
               <Stack direction="column" spacing={3}>
-                <FormControl fullWidth required error={Boolean(nameError ?? (touched['name'] && errors.name))}>
-                  <FormLabel htmlFor="trusted-issuer-name">
-                    {t('trustedIssuers:create.form.name.label', 'Name')}
-                  </FormLabel>
-                  <TextField
-                    id="trusted-issuer-name"
-                    fullWidth
-                    value={values.name}
-                    error={Boolean(nameError ?? (touched['name'] && errors.name))}
-                    helperText={nameError ?? (touched['name'] ? fieldErrorMessage(errors.name) : undefined)}
-                    onChange={(e) => setField('name', e.target.value)}
-                    onBlur={() => setTouchedField('name')}
-                  />
-                </FormControl>
+                <TextField
+                  labelPlacement="top"
+                  label={t('trustedIssuers:create.form.name.label', 'Name')}
+                  required
+                  id="trusted-issuer-name"
+                  fullWidth
+                  value={values.name}
+                  error={Boolean(nameError ?? (touched['name'] && errors.name))}
+                  helperText={nameError ?? (touched['name'] ? fieldErrorMessage(errors.name) : undefined)}
+                  onChange={(e) => setField('name', e.target.value)}
+                  onBlur={() => setTouchedField('name')}
+                />
 
-                <FormControl fullWidth required error={Boolean(touched['issuer'] && errors.issuer)}>
-                  <FormLabel htmlFor="trusted-issuer-issuer">
-                    {t('trustedIssuers:create.form.issuer.label', 'Issuer URI')}
-                  </FormLabel>
-                  <TextField
-                    id="trusted-issuer-issuer"
-                    fullWidth
-                    value={values.issuer}
-                    error={Boolean(touched['issuer'] && errors.issuer)}
-                    helperText={
-                      (touched['issuer'] ? fieldErrorMessage(errors.issuer) : undefined) ??
-                      t(
-                        'trustedIssuers:create.form.issuer.hint',
-                        "The issuer URI from the external IdP's OpenID Connect discovery document.",
-                      )
-                    }
-                    onChange={(e) => setField('issuer', e.target.value)}
-                    onBlur={() => setTouchedField('issuer')}
-                  />
-                </FormControl>
+                <TextField
+                  labelPlacement="top"
+                  label={t('trustedIssuers:create.form.issuer.label', 'Issuer URI')}
+                  required
+                  id="trusted-issuer-issuer"
+                  fullWidth
+                  value={values.issuer}
+                  error={Boolean(touched['issuer'] && errors.issuer)}
+                  helperText={
+                    (touched['issuer'] ? fieldErrorMessage(errors.issuer) : undefined) ??
+                    t(
+                      'trustedIssuers:create.form.issuer.hint',
+                      "The issuer URI from the external IdP's OpenID Connect discovery document.",
+                    )
+                  }
+                  onChange={(e) => setField('issuer', e.target.value)}
+                  onBlur={() => setTouchedField('issuer')}
+                />
 
-                <FormControl fullWidth required error={Boolean(touched['jwksEndpoint'] && errors.jwksEndpoint)}>
-                  <FormLabel htmlFor="trusted-issuer-jwks-endpoint">
-                    {t('trustedIssuers:create.form.jwksEndpoint.label', 'JWKS endpoint')}
-                  </FormLabel>
-                  <TextField
-                    id="trusted-issuer-jwks-endpoint"
-                    fullWidth
-                    value={values.jwksEndpoint}
-                    error={Boolean(touched['jwksEndpoint'] && errors.jwksEndpoint)}
-                    helperText={
-                      (touched['jwksEndpoint'] ? fieldErrorMessage(errors.jwksEndpoint) : undefined) ??
-                      t(
-                        'trustedIssuers:create.form.jwksEndpoint.hint',
-                        'The JWKS endpoint used to validate the signature of incoming identity assertions.',
-                      )
-                    }
-                    onChange={(e) => setField('jwksEndpoint', e.target.value)}
-                    onBlur={() => setTouchedField('jwksEndpoint')}
-                  />
-                </FormControl>
+                <TextField
+                  labelPlacement="top"
+                  label={t('trustedIssuers:create.form.jwksEndpoint.label', 'JWKS endpoint')}
+                  required
+                  id="trusted-issuer-jwks-endpoint"
+                  fullWidth
+                  value={values.jwksEndpoint}
+                  error={Boolean(touched['jwksEndpoint'] && errors.jwksEndpoint)}
+                  helperText={
+                    (touched['jwksEndpoint'] ? fieldErrorMessage(errors.jwksEndpoint) : undefined) ??
+                    t(
+                      'trustedIssuers:create.form.jwksEndpoint.hint',
+                      'The JWKS endpoint used to validate the signature of incoming identity assertions.',
+                    )
+                  }
+                  onChange={(e) => setField('jwksEndpoint', e.target.value)}
+                  onBlur={() => setTouchedField('jwksEndpoint')}
+                />
               </Stack>
             </SettingsCard>
 
+            {data?.ouId && <OrganizationUnitSection ouId={data.ouId} />}
+
             <SettingsCard
-              title={t('trustedIssuers:detail.tokenExchange.title', 'Token Exchange')}
+              title={t('trustedIssuers:detail.tokenExchange.title', 'Token exchange')}
               description={t(
                 'trustedIssuers:detail.tokenExchange.description',
                 'Exchange subject tokens from this issuer for access tokens.',
@@ -286,43 +305,48 @@ export default function TrustedIssuerDetailPage(): JSX.Element {
               enabled={values.tokenExchangeEnabled}
               onToggle={(checked) => setField('tokenExchangeEnabled', checked)}
             >
-              <FormControl fullWidth>
-                <FormLabel htmlFor="trusted-issuer-token-audience">
-                  {t('trustedIssuers:detail.tokenExchange.audience.label', 'Trusted token audience')}
-                </FormLabel>
-                <TextField
-                  id="trusted-issuer-token-audience"
-                  fullWidth
-                  placeholder="api://thunderid"
-                  value={values.trustedTokenAudience ?? ''}
-                  helperText={t(
-                    'trustedIssuers:detail.tokenExchange.audience.hint',
-                    "An additional audience value {{productName}} will accept in subject tokens from this issuer. Tokens whose audience is {{productName}}'s own issuer URL are always accepted.",
-                    {productName},
-                  )}
-                  onChange={(e) => setField('trustedTokenAudience', e.target.value || undefined)}
-                />
-              </FormControl>
+              <TextField
+                labelPlacement="top"
+                label={t('trustedIssuers:detail.tokenExchange.audience.label', 'Trusted token audience')}
+                id="trusted-issuer-token-audience"
+                fullWidth
+                placeholder="api://thunderid"
+                value={values.trustedTokenAudience ?? ''}
+                helperText={t(
+                  'trustedIssuers:detail.tokenExchange.audience.hint',
+                  "An additional audience value {{productName}} will accept in subject tokens from this issuer. Tokens whose audience is {{productName}}'s own issuer URL are always accepted.",
+                  {productName},
+                )}
+                onChange={(e) => setField('trustedTokenAudience', e.target.value || undefined)}
+              />
             </SettingsCard>
 
             <SettingsCard
-              title={t(
-                'trustedIssuers:detail.consumption.title',
-                'Identity Assertion JWT Authorization Grant (ID-JAG)',
-              )}
+              title={idJagTitle}
               description={t(
                 'trustedIssuers:detail.idJag.description',
                 'Accept and exchange signed identity assertions from this issuer for access tokens.',
               )}
-              enabled={values.idJagEnabled}
-              onToggle={(checked) => setField('idJagEnabled', checked)}
+              headerAction={
+                isIdJagAcceptanceUnavailable ? (
+                  <Tooltip title={idJagUnavailableHint}>
+                    <span>{idJagSwitch}</span>
+                  </Tooltip>
+                ) : (
+                  idJagSwitch
+                )
+              }
             >
-              <Typography variant="body2" color="text.secondary">
-                {t(
-                  'trustedIssuers:detail.idJag.enabledNote',
-                  'Identity assertions from this issuer are accepted via the ID-JAG protocol.',
-                )}
-              </Typography>
+              {(values.idJagEnabled || isIdJagAcceptanceUnavailable) && (
+                <Typography variant="body2" color="text.secondary">
+                  {isIdJagAcceptanceUnavailable
+                    ? idJagUnavailableHint
+                    : t(
+                        'trustedIssuers:detail.idJag.enabledNote',
+                        'Identity assertions from this issuer are accepted via the ID-JAG protocol.',
+                      )}
+                </Typography>
+              )}
             </SettingsCard>
 
             <SettingsCard title={t('trustedIssuers:detail.dangerZone.title', 'Danger zone')}>

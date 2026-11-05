@@ -4,7 +4,9 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import {screen, cleanup, fireEvent} from '@testing-library/react';
 import type {EmbeddedFlowComponent} from '@thunderid/react';
+import type {JSX} from 'react';
 import {describe, it, expect, afterEach, vi} from 'vitest';
+import type {RenderFlowField} from '../../../../models/flow';
 import renderWithProviders from '../../../../test/renderWithProviders';
 import BlockAdapter from '../BlockAdapter';
 
@@ -50,11 +52,19 @@ const renderBlock = (
     recoveryEnabled = true,
     values = BLOCK_VALUES,
     onValidate = undefined,
+    renderField = undefined,
+    isSubmitDisabled = undefined,
+    additionalData = undefined,
+    rendersInputsWithoutSubmit = undefined,
   }: {
     onSubmit?: (...args: unknown[]) => void;
     recoveryEnabled?: boolean;
     values?: Record<string, string>;
     onValidate?: (components: EmbeddedFlowComponent[]) => boolean;
+    renderField?: RenderFlowField;
+    isSubmitDisabled?: boolean;
+    additionalData?: Record<string, unknown>;
+    rendersInputsWithoutSubmit?: boolean;
   } = {},
 ) =>
   renderWithProviders(
@@ -67,6 +77,10 @@ const renderBlock = (
       onInputChange={noop}
       onSubmit={onSubmit}
       onValidate={onValidate}
+      renderField={renderField}
+      isSubmitDisabled={isSubmitDisabled}
+      additionalData={additionalData}
+      rendersInputsWithoutSubmit={rendersInputsWithoutSubmit}
     />,
   );
 
@@ -153,6 +167,46 @@ describe('BlockAdapter: RICH_TEXT inside a form block', () => {
     fireEvent.click(screen.getByRole('link', {name: 'Forgot password?'}));
 
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({id: 'action_forgot_password'}), BLOCK_VALUES);
+  });
+});
+
+describe('BlockAdapter: inputs in a block whose only actions are triggers', () => {
+  const triggerBlock = {
+    id: 'block_trigger_inputs',
+    type: 'BLOCK',
+    components: [{id: 'input_code', type: 'TEXT_INPUT', ref: 'code', label: 'Code'}, socialTrigger],
+  };
+
+  it('leaves the inputs out by default', () => {
+    renderBlock(triggerBlock, {values: {}});
+
+    expect(document.querySelector('input[name="code"]')).toBeNull();
+    expect(screen.getByRole('button', {name: 'Continue with Google'})).toBeTruthy();
+  });
+
+  it('draws the inputs when asked to', () => {
+    renderBlock(triggerBlock, {values: {}, rendersInputsWithoutSubmit: true});
+
+    expect(document.querySelector('input[name="code"]')).toBeTruthy();
+    expect(screen.getByRole('button', {name: 'Continue with Google'})).toBeTruthy();
+  });
+
+  it('draws the inputs of a block with no action at all when asked to', () => {
+    renderBlock(
+      {id: 'block_inputs_only', type: 'BLOCK', components: [{id: 'input_code', type: 'TEXT_INPUT', ref: 'code'}]},
+      {values: {}, rendersInputsWithoutSubmit: true},
+    );
+
+    expect(document.querySelector('input[name="code"]')).toBeTruthy();
+  });
+
+  it('submits the values the inputs hold with the trigger', () => {
+    const onSubmit = vi.fn();
+    renderBlock(triggerBlock, {onSubmit, values: {code: '1234'}, rendersInputsWithoutSubmit: true});
+
+    fireEvent.click(screen.getByRole('button', {name: 'Continue with Google'}));
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({id: 'action_google'}), {code: '1234'});
   });
 });
 
@@ -360,5 +414,185 @@ describe('BlockAdapter: BOOLEAN_INPUT inside a form block', () => {
 
     const checkbox: HTMLInputElement = screen.getByRole('checkbox', {name: 'Active'});
     expect(checkbox.checked).toBe(true);
+  });
+});
+
+describe('BlockAdapter: blocked approval', () => {
+  const denyAction = {id: 'action_deny', type: 'ACTION', eventType: 'SUBMIT', variant: 'SECONDARY', label: 'Deny'};
+  const allowAction = {id: 'action_allow', type: 'ACTION', eventType: 'SUBMIT', variant: 'PRIMARY', label: 'Allow'};
+  const consentBlock = {id: 'block_003', type: 'BLOCK', components: [allowAction, denyAction]};
+
+  const renderConsentBlock = (approvalBlocked: boolean, onSubmit = vi.fn(), isLoading = false) => {
+    const {container} = renderWithProviders(
+      <BlockAdapter
+        component={consentBlock as EmbeddedFlowComponent}
+        index={0}
+        values={{}}
+        isLoading={isLoading}
+        resolve={(template) => template}
+        onInputChange={noop}
+        onSubmit={onSubmit}
+        approvalBlocked={approvalBlocked}
+      />,
+    );
+    return {form: container.querySelector('form')!, onSubmit};
+  };
+
+  it('disables only the approving action and ignores a form submission while blocked', () => {
+    const {form, onSubmit} = renderConsentBlock(true);
+
+    expect(screen.getByRole<HTMLButtonElement>('button', {name: 'Allow'}).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', {name: 'Deny'}).disabled).toBe(false);
+
+    fireEvent.submit(form);
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', {name: 'Deny'}));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({id: 'action_deny'}), {});
+  });
+
+  it('disables every action while loading, whether or not approval is blocked', () => {
+    renderConsentBlock(false, vi.fn(), true);
+
+    expect(screen.getByRole<HTMLButtonElement>('button', {name: 'Allow'}).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', {name: 'Deny'}).disabled).toBe(true);
+  });
+
+  it('submits the approving action when not blocked', () => {
+    const {form, onSubmit} = renderConsentBlock(false);
+
+    expect(screen.getByRole<HTMLButtonElement>('button', {name: 'Allow'}).disabled).toBe(false);
+    fireEvent.submit(form);
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({id: 'action_allow'}), {});
+  });
+});
+
+/** A field renderer that answers for one component type and leaves every other type to the shared adapters. */
+const renderFieldFor =
+  (type: string, element: JSX.Element | null): RenderFlowField =>
+  (component) =>
+    (component as {type: string}).type === type ? element : undefined;
+
+const nameInput = {id: 'input_name', type: 'TEXT_INPUT', ref: 'name', label: 'Name'};
+
+describe('BlockAdapter: renderField extension', () => {
+  const pickerInput = {id: 'input_picker', type: 'CUSTOM_PICKER', ref: 'picker', label: 'Picker'};
+  const formBlock = {id: 'block_001', type: 'BLOCK', components: [nameInput, pickerInput, submitAction]};
+
+  it('renders what the callback returns for a type the shared adapters do not cover', () => {
+    renderBlock(formBlock, {renderField: renderFieldFor('CUSTOM_PICKER', <p>custom picker</p>)});
+
+    expect(screen.getByText('custom picker')).toBeTruthy();
+  });
+
+  it('leaves every other field to the shared adapters', () => {
+    renderBlock(formBlock, {renderField: renderFieldFor('CUSTOM_PICKER', <p>custom picker</p>)});
+
+    expect(document.querySelector('input[name="name"]')).toBeTruthy();
+    expect(screen.getByRole('button', {name: 'Sign in'})).toBeTruthy();
+  });
+
+  it('hands the callback the component and the block field props', () => {
+    const renderField = vi.fn<RenderFlowField>(() => undefined);
+    renderBlock(formBlock, {renderField, values: {picker: 'value-1'}, additionalData: {rootOuId: 'ou-1'}});
+
+    const [, fieldProps] = renderField.mock.calls.find(
+      ([component]) => (component as {type: string}).type === 'CUSTOM_PICKER',
+    )!;
+
+    expect(fieldProps).toMatchObject({
+      component: expect.objectContaining({id: 'input_picker'}),
+      values: {picker: 'value-1'},
+      isLoading: false,
+      additionalData: {rootOuId: 'ou-1'},
+    });
+    expect(fieldProps.onInputChange).toBeInstanceOf(Function);
+  });
+
+  it('takes precedence over the shared adapter for the same type', () => {
+    renderBlock(formBlock, {
+      renderField: renderFieldFor('TEXT_INPUT', <p>overridden</p>),
+    });
+
+    expect(screen.getByText('overridden')).toBeTruthy();
+    expect(document.querySelector('input[name="name"]')).toBeNull();
+  });
+
+  it('omits a field the callback returns null for, without falling back to the shared adapter', () => {
+    renderBlock(formBlock, {renderField: renderFieldFor('TEXT_INPUT', null)});
+
+    expect(document.querySelector('input[name="name"]')).toBeNull();
+  });
+
+  it('reaches a field nested in a stack', () => {
+    const stackedBlock = {
+      id: 'block_002',
+      type: 'BLOCK',
+      components: [{id: 'stack_1', type: 'STACK', components: [pickerInput]}, submitAction],
+    };
+
+    renderBlock(stackedBlock, {renderField: renderFieldFor('CUSTOM_PICKER', <p>custom picker</p>)});
+
+    expect(screen.getByText('custom picker')).toBeTruthy();
+  });
+
+  it('renders a field without an id', () => {
+    const {id: omittedId, ...pickerWithoutId} = pickerInput;
+    renderBlock(
+      {id: 'block_003', type: 'BLOCK', components: [pickerWithoutId, submitAction]},
+      {
+        renderField: renderFieldFor('CUSTOM_PICKER', <p>custom picker</p>),
+      },
+    );
+
+    expect(omittedId).toBe('input_picker');
+    expect(screen.getByText('custom picker')).toBeTruthy();
+  });
+
+  it('changes nothing when no callback is given', () => {
+    renderBlock(formBlock);
+
+    expect(document.querySelector('input[name="name"]')).toBeTruthy();
+    expect(screen.queryByText('custom picker')).toBeNull();
+  });
+});
+
+describe('BlockAdapter: isSubmitDisabled', () => {
+  const formBlock = {id: 'block_001', type: 'BLOCK', components: [nameInput, submitAction]};
+
+  it('disables the submit button', () => {
+    renderBlock(formBlock, {isSubmitDisabled: true});
+
+    expect(screen.getByRole('button', {name: 'Sign in'}).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('leaves the inputs enabled', () => {
+    renderBlock(formBlock, {isSubmitDisabled: true});
+
+    expect(document.querySelector<HTMLInputElement>('input[name="name"]')!.disabled).toBe(false);
+  });
+
+  it('does not submit the form when it is submitted anyway', () => {
+    const onSubmit = vi.fn();
+    renderBlock(formBlock, {isSubmitDisabled: true, onSubmit});
+
+    fireEvent.submit(document.querySelector('form')!);
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('submits the form when it is not set', () => {
+    const onSubmit = vi.fn();
+    renderBlock(formBlock, {onSubmit});
+
+    fireEvent.submit(document.querySelector('form')!);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the submit button disabled while the form is loading, and enabled otherwise', () => {
+    renderBlock(formBlock, {isSubmitDisabled: false});
+
+    expect(screen.getByRole('button', {name: 'Sign in'}).hasAttribute('disabled')).toBe(false);
   });
 });

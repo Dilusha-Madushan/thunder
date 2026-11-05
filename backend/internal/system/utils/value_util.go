@@ -172,3 +172,11 @@ func FormatExpiryDuration(seconds int64) string {
 	}
 	return strconv.FormatInt(value, 10) + " " + unit
 }
+
+// DerefOr returns *value, or fallback when value is nil.
+func DerefOr[T any](value *T, fallback T) T {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}

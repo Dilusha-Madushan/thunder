@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {NameSuggestion} from '@thunderid/components';
-import {Checkbox, FormControl, FormControlLabel, FormLabel, Stack, TextField, Typography} from '@wso2/oxygen-ui';
+import {Checkbox, FormControl, FormControlLabel, Stack, TextField, Typography} from '@wso2/oxygen-ui';
 import {useEffect, type ChangeEvent, type JSX} from 'react';
 import {useTranslation} from 'react-i18next';
 import {isDefaultEligibleType, type ResourceServerType} from '../../models/resource-server';
+import {isValidMcpServerIdentifier} from '../../utils/isValidMcpServerIdentifier';
 
 interface ConfigureNameProps {
   name: string;
@@ -38,11 +39,15 @@ export default function ConfigureName({
 }: ConfigureNameProps): JSX.Element {
   const {t} = useTranslation();
 
+  const trimmedIdentifier = identifier.trim();
+  const isIdentifierInvalid =
+    selectedType === 'MCP' && trimmedIdentifier.length > 0 && !isValidMcpServerIdentifier(trimmedIdentifier);
+
   useEffect((): void => {
     if (onReadyChange) {
-      onReadyChange(name.trim().length > 0 && identifier.trim().length > 0);
+      onReadyChange(name.trim().length > 0 && trimmedIdentifier.length > 0 && !isIdentifierInvalid);
     }
-  }, [name, identifier, onReadyChange]);
+  }, [name, trimmedIdentifier, isIdentifierInvalid, onReadyChange]);
 
   const handleNameChange = (e: ChangeEvent<HTMLInputElement>): void => {
     onNameChange(e.target.value);
@@ -66,13 +71,15 @@ export default function ConfigureName({
           : t('resourceServers:create.name.title', "Let's collect some details about your resource server")}
       </Typography>
 
-      <FormControl fullWidth required>
-        <FormLabel htmlFor="resource-server-name-input">
-          {selectedType === 'MCP'
-            ? t('resourceServers:create.name.nameLabelMcp', 'MCP Server Name')
-            : t('resourceServers:create.name.nameLabel', 'Resource Server Name')}
-        </FormLabel>
+      <Stack>
         <TextField
+          labelPlacement="top"
+          label={
+            selectedType === 'MCP'
+              ? t('resourceServers:create.name.nameLabelMcp', 'MCP server name')
+              : t('resourceServers:create.name.nameLabel', 'Resource server name')
+          }
+          required
           id="resource-server-name-input"
           fullWidth
           value={name}
@@ -81,35 +88,39 @@ export default function ConfigureName({
         />
 
         <NameSuggestion onSelect={onNameChange} />
-      </FormControl>
+      </Stack>
 
-      <FormControl fullWidth required>
-        <FormLabel htmlFor="resource-server-identifier-input">
-          {t('resourceServers:create.name.identifierLabel', 'Identifier')}
-        </FormLabel>
-        <TextField
-          id="resource-server-identifier-input"
-          fullWidth
-          value={identifier}
-          onChange={handleIdentifierChange}
-          placeholder={
-            selectedType === 'MCP'
-              ? t('resourceServers:create.name.identifierPlaceholderMcp', 'https://mcp.example.com')
-              : t('resourceServers:create.name.identifierPlaceholder', 'https://api.example.com')
-          }
-          helperText={
-            selectedType === 'MCP'
+      <TextField
+        labelPlacement="top"
+        label={t('resourceServers:create.name.identifierLabel', 'Identifier')}
+        required
+        id="resource-server-identifier-input"
+        fullWidth
+        value={identifier}
+        onChange={handleIdentifierChange}
+        placeholder={
+          selectedType === 'MCP'
+            ? t('resourceServers:create.name.identifierPlaceholderMcp', 'https://mcp.example.com/mcp')
+            : t('resourceServers:create.name.identifierPlaceholder', 'https://api.example.com')
+        }
+        error={isIdentifierInvalid}
+        helperText={
+          isIdentifierInvalid
+            ? t(
+                'resourceServers:create.name.identifierInvalidMcp',
+                'Enter an http or https URL with no fragment, such as https://mcp.example.com/mcp.',
+              )
+            : selectedType === 'MCP'
               ? t(
                   'resourceServers:create.name.identifierHintMcp',
-                  'A unique identifier for this MCP server. When set as an absolute URI, it becomes the token audience for RFC 8707 resource indicators.',
+                  'The URL MCP clients use to reach this server, such as https://mcp.example.com/mcp. MCP clients send it as the resource parameter, and it becomes the token audience.',
                 )
               : t(
                   'resourceServers:create.name.identifierHint',
                   'A unique identifier for this resource server. When set as an absolute URI, it becomes the token audience for RFC 8707 resource indicators.',
                 )
-          }
-        />
-      </FormControl>
+        }
+      />
 
       {isDefaultEligible && (
         <FormControl fullWidth>

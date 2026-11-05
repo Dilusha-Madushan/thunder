@@ -27,6 +27,11 @@ vi.mock('react-i18next', async (importOriginal) => ({
   }),
 }));
 
+vi.mock('@thunderid/contexts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@thunderid/contexts')>()),
+  useConfig: () => ({config: {brand: {product_name: 'ThunderID'}}}),
+}));
+
 // Mock useNavigate
 const mockNavigate = vi.fn().mockResolvedValue(undefined);
 
@@ -50,6 +55,45 @@ const mockCreateFlow = {
 
 vi.mock('../../api/useCreateFlow', () => ({
   default: () => mockCreateFlow,
+}));
+
+// Mock the organization unit hook and the OU step so each test controls how many OUs there are
+const ouState: {hasMultipleOUs: boolean; isLoading: boolean; ouList: {id: string}[]} = {
+  hasMultipleOUs: false,
+  isLoading: false,
+  ouList: [{id: 'ou-root'}],
+};
+
+vi.mock('@thunderid/configure-organization-units', () => ({
+  useHasMultipleOUs: () => ouState,
+}));
+
+vi.mock('../../components/create-flow/FlowOrganizationUnitStep', () => ({
+  default: ({
+    isLoading,
+    value,
+    onChange,
+    onBack,
+    onContinue,
+  }: {
+    isLoading: boolean;
+    value: string;
+    onChange: (ouId: string) => void;
+    onBack: () => void;
+    onContinue: () => void;
+  }) => (
+    <div data-testid="ou-step" data-loading={String(isLoading)} data-value={value}>
+      <button type="button" data-testid="ou-pick-b" onClick={() => onChange('ou-b')}>
+        pick b
+      </button>
+      <button type="button" data-testid="ou-continue" onClick={onContinue}>
+        continue
+      </button>
+      <button type="button" data-testid="ou-back" onClick={onBack}>
+        back
+      </button>
+    </div>
+  ),
 }));
 
 // Track callbacks from child components
@@ -87,6 +131,9 @@ describe('FlowCreatePage', () => {
     capturedTypeProps = {};
     capturedTemplateProps = {};
     capturedConfigureProps = {};
+    ouState.hasMultipleOUs = false;
+    ouState.isLoading = false;
+    ouState.ouList = [{id: 'ou-root'}];
   });
 
   describe('Initial Rendering', () => {
@@ -99,7 +146,7 @@ describe('FlowCreatePage', () => {
     it('should render the breadcrumb with Flow Type label', () => {
       render(<FlowCreatePage />);
 
-      expect(screen.getByText('Flow Type')).toBeInTheDocument();
+      expect(screen.getByText('Flow type')).toBeInTheDocument();
     });
 
     it('should render the Continue button', () => {
@@ -166,6 +213,14 @@ describe('FlowCreatePage', () => {
     fireEvent.click(screen.getByText('Continue'));
   };
 
+  const navigateToDeviceGrantConfigureStep = (): void => {
+    act(() => {
+      (capturedTypeProps['onTypeChange'] as (type: string) => void)('DEVICE_GRANT');
+      (capturedTypeProps['onReadyChange'] as (ready: boolean) => void)(true);
+    });
+    fireEvent.click(screen.getByText('Continue'));
+  };
+
   describe('Step Navigation', () => {
     it('should advance to Template step when Continue is clicked after selecting a type', () => {
       render(<FlowCreatePage />);
@@ -180,7 +235,7 @@ describe('FlowCreatePage', () => {
 
       navigateToTemplateStep();
 
-      expect(screen.getByText('Flow Type')).toBeInTheDocument();
+      expect(screen.getByText('Flow type')).toBeInTheDocument();
       expect(screen.getByText('Template')).toBeInTheDocument();
     });
 
@@ -189,8 +244,8 @@ describe('FlowCreatePage', () => {
 
       navigateToTemplateStep();
 
-      // "Flow Type" is the first (non-last) breadcrumb — clicking it calls setCurrentStep
-      fireEvent.click(screen.getByRole('button', {name: 'Flow Type'}));
+      // "Flow type" is the first (non-last) breadcrumb — clicking it calls setCurrentStep
+      fireEvent.click(screen.getByRole('button', {name: 'Flow type'}));
 
       expect(screen.getByTestId('select-flow-type')).toBeInTheDocument();
     });
@@ -227,9 +282,83 @@ describe('FlowCreatePage', () => {
 
       expect(screen.getByText('Create')).toBeInTheDocument();
     });
+
+    it('skips the template step for Device Authorization and goes to Configure', () => {
+      render(<FlowCreatePage />);
+
+      navigateToDeviceGrantConfigureStep();
+
+      expect(screen.getByTestId('configure-flow-name')).toBeInTheDocument();
+      expect(screen.queryByTestId('select-flow-template')).not.toBeInTheDocument();
+      expect(screen.queryByText('Template')).not.toBeInTheDocument();
+    });
+
+    it('goes back to Flow Type from Configure for Device Authorization', () => {
+      render(<FlowCreatePage />);
+
+      navigateToDeviceGrantConfigureStep();
+      fireEvent.click(screen.getByText('Back'));
+
+      expect(screen.getByTestId('select-flow-type')).toBeInTheDocument();
+      expect(screen.queryByTestId('select-flow-template')).not.toBeInTheDocument();
+    });
+
+    it('keeps the template step in the Back path for other flow types', () => {
+      render(<FlowCreatePage />);
+
+      navigateToConfigureStep();
+      fireEvent.click(screen.getByText('Back'));
+
+      expect(screen.getByTestId('select-flow-template')).toBeInTheDocument();
+    });
   });
 
   describe('Flow Creation', () => {
+    it('opens the Device Grant draft in the builder without creating it yet', () => {
+      render(<FlowCreatePage />);
+
+      navigateToDeviceGrantConfigureStep();
+      act(() => {
+        (capturedConfigureProps['onChange'] as (v: {name: string; handle: string}) => void)({
+          name: 'Device Flow',
+          handle: 'device-flow',
+        });
+        (capturedConfigureProps['onReadyChange'] as (ready: boolean) => void)(true);
+      });
+
+      fireEvent.click(screen.getByText('Create'));
+
+      expect(mockMutate).not.toHaveBeenCalled();
+      const navigateArgs = mockNavigate.mock.calls.at(-1) as
+        | [
+            string,
+            {
+              state: {
+                draftFlow: {
+                  name: string;
+                  handle: string;
+                  flowType: string;
+                  ouId: string;
+                  nodes: {id: string; executor?: {name: string}}[];
+                };
+              };
+            },
+          ]
+        | undefined;
+      expect(navigateArgs?.[0]).toBe('/flows/new');
+      expect(navigateArgs?.[1].state.draftFlow).toMatchObject({
+        name: 'Device Flow',
+        handle: 'device-flow',
+        flowType: 'DEVICE_GRANT',
+        ouId: 'ou-root',
+      });
+      expect(
+        navigateArgs?.[1].state.draftFlow.nodes.some(
+          (node) => node.id === 'verify-user-code' && node.executor?.name === 'DeviceCodeExecutor',
+        ),
+      ).toBe(true);
+    });
+
     it('should call createFlow.mutate when Create is clicked', () => {
       render(<FlowCreatePage />);
 
@@ -250,6 +379,7 @@ describe('FlowCreatePage', () => {
           name: 'My Flow',
           handle: 'my-flow',
           flowType: 'AUTHENTICATION',
+          ouId: 'ou-root',
         }),
         expect.any(Object),
       );
@@ -332,7 +462,7 @@ describe('FlowCreatePage', () => {
 
       // Navigate back to the Type step and change the type: this feeds the create request, so it
       // should clear the stale error and reset the errored mutation.
-      fireEvent.click(screen.getByRole('button', {name: 'Flow Type'}));
+      fireEvent.click(screen.getByRole('button', {name: 'Flow type'}));
       act(() => {
         (capturedTypeProps['onTypeChange'] as (type: string) => void)('REGISTRATION');
       });
@@ -359,6 +489,104 @@ describe('FlowCreatePage', () => {
       // A real mutation can't be isPending and isError at once, so clearCreateError's isError
       // check alone is sufficient to guard reset() from firing mid-flight.
       expect(mockReset).not.toHaveBeenCalled();
+    });
+  });
+  describe('Organization Unit', () => {
+    const fillConfigureStep = (): void => {
+      navigateToConfigureStep();
+      act(() => {
+        (capturedConfigureProps['onChange'] as (v: {name: string; handle: string}) => void)({
+          name: 'My Flow',
+          handle: 'my-flow',
+        });
+        (capturedConfigureProps['onReadyChange'] as (ready: boolean) => void)(true);
+      });
+    };
+
+    it('skips the organization unit step and uses the only organization unit', () => {
+      render(<FlowCreatePage />);
+
+      expect(screen.queryByTestId('ou-step')).not.toBeInTheDocument();
+      expect(screen.getByTestId('select-flow-type')).toBeInTheDocument();
+    });
+
+    it('shows a loading step while the organization units load', () => {
+      ouState.isLoading = true;
+      render(<FlowCreatePage />);
+
+      expect(screen.getByTestId('ou-step')).toHaveAttribute('data-loading', 'true');
+      expect(screen.queryByTestId('select-flow-type')).not.toBeInTheDocument();
+    });
+
+    it('asks which organization unit owns the flow when there are several, and sends the choice', () => {
+      ouState.hasMultipleOUs = true;
+      ouState.ouList = [{id: 'ou-root'}, {id: 'ou-b'}];
+      render(<FlowCreatePage />);
+
+      expect(screen.getByTestId('ou-step')).toBeInTheDocument();
+      expect(screen.queryByTestId('select-flow-type')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('ou-pick-b'));
+      fireEvent.click(screen.getByTestId('ou-continue'));
+
+      expect(screen.getByTestId('select-flow-type')).toBeInTheDocument();
+
+      fillConfigureStep();
+      fireEvent.click(screen.getByText('Create'));
+
+      expect(mockMutate).toHaveBeenCalledWith(expect.objectContaining({ouId: 'ou-b'}), expect.any(Object));
+    });
+
+    it('returns to the organization unit step from its breadcrumb', () => {
+      ouState.hasMultipleOUs = true;
+      ouState.ouList = [{id: 'ou-root'}, {id: 'ou-b'}];
+      render(<FlowCreatePage />);
+
+      fireEvent.click(screen.getByTestId('ou-pick-b'));
+      fireEvent.click(screen.getByTestId('ou-continue'));
+      fireEvent.click(screen.getByText('Organization unit'));
+
+      expect(screen.getByTestId('ou-step')).toHaveAttribute('data-value', 'ou-b');
+    });
+
+    it('goes back to the organization unit step from the first wizard step', () => {
+      ouState.hasMultipleOUs = true;
+      ouState.ouList = [{id: 'ou-root'}, {id: 'ou-b'}];
+      render(<FlowCreatePage />);
+
+      fireEvent.click(screen.getByTestId('ou-pick-b'));
+      fireEvent.click(screen.getByTestId('ou-continue'));
+      fireEvent.click(screen.getByText('Back'));
+
+      expect(screen.getByTestId('ou-step')).toHaveAttribute('data-value', 'ou-b');
+    });
+
+    it('has no back button on the first step of a single-unit deployment', () => {
+      render(<FlowCreatePage />);
+
+      expect(screen.getByTestId('select-flow-type')).toBeInTheDocument();
+      expect(screen.queryByText('Back')).not.toBeInTheDocument();
+    });
+
+    it('closes the wizard from the organization unit step', () => {
+      ouState.hasMultipleOUs = true;
+      ouState.ouList = [{id: 'ou-root'}, {id: 'ou-b'}];
+      render(<FlowCreatePage />);
+
+      fireEvent.click(screen.getByTestId('ou-back'));
+
+      expect(mockNavigate).toHaveBeenCalledWith('/flows');
+    });
+
+    it('refuses to create a flow when no organization unit could be resolved', () => {
+      ouState.ouList = [];
+      render(<FlowCreatePage />);
+
+      fillConfigureStep();
+      fireEvent.click(screen.getByText('Create'));
+
+      expect(mockMutate).not.toHaveBeenCalled();
+      expect(screen.getByText('Organization unit is required')).toBeInTheDocument();
     });
   });
 });

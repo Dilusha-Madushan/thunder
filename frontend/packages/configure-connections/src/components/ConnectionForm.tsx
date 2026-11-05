@@ -1,6 +1,7 @@
 // Copyright 2025 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import {useConfig} from '@thunderid/contexts';
 import {
   Alert,
   Box,
@@ -66,6 +67,8 @@ export default function ConnectionForm({
   onSecretReplacingChange,
 }: ConnectionFormProps): JSX.Element {
   const {t} = useTranslation('connections');
+  const {config} = useConfig();
+  const productName: string = config.brand.product_name;
   const fields: ConnectionFieldDef[] = useMemo(
     () =>
       fieldsForMode(type, mode).filter(
@@ -114,6 +117,7 @@ export default function ConnectionForm({
     <Trans
       t={t}
       i18nKey={hintKey}
+      values={{productName}}
       components={{
         code: (
           <Box
@@ -155,7 +159,7 @@ export default function ConnectionForm({
               />
               {field.hintKey && (
                 <Typography variant="caption" color="text.secondary" sx={{display: 'block', ml: '52px'}}>
-                  {t(field.hintKey)}
+                  {t(field.hintKey, {productName})}
                 </Typography>
               )}
             </Box>
@@ -172,7 +176,7 @@ export default function ConnectionForm({
               onReplacingChange={onSecretReplacingChange}
               required={mode === 'create' && field.required}
               error={fieldError(field)}
-              hint={field.hintKey ? t(field.hintKey) : undefined}
+              hint={field.hintKey ? t(field.hintKey, {productName}) : undefined}
             />
           );
         } else if (field.kind === 'key-value') {
@@ -181,6 +185,7 @@ export default function ConnectionForm({
               id={`connection-field-${field.name}`}
               label={label}
               value={values[field.name] ?? ''}
+              format={field.keyValueFormat}
               onChange={(next) => setField(field.name, next)}
               hint={field.hintKey ? renderHint(field.hintKey) : undefined}
               namePlaceholder={field.placeholder}
@@ -212,7 +217,7 @@ export default function ConnectionForm({
               {error ? (
                 <FormHelperText>{error}</FormHelperText>
               ) : (
-                field.hintKey && <FormHelperText>{t(field.hintKey)}</FormHelperText>
+                field.hintKey && <FormHelperText>{t(field.hintKey, {productName})}</FormHelperText>
               )}
             </FormControl>
           );
@@ -233,20 +238,20 @@ export default function ConnectionForm({
           const error: string | undefined = fieldError(field);
           const required: boolean = isRequiredNow(field);
           fieldContent = (
-            <FormControl fullWidth required={required} error={Boolean(error)}>
-              <FormLabel htmlFor={`connection-field-${field.name}`}>{label}</FormLabel>
-              <TextField
-                id={`connection-field-${field.name}`}
-                fullWidth
-                type={field.kind === 'number' ? 'number' : undefined}
-                value={values[field.name] ?? ''}
-                placeholder={field.placeholder}
-                error={Boolean(error)}
-                helperText={error ?? (field.hintKey ? renderHint(field.hintKey) : undefined)}
-                onChange={(e) => setField(field.name, e.target.value)}
-                onBlur={() => setTouched((prev) => ({...prev, [field.name]: true}))}
-              />
-            </FormControl>
+            <TextField
+              labelPlacement="top"
+              label={label}
+              required={required}
+              id={`connection-field-${field.name}`}
+              fullWidth
+              type={field.kind === 'number' ? 'number' : undefined}
+              value={values[field.name] ?? ''}
+              placeholder={field.placeholder}
+              error={Boolean(error)}
+              helperText={error ?? (field.hintKey ? renderHint(field.hintKey) : undefined)}
+              onChange={(e) => setField(field.name, e.target.value)}
+              onBlur={() => setTouched((prev) => ({...prev, [field.name]: true}))}
+            />
           );
         }
 

@@ -5,11 +5,13 @@ package group
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
+	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -23,7 +25,9 @@ import (
 	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/internal/system/security"
 
+	"github.com/thunder-id/thunderid/tests/mocks/entitymock"
 	"github.com/thunder-id/thunderid/tests/mocks/oumock"
+	"github.com/thunder-id/thunderid/tests/mocks/sharingmock"
 )
 
 // GroupExporterTestSuite contains tests for the groupExporter.
@@ -76,8 +80,10 @@ func (suite *GroupExporterTestSuite) TestGetAllResourceIDs_SinglePage() {
 		TotalResults: 2,
 	}
 
-	suite.mockService.On("GetGroupList", suite.ctx, serverconst.MaxPageSize, 0, false).Return(groupList, nil)
-	suite.mockService.On("GetGroupList", suite.ctx, serverconst.MaxPageSize, 2, false).Return(emptyPage, nil)
+	suite.mockService.On("GetGroupList", suite.ctx, serverconst.MaxPageSize, 0, map[string]interface{}(nil), false).
+		Return(groupList, nil)
+	suite.mockService.On("GetGroupList", suite.ctx, serverconst.MaxPageSize, 2, map[string]interface{}(nil), false).
+		Return(emptyPage, nil)
 
 	ids, err := suite.exporter.GetAllResourceIDs(suite.ctx)
 
@@ -103,9 +109,12 @@ func (suite *GroupExporterTestSuite) TestGetAllResourceIDs_MultiplePages() {
 		TotalResults: 2,
 	}
 
-	suite.mockService.On("GetGroupList", suite.ctx, serverconst.MaxPageSize, 0, false).Return(page1, nil)
-	suite.mockService.On("GetGroupList", suite.ctx, serverconst.MaxPageSize, 1, false).Return(page2, nil)
-	suite.mockService.On("GetGroupList", suite.ctx, serverconst.MaxPageSize, 2, false).Return(emptyPage, nil)
+	suite.mockService.On("GetGroupList", suite.ctx, serverconst.MaxPageSize, 0, map[string]interface{}(nil), false).
+		Return(page1, nil)
+	suite.mockService.On("GetGroupList", suite.ctx, serverconst.MaxPageSize, 1, map[string]interface{}(nil), false).
+		Return(page2, nil)
+	suite.mockService.On("GetGroupList", suite.ctx, serverconst.MaxPageSize, 2, map[string]interface{}(nil), false).
+		Return(emptyPage, nil)
 
 	ids, err := suite.exporter.GetAllResourceIDs(suite.ctx)
 
@@ -119,7 +128,8 @@ func (suite *GroupExporterTestSuite) TestGetAllResourceIDs_MultiplePages() {
 // Test GetAllResourceIDs - empty store
 func (suite *GroupExporterTestSuite) TestGetAllResourceIDs_Empty() {
 	emptyPage := &GroupListResponse{Groups: []GroupBasic{}, TotalResults: 0}
-	suite.mockService.On("GetGroupList", suite.ctx, serverconst.MaxPageSize, 0, false).Return(emptyPage, nil)
+	suite.mockService.On("GetGroupList", suite.ctx, serverconst.MaxPageSize, 0, map[string]interface{}(nil), false).
+		Return(emptyPage, nil)
 
 	ids, err := suite.exporter.GetAllResourceIDs(suite.ctx)
 
@@ -131,7 +141,8 @@ func (suite *GroupExporterTestSuite) TestGetAllResourceIDs_Empty() {
 // Test GetAllResourceIDs - service error
 func (suite *GroupExporterTestSuite) TestGetAllResourceIDs_ServiceError() {
 	serviceErr := &tidcommon.ServiceError{Code: "500"}
-	suite.mockService.On("GetGroupList", suite.ctx, serverconst.MaxPageSize, 0, false).Return(nil, serviceErr)
+	suite.mockService.On("GetGroupList", suite.ctx, serverconst.MaxPageSize, 0, map[string]interface{}(nil), false).
+		Return(nil, serviceErr)
 
 	ids, err := suite.exporter.GetAllResourceIDs(suite.ctx)
 
@@ -453,7 +464,7 @@ func (suite *GroupExporterTestSuite) TestValidateGroupWrapper_ValidGroup() {
 		OUID: "ou1",
 	}
 
-	err := validateGroupWrapper(grp, nil, nil, nil)
+	err := validateGroupWrapper(grp, nil, nil, nil, nil)
 
 	assert.NoError(suite.T(), err)
 }
@@ -470,14 +481,109 @@ func (suite *GroupExporterTestSuite) TestValidateGroupWrapper_WithMembers() {
 		},
 	}
 
-	err := validateGroupWrapper(grp, nil, nil, nil)
+	err := validateGroupWrapper(grp, nil, nil, nil, nil)
 
 	assert.NoError(suite.T(), err)
 }
 
+// newMemberCheckService returns a service that resolves members through the given mocks.
+func (suite *GroupExporterTestSuite) newMemberCheckService() (
+	*groupService, *groupStoreInterfaceMock, *entitymock.EntityServiceInterfaceMock,
+	*sharingmock.SharingServiceInterfaceMock,
+) {
+	store := newGroupStoreInterfaceMock(suite.T())
+	entitySvc := entitymock.NewEntityServiceInterfaceMock(suite.T())
+	sharingSvc := sharingmock.NewSharingServiceInterfaceMock(suite.T())
+	registerSharedCategories(entitySvc)
+	return &groupService{groupStore: store, entityService: entitySvc, sharingService: sharingSvc},
+		store, entitySvc, sharingSvc
+}
+
+func (suite *GroupExporterTestSuite) TestValidateGroupWrapper_MembersAvailableInGroupOU() {
+	svc, store, entitySvc, sharingSvc := suite.newMemberCheckService()
+	entitySvc.On("GetEntitiesByIDs", mock.Anything, []string{"user1", "user2"}).
+		Return([]providers.Entity{
+			{ID: "user1", Category: providers.EntityCategoryUser, OUID: "ou1"},
+			{ID: "user2", Category: providers.EntityCategoryUser, OUID: "ou-parent"},
+		}, nil).Once()
+	sharingSvc.On("IsVisible", mock.Anything, mock.Anything, "user2", "ou1").
+		Return(true, (*tidcommon.ServiceError)(nil)).Once()
+	store.On("GetGroupsByIDs", mock.Anything, []string{"group2"}).
+		Return([]GroupBasicDAO{{ID: "group2", OUID: "ou1"}}, nil).Once()
+	grp := &groupDeclarativeResource{ID: "group1", Name: "Admins", OUID: "ou1", Members: []Member{
+		{ID: "user1", Type: memberTypeEntity},
+		{ID: "user2", Type: memberTypeEntity},
+		{ID: "group2", Type: MemberTypeGroup},
+	}}
+
+	err := validateGroupWrapper(grp, nil, nil, nil, svc)
+
+	assert.NoError(suite.T(), err)
+}
+
+func (suite *GroupExporterTestSuite) TestValidateGroupWrapper_EntityOutsideGroupOU() {
+	svc, _, entitySvc, sharingSvc := suite.newMemberCheckService()
+	entitySvc.On("GetEntitiesByIDs", mock.Anything, []string{"user1"}).
+		Return([]providers.Entity{{ID: "user1", Category: providers.EntityCategoryUser, OUID: "ou2"}}, nil).Once()
+	sharingSvc.On("IsVisible", mock.Anything, mock.Anything, "user1", "ou1").
+		Return(false, (*tidcommon.ServiceError)(nil)).Once()
+	grp := &groupDeclarativeResource{ID: "group1", Name: "Admins", OUID: "ou1",
+		Members: []Member{{ID: "user1", Type: memberTypeEntity}}}
+
+	err := validateGroupWrapper(grp, nil, nil, nil, svc)
+
+	assert.Error(suite.T(), err)
+	assert.Contains(suite.T(), err.Error(), "Admins")
+	assert.Contains(suite.T(), err.Error(), "user1")
+}
+
+func (suite *GroupExporterTestSuite) TestValidateGroupWrapper_NestedGroupOutsideGroupOU() {
+	svc, store, _, _ := suite.newMemberCheckService()
+	store.On("GetGroupsByIDs", mock.Anything, []string{"group2"}).
+		Return([]GroupBasicDAO{{ID: "group2", OUID: "ou2"}}, nil).Once()
+	grp := &groupDeclarativeResource{ID: "group1", Name: "Admins", OUID: "ou1",
+		Members: []Member{{ID: "group2", Type: MemberTypeGroup}}}
+
+	err := validateGroupWrapper(grp, nil, nil, nil, svc)
+
+	assert.Error(suite.T(), err)
+	assert.Contains(suite.T(), err.Error(), "group2")
+}
+
+// An application or agent member, or a nested group, that has not loaded yet is skipped rather
+// than refused: groups load before applications and agents.
+func (suite *GroupExporterTestSuite) TestValidateGroupWrapper_UnloadedMembersAreSkipped() {
+	svc, store, entitySvc, _ := suite.newMemberCheckService()
+	entitySvc.On("GetEntitiesByIDs", mock.Anything, []string{"app1", "agent1"}).
+		Return([]providers.Entity{}, nil).Once()
+	store.On("GetGroupsByIDs", mock.Anything, []string{"group2"}).
+		Return([]GroupBasicDAO{}, nil).Once()
+	grp := &groupDeclarativeResource{ID: "group1", Name: "Admins", OUID: "ou1", Members: []Member{
+		{ID: "app1", Type: memberTypeEntity},
+		{ID: "agent1", Type: memberTypeEntity},
+		{ID: "group2", Type: MemberTypeGroup},
+	}}
+
+	err := validateGroupWrapper(grp, nil, nil, nil, svc)
+
+	assert.NoError(suite.T(), err)
+}
+
+func (suite *GroupExporterTestSuite) TestValidateGroupWrapper_MemberLookupFails() {
+	svc, _, entitySvc, _ := suite.newMemberCheckService()
+	entitySvc.On("GetEntitiesByIDs", mock.Anything, []string{"user1"}).
+		Return(nil, errors.New("db failure")).Once()
+	grp := &groupDeclarativeResource{ID: "group1", Name: "Admins", OUID: "ou1",
+		Members: []Member{{ID: "user1", Type: memberTypeEntity}}}
+
+	err := validateGroupWrapper(grp, nil, nil, nil, svc)
+
+	assert.Error(suite.T(), err)
+}
+
 // Test validateGroupWrapper - wrong type
 func (suite *GroupExporterTestSuite) TestValidateGroupWrapper_WrongType() {
-	err := validateGroupWrapper("not a group", nil, nil, nil)
+	err := validateGroupWrapper("not a group", nil, nil, nil, nil)
 
 	assert.Error(suite.T(), err)
 	assert.Contains(suite.T(), err.Error(), "invalid type")
@@ -490,7 +596,7 @@ func (suite *GroupExporterTestSuite) TestValidateGroupWrapper_MissingID() {
 		OUID: "ou1",
 	}
 
-	err := validateGroupWrapper(grp, nil, nil, nil)
+	err := validateGroupWrapper(grp, nil, nil, nil, nil)
 
 	assert.Error(suite.T(), err)
 	assert.Contains(suite.T(), err.Error(), "group ID is required")
@@ -503,7 +609,7 @@ func (suite *GroupExporterTestSuite) TestValidateGroupWrapper_MissingName() {
 		OUID: "ou1",
 	}
 
-	err := validateGroupWrapper(grp, nil, nil, nil)
+	err := validateGroupWrapper(grp, nil, nil, nil, nil)
 
 	assert.Error(suite.T(), err)
 	assert.Contains(suite.T(), err.Error(), "group name is required")
@@ -516,7 +622,7 @@ func (suite *GroupExporterTestSuite) TestValidateGroupWrapper_MissingOUID() {
 		Name: "Admins",
 	}
 
-	err := validateGroupWrapper(grp, nil, nil, nil)
+	err := validateGroupWrapper(grp, nil, nil, nil, nil)
 
 	assert.Error(suite.T(), err)
 	assert.Contains(suite.T(), err.Error(), "ouId or ouHandle is required")
@@ -539,7 +645,7 @@ func (suite *GroupExporterTestSuite) TestValidateGroupWrapper_OUHandleUsesRuntim
 		OUHandle: "root/eng",
 	}
 
-	err := validateGroupWrapper(grp, nil, nil, ouSvc)
+	err := validateGroupWrapper(grp, nil, nil, ouSvc, nil)
 
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), "ou-123", grp.OUID)
@@ -555,7 +661,7 @@ func (suite *GroupExporterTestSuite) TestValidateGroupWrapper_DuplicateInDBStore
 	mockStore := newGroupStoreInterfaceMock(suite.T())
 	mockStore.On("GetGroup", mock.Anything, "group1").Return(GroupDAO{ID: "group1", Name: "Admins"}, nil)
 
-	err := validateGroupWrapper(grp, nil, mockStore, nil)
+	err := validateGroupWrapper(grp, nil, mockStore, nil, nil)
 
 	assert.Error(suite.T(), err)
 	assert.Contains(suite.T(), err.Error(), "duplicate group ID")
@@ -572,7 +678,7 @@ func (suite *GroupExporterTestSuite) TestValidateGroupWrapper_NoDuplicateWhenDBN
 	mockStore := newGroupStoreInterfaceMock(suite.T())
 	mockStore.On("GetGroup", mock.Anything, "group1").Return(GroupDAO{}, ErrGroupNotFound)
 
-	err := validateGroupWrapper(grp, nil, mockStore, nil)
+	err := validateGroupWrapper(grp, nil, mockStore, nil, nil)
 
 	assert.NoError(suite.T(), err)
 }
@@ -610,7 +716,7 @@ func (suite *GroupDeclarativeResourceLoaderTestSuite) TestLoadDeclarativeResourc
 	suite.initRuntime()
 	fileStore := suite.newFileStore()
 
-	err := loadDeclarativeResources(fileStore, nil, nil)
+	err := loadDeclarativeResources(fileStore, nil, nil, nil)
 
 	suite.NoError(err)
 }
@@ -629,7 +735,7 @@ ouId: ou1
 	suite.Require().NoError(os.WriteFile(filepath.Join(resourceDir, "group1.yaml"), yamlData, 0o600))
 
 	fileStore := suite.newFileStore()
-	err := loadDeclarativeResources(fileStore, nil, nil)
+	err := loadDeclarativeResources(fileStore, nil, nil, nil)
 
 	suite.NoError(err)
 	grp, getErr := fileStore.GetGroup(context.Background(), "group1")
@@ -658,7 +764,7 @@ members:
 	suite.Require().NoError(os.WriteFile(filepath.Join(resourceDir, "group1.yaml"), yamlData, 0o600))
 
 	fileStore := suite.newFileStore()
-	err := loadDeclarativeResources(fileStore, nil, nil)
+	err := loadDeclarativeResources(fileStore, nil, nil, nil)
 
 	suite.NoError(err)
 	grp, getErr := fileStore.GetGroup(context.Background(), "group1")
@@ -679,7 +785,7 @@ func (suite *GroupDeclarativeResourceLoaderTestSuite) TestLoadDeclarativeResourc
 	}
 
 	fileStore := suite.newFileStore()
-	err := loadDeclarativeResources(fileStore, nil, nil)
+	err := loadDeclarativeResources(fileStore, nil, nil, nil)
 
 	suite.NoError(err)
 	for _, id := range []string{"group1", "group2"} {
@@ -699,7 +805,7 @@ func (suite *GroupDeclarativeResourceLoaderTestSuite) TestLoadDeclarativeResourc
 	)
 
 	fileStore := suite.newFileStore()
-	err := loadDeclarativeResources(fileStore, nil, nil)
+	err := loadDeclarativeResources(fileStore, nil, nil, nil)
 
 	suite.Error(err)
 	suite.Contains(err.Error(), "failed to load group resources")
@@ -715,7 +821,7 @@ func (suite *GroupDeclarativeResourceLoaderTestSuite) TestLoadDeclarativeResourc
 	)
 
 	fileStore := suite.newFileStore()
-	err := loadDeclarativeResources(fileStore, nil, nil)
+	err := loadDeclarativeResources(fileStore, nil, nil, nil)
 
 	suite.Error(err)
 	suite.Contains(err.Error(), "failed to load group resources")
@@ -731,7 +837,7 @@ func (suite *GroupDeclarativeResourceLoaderTestSuite) TestLoadDeclarativeResourc
 	)
 
 	fileStore := suite.newFileStore()
-	err := loadDeclarativeResources(fileStore, nil, nil)
+	err := loadDeclarativeResources(fileStore, nil, nil, nil)
 
 	suite.Error(err)
 	suite.Contains(err.Error(), "failed to load group resources")
@@ -748,7 +854,7 @@ func (suite *GroupDeclarativeResourceLoaderTestSuite) TestLoadDeclarativeResourc
 	suite.Require().NoError(os.WriteFile(filepath.Join(resourceDir, "group1b.yaml"), yaml2, 0o600))
 
 	fileStore := suite.newFileStore()
-	err := loadDeclarativeResources(fileStore, nil, nil)
+	err := loadDeclarativeResources(fileStore, nil, nil, nil)
 
 	suite.Error(err)
 	suite.Contains(err.Error(), "failed to load group resources")
@@ -771,7 +877,7 @@ func (suite *GroupDeclarativeResourceLoaderTestSuite) TestLoadDeclarativeResourc
 	mockStore.On("GetGroup", mock.Anything, "group1").Return(GroupDAO{ID: "group1"}, nil)
 
 	fileStore := suite.newFileStore()
-	err := loadDeclarativeResources(fileStore, mockStore, nil)
+	err := loadDeclarativeResources(fileStore, mockStore, nil, nil)
 
 	suite.Error(err)
 	suite.Contains(err.Error(), "failed to load group resources")

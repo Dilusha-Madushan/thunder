@@ -259,7 +259,7 @@ describe('ViewAgentTypePage', () => {
 
       expect(screen.getByText('Failed to load agent type information')).toBeInTheDocument();
       expect(screen.queryByText('Boom')).not.toBeInTheDocument();
-      expect(screen.getByRole('button', {name: /Back to Agents/i})).toBeInTheDocument();
+      expect(screen.getByRole('button', {name: /Back to agents/i})).toBeInTheDocument();
     });
 
     it('renders a not-found message when no data is returned', () => {
@@ -269,7 +269,7 @@ describe('ViewAgentTypePage', () => {
 
       // The page falls back to a translation that resolves to "Agent type not found" via test-utils i18n
       expect(screen.getByRole('alert')).toBeInTheDocument();
-      expect(screen.getByRole('button', {name: /Back to Agents/i})).toBeInTheDocument();
+      expect(screen.getByRole('button', {name: /Back to agents/i})).toBeInTheDocument();
     });
 
     it('navigates back from error state', async () => {
@@ -282,7 +282,7 @@ describe('ViewAgentTypePage', () => {
 
       render(<ViewAgentTypePage />);
 
-      await user.click(screen.getByRole('button', {name: /Back to Agents/i}));
+      await user.click(screen.getByRole('button', {name: /Back to agents/i}));
 
       await waitFor(() => {
         expect(mockNavigate).toHaveBeenCalledWith('/agents');
@@ -294,13 +294,19 @@ describe('ViewAgentTypePage', () => {
     it('renders the agent type heading', () => {
       render(<ViewAgentTypePage />);
 
-      expect(screen.getByText('Agent Schema')).toBeInTheDocument();
+      expect(screen.getByText('Agent schema')).toBeInTheDocument();
+    });
+
+    it('sets the browser tab title', async () => {
+      render(<ViewAgentTypePage />);
+
+      await waitFor(() => expect(document.title).toBe('Agent schema | ThunderID'));
     });
 
     it('renders the back link to /agents', () => {
       render(<ViewAgentTypePage />);
 
-      const backLink = screen.getByRole('link', {name: /Back to Agents/i});
+      const backLink = screen.getByRole('link', {name: /Back to agents/i});
       expect(backLink).toHaveAttribute('href', '/agents');
     });
   });

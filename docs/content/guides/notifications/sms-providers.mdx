@@ -80,7 +80,7 @@ so do not add `Authorization` under **Other HTTP headers** when either method is
 
 <ProductName /> does not assemble a request payload for the gateway. It sends the rendered SMS template as the request body exactly as written. The template defines both the payload shape and the field names your gateway expects.
 
-To change the request body, edit the SMS template for the scenario your flow uses, such as `sms_otp.yaml` for the `OTP` scenario. Templates load at startup, so restart the server after editing one.
+To change the request body, edit the SMS template your flow uses (for example the `otp` template) from the Console under **Customize → Notifications → SMS Templates**, or through the [Notification Templates API](./templates.mdx#manage-templates). Changes take effect immediately, with no restart.
 
 For a connection with `contentType` set to `JSON`, write the template body as the JSON object your gateway accepts:
 
@@ -96,7 +96,7 @@ body: |
   message=Your verification code is {{ctx(otpCode)}}
 ```
 
-Keep the template's `contentType` set to `text/plain`. With `text/html`, <ProductName /> escapes HTML characters in substituted values, which breaks JSON quoting.
+SMS bodies are sent as plain text, and `{{ctx(...)}}` values are substituted without HTML escaping, so JSON quoting and form syntax are preserved.
 
 ## Update an SMS Provider
 
@@ -109,7 +109,7 @@ Keep the template's `contentType` set to `text/plain`. With `text/html`, <Produc
 5. Click **Save changes** in the bar at the bottom of the page. You can click **Discard** instead to abandon your edits.
 
 :::note
-A connection's vendor cannot be changed after creation. To switch providers, delete the existing connection and create a new one for the new vendor.
+A connection's vendor and its organization unit cannot be changed after creation. To switch providers or move a connection to another organization unit, delete the existing connection and create a new one.
 :::
 
 ## Remove an SMS Provider
@@ -119,6 +119,10 @@ A connection's vendor cannot be changed after creation. To switch providers, del
 3. Confirm the deletion in the dialog.
 
 If another resource still references this SMS provider, the dialog lists the resources and blocks the deletion until you remove or update them.
+
+## Organization Unit Ownership
+
+Every SMS provider belongs to exactly one organization unit. When you create a provider through `POST /connections/{type}` (`twilio`, `vonage`, or `sms-gateway`), the body must carry `ouId`. A missing `ouId` fails with `MNS-1020`, an unknown organization unit with `MNS-1018`, and a different organization unit on `PUT` with `MNS-1019`. An organization unit that still owns a provider cannot be deleted. The **General** tab of a connection shows an **Organization unit** card with the handle and ID of the owner.
 
 ## Next Steps
 

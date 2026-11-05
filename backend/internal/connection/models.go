@@ -53,6 +53,9 @@ var smsBackedVendors = []smsBackedVendor{
 // authZENPDPVendorName is the connection vendor name for an AuthZEN policy decision point.
 const authZENPDPVendorName = "authzen-pdp"
 
+// httpVendorName is the connection vendor name for an HTTP endpoint connection.
+const httpVendorName = "http"
+
 // emailSMTPVendorName is the connection vendor name for email delivered over SMTP. The channel
 // is part of the name because the protocol alone does not identify the contract: a carrier
 // email-to-SMS gateway would speak the same SMTP to a different channel. The stored email
@@ -88,13 +91,15 @@ const (
 	categorySMSProvider      connectionCategory = "sms-provider"
 	categoryAuthorizationPDP connectionCategory = "authorization-pdp"
 	categoryEmailProvider    connectionCategory = "email-provider"
+	categoryHTTP             connectionCategory = "http"
 )
 
 // parseConnectionCategory validates the raw category query value. Empty means "no filter";
 // any other unrecognized value returns false.
 func parseConnectionCategory(raw string) (connectionCategory, bool) {
 	switch connectionCategory(raw) {
-	case "", categoryIdentityProvider, categorySMSProvider, categoryAuthorizationPDP, categoryEmailProvider:
+	case "", categoryIdentityProvider, categorySMSProvider, categoryAuthorizationPDP, categoryEmailProvider,
+		categoryHTTP:
 		return connectionCategory(raw), true
 	default:
 		return "", false
@@ -108,8 +113,11 @@ type connectionInstance struct {
 	Name         string               `json:"name"`
 	Description  string               `json:"description,omitempty"`
 	Type         string               `json:"type"`
+	OUID         string               `json:"ouId,omitempty"`
 	Categories   []connectionCategory `json:"categories"`
 	IDJagEnabled *bool                `json:"idJagEnabled,omitempty"`
+	// IsOwnedByOU says whether the listed organization unit owns the connection rather than being shared it.
+	IsOwnedByOU *bool `json:"isOwnedByOU,omitempty"`
 }
 
 // connectionListResponse is the paginated payload for GET /connections (the flat instance list).

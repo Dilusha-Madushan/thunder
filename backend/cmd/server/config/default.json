@@ -4,13 +4,28 @@
     "port": 8090,
     "http_only": false,
     "identifier": "default-deployment",
+    "timeouts": {
+      "read_header_seconds": 10,
+      "write_seconds": 10,
+      "idle_seconds": 120
+    },
     "security": {
       "jwks_cache_ttl": 300,
       "trusted_issuer": {
         "issuer": "",
         "jwks_url": "",
         "audience": "",
-        "required_claims": []
+        "required_claims": [],
+        "user_id_claim": "sub",
+        "user_lookup": {
+          "url": "",
+          "token_url": "",
+          "client_id": "",
+          "client_secret": "",
+          "scopes": [],
+          "name_attribute": "username",
+          "cache_ttl": 300
+        }
       },
       "token_revocation": {
         "enabled": true,
@@ -146,6 +161,18 @@
     "cimd": {
       "enabled": true
     },
+    "id_jag": {
+      "issuance": {
+        "enabled": true
+      },
+      "acceptance": {
+        "enabled": true
+      }
+    },
+    "device_grant": {
+      "expires_in": 600,
+      "interval": 5
+    },
     "par": {
       "require_par": false,
       "expires_in": 60
@@ -154,7 +181,7 @@
       "required": false,
       "iat_window": 60,
       "leeway": 5,
-      "allowed_algs": ["ES256", "PS256", "ES384", "ES512", "EdDSA", "RS256"],
+      "allowed_algs": ["ES256", "PS256", "ES384", "ES512", "EdDSA", "RS256", "ML-DSA-44", "ML-DSA-65", "ML-DSA-87"],
       "max_jti_length": 256
     },
     "client_assertion": {
@@ -165,7 +192,7 @@
     "send_server_errors_to_client": false,
     "allowed_auth_methods" :["client_secret_basic", "client_secret_post", "private_key_jwt", "none"],
     "allowed_response_types" : ["code"],
-    "allowed_grant_types" : ["client_credentials", "authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:token-exchange", "urn:openid:params:grant-type:ciba", "urn:ietf:params:oauth:grant-type:jwt-bearer"],
+    "allowed_grant_types" : ["client_credentials", "authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:token-exchange", "urn:openid:params:grant-type:ciba", "urn:ietf:params:oauth:grant-type:device_code", "urn:ietf:params:oauth:grant-type:jwt-bearer"],
     "token_revocation" : {
       "enabled" : true
     },
@@ -181,6 +208,10 @@
         "queue_size" : 1024,
         "reject_private_addresses" : true
       }
+    },
+    "authorization_details": {
+      "processor_timeout": 5,
+      "type_metadata_enabled": true
     },
     "revocation": {
       "token_family": {
@@ -211,7 +242,10 @@
       "validity_period_seconds": 120
     },
     "template": {
-      "store": "composite"
+      "store": "composite",
+      "max_subject_length": 1000,
+      "max_email_body_length": 50000,
+      "max_sms_body_length": 4096
     }
   },
   "user": {
@@ -315,13 +349,63 @@
     "default_delimiter": ":",
     "store": "composite"
   },
+  "authorization_detail_type": {
+    "store": "composite"
+  },
   "resource_sharing": {
     "allow_child_ou_cross_tree_sharing": false
+  },
+  "account_access": {
+    "user": {
+      "lock_granularity": "authentication_method",
+      "record_last_login": false,
+      "last_login_resolution_seconds": 3600,
+      "default": {
+        "enabled": true,
+        "threshold": 5,
+        "failure_window_seconds": 3600,
+        "lock_durations_seconds": [
+          300,
+          900,
+          1800,
+          3600
+        ],
+        "lock_decay_seconds": 86400,
+        "max_consecutive_failures": 50
+      },
+      "notifications": {
+        "on_lock": {
+          "email": {
+            "enabled": true
+          }
+        }
+      }
+    },
+    "agent": {
+      "lock_granularity": "authentication_method",
+      "record_last_login": false,
+      "last_login_resolution_seconds": 3600,
+      "default": {
+        "enabled": true,
+        "threshold": 5,
+        "failure_window_seconds": 900,
+        "lock_durations_seconds": [
+          60,
+          300,
+          900
+        ],
+        "lock_decay_seconds": 3600,
+        "max_consecutive_failures": 50
+      }
+    }
   },
   "organization_unit": {
     "store": "composite"
   },
   "identity_provider": {
+    "store": "composite"
+  },
+  "http_connection": {
     "store": "composite"
   },
   "application": {
@@ -370,6 +454,9 @@
   "user_mgt_provider": {
     "type": "default"
   },
+  "identity_governance_provider": {
+    "type": "default"
+  },
   "openid4vp": {
     "client_id_scheme": "x509_san_dns",
     "signing_key_id": "ecdsa-key",
@@ -406,6 +493,13 @@
   "gateway": {
     "max_gateways": 1,
     "max_versions": 3,
-    "store": "composite"
+    "auto_apply": false,
+    "allow_private_addresses": false,
+    "removal_confirmation_threshold": 5,
+    "store": "composite",
+    "apply_timeout_seconds": 300
+  },
+  "import": {
+    "timeout_seconds": 120
   }
 }

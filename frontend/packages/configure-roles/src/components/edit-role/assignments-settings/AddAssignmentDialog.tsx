@@ -35,6 +35,8 @@ import type {RoleAssignment} from '../../../models/role';
 interface AddAssignmentDialogProps {
   open: boolean;
   roleId: string;
+  /** The role's organization unit. When set, only that unit's users, groups, apps and agents are listed. */
+  ouId?: string;
   onClose: () => void;
   onAdd: (assignments: RoleAssignment[]) => void;
   /** Inline error shown in the dialog when the last add attempt failed. */
@@ -52,6 +54,7 @@ interface AddAssignmentDialogProps {
 export default function AddAssignmentDialog({
   open,
   roleId,
+  ouId = undefined,
   onClose,
   onAdd,
   error = null,
@@ -91,21 +94,39 @@ export default function AddAssignmentDialog({
     page: 0,
   });
 
+  const ouFilter = ouId ? `ouId eq "${ouId}"` : undefined;
+
   const usersParams = useMemo(
-    () => ({limit: userPaginationModel.pageSize, offset: userPaginationModel.page * userPaginationModel.pageSize}),
-    [userPaginationModel],
+    () => ({
+      limit: userPaginationModel.pageSize,
+      offset: userPaginationModel.page * userPaginationModel.pageSize,
+      filter: ouFilter,
+    }),
+    [userPaginationModel, ouFilter],
   );
   const groupsParams = useMemo(
-    () => ({limit: groupPaginationModel.pageSize, offset: groupPaginationModel.page * groupPaginationModel.pageSize}),
-    [groupPaginationModel],
+    () => ({
+      limit: groupPaginationModel.pageSize,
+      offset: groupPaginationModel.page * groupPaginationModel.pageSize,
+      filter: ouFilter,
+    }),
+    [groupPaginationModel, ouFilter],
   );
   const applicationsParams = useMemo(
-    () => ({limit: appPaginationModel.pageSize, offset: appPaginationModel.page * appPaginationModel.pageSize}),
-    [appPaginationModel],
+    () => ({
+      limit: appPaginationModel.pageSize,
+      offset: appPaginationModel.page * appPaginationModel.pageSize,
+      filter: ouFilter,
+    }),
+    [appPaginationModel, ouFilter],
   );
   const agentsParams = useMemo(
-    () => ({limit: agentPaginationModel.pageSize, offset: agentPaginationModel.page * agentPaginationModel.pageSize}),
-    [agentPaginationModel],
+    () => ({
+      limit: agentPaginationModel.pageSize,
+      offset: agentPaginationModel.page * agentPaginationModel.pageSize,
+      filter: ouFilter,
+    }),
+    [agentPaginationModel, ouFilter],
   );
 
   const {data: usersData, isLoading: usersLoading, error: usersError} = useGetUsers(usersParams);

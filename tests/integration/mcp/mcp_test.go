@@ -5,7 +5,9 @@ package mcp
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"testing"
@@ -13,24 +15,11 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
+	"github.com/thunder-id/thunderid/tests/integration/flow/common"
 	"github.com/thunder-id/thunderid/tests/integration/testutils"
 )
 
 const (
-	testServerURL = "https://localhost:8095"
-
-	// mcpResourceIdentifier matches the MCP resource identifier the running integration server
-	// itself computes (baseURL + "/mcp", derived from the server's own configured hostname/port —
-	// see tests/integration/resources/deployment.yaml). It intentionally does NOT reuse
-	// testutils.SystemResourceIdentifier ("https://localhost:8090/mcp"), which reflects the
-	// product's generic bootstrapped default rather than this harness's actual port (8095) — a
-	// token audience-bound to that default would fail mcp.DefaultGuard's RFC 8707 audience check
-	// against this server.
-	mcpResourceIdentifier = testServerURL + "/mcp"
-
-	mcpEndpoint    = testServerURL + "/mcp"
-	revokeEndpoint = testServerURL + "/oauth2/revoke"
-
 	mcpProtocolVersion = "2025-06-18"
 
 	// mcpProtocolVersion20260728 is the MCP stateless core (SEP-2567/2575) protocol version: no
@@ -44,9 +33,26 @@ const (
 	// permission on the default System resource server. Reused here so the admin ends up in that
 	// same group for this suite's own resource server too.
 	adminGroupID = "01900000-0000-7000-8000-000000000040"
+	// adminGroupOUID is the bootstrapped default organization unit the admin group belongs to.
+	adminGroupOUID = "01900000-0000-7000-8000-000000000001"
 
 	systemActionHandle = "system"
 )
+
+var revokeEndpoint = testServerURL + "/oauth2/revoke"
+
+var mcpEndpoint = testServerURL + "/mcp"
+
+// mcpResourceIdentifier matches the MCP resource identifier the running integration server
+// itself computes (baseURL + "/mcp", derived from the server's own configured hostname/port —
+// see tests/integration/resources/deployment.yaml). It intentionally does NOT reuse
+// testutils.SystemResourceIdentifier ("https://localhost:8090/mcp"), which reflects the
+// product's generic bootstrapped default rather than this harness's actual port (8095) — a
+// token audience-bound to that default would fail mcp.DefaultGuard's RFC 8707 audience check
+// against this server.
+var mcpResourceIdentifier = testServerURL + "/mcp"
+
+var testServerURL = testutils.TestServerURL
 
 // MCPTestSuite exercises the MCP server's authentication end-to-end: a real signed token, the
 // shared security.BearerAuthenticator path, and real revocation enforcement — as opposed to the
@@ -103,11 +109,12 @@ func (ts *MCPTestSuite) SetupSuite() {
 
 	// Grants the "system" permission on this resource server to the same group the bootstrapped
 	// admin user belongs to, so the admin token request below can obtain "system" scope bound to
-	// this resource server's identifier instead of only the default one.
+	// this resource server's identifier instead of only the default one. The role lives in the
+	// group's own organization unit, since a role is assigned only to groups that unit owns.
 	roleID, err := testutils.CreateRole(testutils.Role{
 		Name:        "MCP Auth Test System Role",
 		Description: "Grants system permission on the MCP auth test resource server",
-		OUID:        ts.ouID,
+		OUID:        adminGroupOUID,
 		Permissions: []testutils.ResourcePermissions{
 			{ResourceServerID: ts.resourceServerID, Permissions: []string{systemActionHandle}},
 		},
@@ -166,22 +173,29 @@ func (ts *MCPTestSuite) mcpScopedAdminToken() string {
 // bare GET or an empty body here would fail at the MCP transport layer regardless of token
 // validity, proving nothing about authentication.
 func (ts *MCPTestSuite) initializeMCPSession(token string) *http.Response {
+	resp, err := ts.tryInitializeMCPSession(token)
+	ts.Require().NoError(err)
+	return resp
+}
+
+// tryInitializeMCPSession is initializeMCPSession without failing the test, for polling callbacks.
+func (ts *MCPTestSuite) tryInitializeMCPSession(token string) (*http.Response, error) {
 	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{` +
 		`"protocolVersion":"` + mcpProtocolVersion + `",` +
 		`"capabilities":{},` +
 		`"clientInfo":{"name":"thunderid-integration-test","version":"1.0.0"}}}`
 
 	req, err := http.NewRequest(http.MethodPost, mcpEndpoint, bytes.NewBufferString(body))
-	ts.Require().NoError(err)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := ts.client.Do(req)
-	ts.Require().NoError(err)
-	return resp
+	return ts.client.Do(req)
 }
 
 func (ts *MCPTestSuite) revoke(token string) {
@@ -307,6 +321,65 @@ func (ts *MCPTestSuite) TestInitialize_RevokedToken_Rejected() {
 		return resp.StatusCode == http.StatusUnauthorized
 	}, 5*time.Second, 250*time.Millisecond,
 		"a revoked token must be rejected once the revocation cache has synced")
+}
+
+// A suspended operator's MCP token is rejected once the revocation copy syncs: suspension revokes by
+// entity ID, which the MCP gate checks as the REST gate does. The operator is this test's own, so the
+// shared admin is never suspended.
+func (ts *MCPTestSuite) TestInitialize_SuspendedOperatorToken_Rejected() {
+	const (
+		typeHandle = "mcp-suspend-operator"
+		username   = "mcp-suspend-operator"
+		password   = "McpSuspend@123"
+	)
+	typeID, err := testutils.CreateUserType(testutils.UserType{
+		Handle: typeHandle, DisplayName: typeHandle, OUID: ts.ouID,
+		Schema: map[string]interface{}{
+			"username": map[string]interface{}{"type": "string"},
+			"password": map[string]interface{}{"type": "string", "credential": true},
+		},
+	})
+	ts.Require().NoError(err, "failed to create the operator user type")
+	defer func() { _ = testutils.DeleteUserType(typeID) }()
+	userID, err := testutils.CreateUser(testutils.User{
+		Type: typeHandle, OUID: ts.ouID,
+		Attributes: []byte(`{"username": "` + username + `", "password": "` + password + `"}`),
+	})
+	ts.Require().NoError(err, "failed to create the operator")
+	defer func() { _ = testutils.DeleteUser(userID) }()
+	roleID, err := testutils.CreateRole(testutils.Role{
+		Name: "MCP Suspended Operator Role", OUID: ts.ouID,
+		Permissions: []testutils.ResourcePermissions{
+			{ResourceServerID: ts.resourceServerID, Permissions: []string{systemActionHandle}},
+		},
+		Assignments: []testutils.Assignment{{ID: userID, Type: "user"}},
+	})
+	ts.Require().NoError(err, "failed to grant the operator the system permission")
+	defer func() { _ = testutils.DeleteRole(roleID) }()
+
+	tokenResp, err := testutils.ObtainAccessTokenWithPassword("CONSOLE", testServerURL+"/console", "system",
+		username, password, true, "", mcpResourceIdentifier)
+	ts.Require().NoError(err, "the operator must sign in")
+	resp := ts.initializeMCPSession(tokenResp.AccessToken)
+	resp.Body.Close()
+	ts.Require().Equal(http.StatusOK, resp.StatusCode, "the token must work before the suspension")
+
+	suspendFlowID, err := testutils.GetFlowIDByHandle("default-user-suspend-flow", "ADMINISTRATION")
+	ts.Require().NoError(err, "the suspend flow must ship")
+	result, err := common.ExecuteAdministrationFlow(suspendFlowID, map[string]string{"subject": userID}, true)
+	ts.Require().NoError(err)
+	ts.Require().Equal(http.StatusOK, result.StatusCode, "the suspend flow was refused: %+v", result.Error)
+	ts.Require().Equal("COMPLETE", result.Step.FlowStatus, "the suspension must be placed")
+
+	ts.Require().Eventually(func() bool {
+		resp, err := ts.tryInitializeMCPSession(tokenResp.AccessToken)
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode == http.StatusUnauthorized
+	}, 10*time.Second, 250*time.Millisecond,
+		"a suspended operator's token must be rejected once the revocation cache has synced")
 }
 
 // A token that is valid and carries the required scope, but was minted for a different — still
@@ -443,4 +516,201 @@ func (ts *MCPTestSuite) runApplicationDeletionFlow(appID string) {
 	body, _ := io.ReadAll(resp.Body)
 	ts.Require().Equalf(http.StatusOK, resp.StatusCode, "deletion flow failed: %s", string(body))
 	ts.Require().Containsf(string(body), `"COMPLETE"`, "deletion flow must complete: %s", string(body))
+}
+
+// mcpToolResult is the part of a tools/call response the tool tests read.
+type mcpToolResult struct {
+	Result struct {
+		IsError           bool           `json:"isError"`
+		StructuredContent map[string]any `json:"structuredContent"`
+	} `json:"result"`
+}
+
+// postStatelessMCP sends a stateless 2026-07-28 request and returns the JSON-RPC message with the
+// raw response body. An SSE response carries the message on its data line. A non-empty mcpName is
+// mirrored into the Mcp-Name header, as tools/call requires.
+func (ts *MCPTestSuite) postStatelessMCP(token, method, mcpName string, params map[string]any) (string, string) {
+	withMeta := map[string]any{
+		"_meta": map[string]any{
+			"io.modelcontextprotocol/protocolVersion":    mcpProtocolVersion20260728,
+			"io.modelcontextprotocol/clientCapabilities": map[string]any{},
+			"io.modelcontextprotocol/clientInfo": map[string]any{
+				"name": "thunderid-integration-test", "version": "1.0.0"},
+		},
+	}
+	maps.Copy(withMeta, params)
+	payload, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": withMeta})
+	ts.Require().NoError(err)
+
+	req, err := http.NewRequest(http.MethodPost, mcpEndpoint, bytes.NewReader(payload))
+	ts.Require().NoError(err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("MCP-Protocol-Version", mcpProtocolVersion20260728)
+	req.Header.Set("Mcp-Method", method)
+	if mcpName != "" {
+		req.Header.Set("Mcp-Name", mcpName)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := ts.client.Do(req)
+	ts.Require().NoError(err)
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	ts.Require().Equalf(http.StatusOK, resp.StatusCode, "%s failed: %s",
+		strings.TrimSpace(method+" "+mcpName), string(body))
+
+	message := string(body)
+	for _, line := range strings.Split(message, "\n") {
+		if data, ok := strings.CutPrefix(line, "data: "); ok {
+			message = data
+		}
+	}
+	return message, string(body)
+}
+
+// callMCPTool sends a stateless 2026-07-28 tools/call request and returns the decoded result with
+// the raw response body.
+func (ts *MCPTestSuite) callMCPTool(token, name string, args map[string]any) (mcpToolResult, string) {
+	message, body := ts.postStatelessMCP(token, "tools/call", name, map[string]any{"name": name, "arguments": args})
+	var result mcpToolResult
+	ts.Require().NoErrorf(json.Unmarshal([]byte(message), &result), "%s returned: %s", name, body)
+	return result, body
+}
+
+// tools/list advertises every tool without the product name in its name, and no title, description,
+// or schema refers to a tool by its old prefixed name. Clients that aggregate several servers
+// namespace tool names themselves, so the server does not prefix them (#6105).
+func (ts *MCPTestSuite) TestListTools_NamesDoNotCarryProductName() {
+	message, body := ts.postStatelessMCP(ts.mcpScopedAdminToken(), "tools/list", "", map[string]any{})
+	var listed struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	ts.Require().NoErrorf(json.Unmarshal([]byte(message), &listed), "tools/list returned: %s", body)
+	ts.Require().NotEmptyf(listed.Result.Tools, "tools/list returned no tools: %s", body)
+
+	names := make([]string, 0, len(listed.Result.Tools))
+	for _, tool := range listed.Result.Tools {
+		ts.NotContainsf(strings.ToLower(tool.Name), "thunderid", "tool %q carries the product name", tool.Name)
+		names = append(names, tool.Name)
+	}
+	ts.Contains(names, "list_applications")
+	ts.NotContains(message, "thunderid_")
+}
+
+// The React SDK guide tells the agent which tools to call, so it names them without the prefix.
+func (ts *MCPTestSuite) TestIntegrateReactSDK_GuideNamesToolsWithoutPrefix() {
+	result, raw := ts.callMCPTool(ts.mcpScopedAdminToken(), "integrate_react_sdk", map[string]any{})
+	ts.Require().Falsef(result.Result.IsError, "integrate_react_sdk failed: %s", raw)
+
+	instructions, _ := result.Result.StructuredContent["instructions"].(string)
+	ts.Require().NotEmptyf(instructions, "integrate_react_sdk returned no instructions: %s", raw)
+	ts.NotContains(instructions, "thunderid_")
+	ts.Contains(instructions, "`update_application`")
+}
+
+// The HTTP connection tools run the /connections/http path end to end: the password is never
+// returned, is kept on an update that omits it while the URL origin is unchanged, and is required
+// again once the origin changes.
+func (ts *MCPTestSuite) TestHTTPConnectionTools_MaskAndRetainPassword() {
+	const password = "mcp-http-connection-secret"
+	token := ts.mcpScopedAdminToken()
+
+	created, raw := ts.callMCPTool(token, "create_http_connection", map[string]any{
+		"ouId": ts.ouID, "name": "MCP Tools HTTP Connection", "url": "https://risk.example.com/evaluate",
+		"authentication": map[string]any{"type": "basic",
+			"properties": map[string]any{"username": "svc-user", "password": password}},
+	})
+	ts.Require().Falsef(created.Result.IsError, "create failed: %s", raw)
+	ts.NotContains(raw, password)
+	id, _ := created.Result.StructuredContent["id"].(string)
+	ts.Require().NotEmpty(id)
+	ts.T().Cleanup(func() { ts.deleteHTTPConnection(id) })
+
+	got, raw := ts.callMCPTool(token, "get_http_connection_by_id", map[string]any{"id": id})
+	ts.Require().Falsef(got.Result.IsError, "get failed: %s", raw)
+	ts.NotContains(raw, password)
+	ts.Contains(raw, `"password":"******"`)
+
+	listed, raw := ts.callMCPTool(token, "list_http_connections", map[string]any{})
+	ts.Require().Falsef(listed.Result.IsError, "list failed: %s", raw)
+	ts.Contains(raw, id)
+	ts.NotContains(raw, password)
+
+	sameOrigin, raw := ts.callMCPTool(token, "update_http_connection", map[string]any{
+		"id": id, "name": "MCP Tools HTTP Connection", "url": "https://risk.example.com/v2/evaluate",
+		"authentication": map[string]any{"type": "basic", "properties": map[string]any{"username": "svc-user"}},
+	})
+	ts.Falsef(sameOrigin.Result.IsError, "an update keeping the origin must keep the stored password: %s", raw)
+	ts.NotContains(raw, password)
+
+	otherOrigin, raw := ts.callMCPTool(token, "update_http_connection", map[string]any{
+		"id": id, "name": "MCP Tools HTTP Connection", "url": "https://elsewhere.example.net/evaluate",
+		"authentication": map[string]any{"type": "basic", "properties": map[string]any{"username": "svc-user"}},
+	})
+	ts.Truef(otherOrigin.Result.IsError, "an update moving the origin must require the password again: %s", raw)
+	ts.Contains(raw, "failed to update HTTP connection")
+	ts.Contains(raw, "must give every field its method requires")
+}
+
+// The reviewer's case (AC11.3): an agent reads a connection through the get tool and sends the whole
+// object back through the update tool, so the password arrives as the mask. The update is refused,
+// and the stored password is unchanged: a later update that omits it, at the same origin, still
+// succeeds, which it could not if the password had been dropped or replaced by the mask.
+func (ts *MCPTestSuite) TestHTTPConnectionTools_MaskedPasswordReadBackIsRefused() {
+	const password = "mcp-http-connection-readback-secret"
+	const name = "MCP Tools HTTP Connection Read Back"
+	token := ts.mcpScopedAdminToken()
+
+	created, raw := ts.callMCPTool(token, "create_http_connection", map[string]any{
+		"ouId": ts.ouID, "name": name, "url": "https://risk.example.com/evaluate",
+		"authentication": map[string]any{"type": "basic",
+			"properties": map[string]any{"username": "svc-user", "password": password}},
+	})
+	ts.Require().Falsef(created.Result.IsError, "create failed: %s", raw)
+	id, _ := created.Result.StructuredContent["id"].(string)
+	ts.Require().NotEmpty(id)
+	ts.T().Cleanup(func() { ts.deleteHTTPConnection(id) })
+
+	got, raw := ts.callMCPTool(token, "get_http_connection_by_id", map[string]any{"id": id})
+	ts.Require().Falsef(got.Result.IsError, "get failed: %s", raw)
+	readBack := got.Result.StructuredContent
+	// type is part of the output only; the update workflow tells the agent to leave it out.
+	delete(readBack, "type")
+	readBack["description"] = "changed by the read-back update"
+
+	refused, raw := ts.callMCPTool(token, "update_http_connection", readBack)
+	ts.Truef(refused.Result.IsError, "a password sent as the mask must be refused: %s", raw)
+	ts.Contains(raw, "failed to update HTTP connection")
+	ts.Contains(raw, "a password or token cannot be ******")
+	ts.NotContains(raw, password)
+
+	got, raw = ts.callMCPTool(token, "get_http_connection_by_id", map[string]any{"id": id})
+	ts.Require().Falsef(got.Result.IsError, "get failed: %s", raw)
+	ts.Nil(got.Result.StructuredContent["description"], "the refused update must not be applied")
+	ts.Contains(raw, `"password":"******"`)
+
+	kept, raw := ts.callMCPTool(token, "update_http_connection", map[string]any{
+		"id": id, "name": name, "url": "https://risk.example.com/v2/evaluate",
+		"authentication": map[string]any{"type": "basic", "properties": map[string]any{"username": "svc-user"}},
+	})
+	ts.Falsef(kept.Result.IsError, "the stored password must survive the refused update: %s", raw)
+	ts.NotContains(raw, password)
+}
+
+func (ts *MCPTestSuite) deleteHTTPConnection(id string) {
+	adminToken, err := testutils.GetAccessToken()
+	ts.Require().NoError(err, "failed to obtain the admin token")
+	req, err := http.NewRequest(http.MethodDelete, testServerURL+"/connections/http/"+id, nil)
+	ts.Require().NoError(err)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+
+	resp, err := ts.client.Do(req)
+	ts.Require().NoError(err)
+	defer resp.Body.Close()
+	ts.Equal(http.StatusNoContent, resp.StatusCode)
 }

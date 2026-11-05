@@ -292,7 +292,7 @@ func (a *attributeCollector) updateUserInStore(ctx *providers.NodeContext, execR
 		return errAttributeUpdateRestricted
 	}
 
-	if err := a.entityProvider.UpdateAttributes(userID, updatedUser.Attributes); err != nil {
+	if err := a.entityProvider.UpdateAttributes(ctx.Context, userID, updatedUser.Attributes); err != nil {
 		return fmt.Errorf("failed to update user attributes: %s", err.Message)
 	}
 	logger.Debug(ctx.Context, "User attributes updated successfully",
@@ -310,7 +310,7 @@ func (a *attributeCollector) getUserFromStore(
 		return nil, errors.New("user ID is not available in the context")
 	}
 
-	user, err := a.entityProvider.GetEntity(userID)
+	user, err := a.entityProvider.GetEntityProfile(ctx.Context, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user by ID: %s", err.Message)
 	}

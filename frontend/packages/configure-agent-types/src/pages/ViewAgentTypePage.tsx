@@ -1,7 +1,7 @@
 // Copyright 2025-2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import {PageLoadingAnimation, QueryErrorNotice, UnsavedChangesBar} from '@thunderid/components';
+import {DocumentTitle, PageLoadingAnimation, QueryErrorNotice, UnsavedChangesBar} from '@thunderid/components';
 import {getBreakingSchemaChanges} from '@thunderid/configure-user-types';
 import {useLogger} from '@thunderid/logger/react';
 import {
@@ -262,15 +262,23 @@ export default function ViewAgentTypePage(): JSX.Element {
     void performSave();
   }, [performSave]);
 
+  const pageTitle = t('agentTypes:edit.title', 'Agent schema');
+
   // Loading state
   if (isLoading) {
-    return <PageLoadingAnimation />;
+    return (
+      <>
+        <DocumentTitle title={pageTitle} />
+        <PageLoadingAnimation />
+      </>
+    );
   }
 
   // Error state
   if (fetchError) {
     return (
       <PageContent>
+        <DocumentTitle title={pageTitle} />
         <QueryErrorNotice
           error={fetchError}
           t={tForErrors}
@@ -286,7 +294,7 @@ export default function ViewAgentTypePage(): JSX.Element {
               }}
               startIcon={<ArrowLeft size={16} />}
             >
-              {t('agentTypes:edit.back', 'Back to Agents')}
+              {t('agentTypes:edit.back', 'Back to agents')}
             </Button>
           }
         />
@@ -298,6 +306,7 @@ export default function ViewAgentTypePage(): JSX.Element {
   if (!agentType) {
     return (
       <PageContent>
+        <DocumentTitle title={pageTitle} />
         <Alert severity="warning" sx={{mb: 2}}>
           {t('agentTypes:edit.notFound', 'Agent type not found')}
         </Alert>
@@ -307,7 +316,7 @@ export default function ViewAgentTypePage(): JSX.Element {
           }}
           startIcon={<ArrowLeft size={16} />}
         >
-          {t('agentTypes:edit.back', 'Back to Agents')}
+          {t('agentTypes:edit.back', 'Back to agents')}
         </Button>
       </PageContent>
     );
@@ -315,14 +324,15 @@ export default function ViewAgentTypePage(): JSX.Element {
 
   return (
     <PageContent>
+      <DocumentTitle title={pageTitle} />
       {/* Header */}
       <PageTitle>
         <PageTitle.BackButton component={<Link to={listUrl} />}>
-          {t('agentTypes:edit.back', 'Back to Agents')}
+          {t('agentTypes:edit.back', 'Back to agents')}
         </PageTitle.BackButton>
         <PageTitle.Header>
           <Stack direction="row" alignItems="center" spacing={1} mb={1}>
-            <Typography variant="h3">{t('agentTypes:edit.title', 'Agent Schema')}</Typography>
+            <Typography variant="h3">{t('agentTypes:edit.title', 'Agent schema')}</Typography>
           </Stack>
         </PageTitle.Header>
       </PageTitle>

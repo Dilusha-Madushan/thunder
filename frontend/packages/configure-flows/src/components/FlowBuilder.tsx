@@ -1,4 +1,4 @@
-// Copyright 2025 The ThunderID Authors
+// Copyright 2025-2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
 import {GradientBorderButton, QueryErrorNotice} from '@thunderid/components';
@@ -8,7 +8,7 @@ import type {Edge, Node, NodeChange} from '@xyflow/react';
 import {useEdgesState, useNodesState, useUpdateNodeInternals} from '@xyflow/react';
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {useTranslation} from 'react-i18next';
-import {useParams} from 'react-router';
+import {useLocation, useNavigate, useParams} from 'react-router';
 import '@xyflow/react/dist/style.css';
 
 import FlowCanvas from './FlowCanvas';
@@ -19,6 +19,7 @@ import SsoDisableConfirmDialog from '../components/SsoDisableConfirmDialog';
 import SsoToggle from '../components/SsoToggle';
 import FlowConstants from '../constants/FlowConstants';
 import CompactStacksContext from '../context/CompactStacksContext';
+import FlowTypeContext from '../context/FlowTypeContext';
 import useEdgeGeneration from '../hooks/useEdgeGeneration';
 import useElementAddition from '../hooks/useElementAddition';
 import useFlowConfig from '../hooks/useFlowConfig';
@@ -26,6 +27,7 @@ import useFlowEvents from '../hooks/useFlowEvents';
 import useFlowHistory, {computeGraphSignature} from '../hooks/useFlowHistory';
 import useFlowInitialization from '../hooks/useFlowInitialization';
 import useFlowNaming from '../hooks/useFlowNaming';
+import useFlowRoutes from '../hooks/useFlowRoutes';
 import useFlowSave from '../hooks/useFlowSave';
 import useNodeTypes from '../hooks/useNodeTypes';
 import useSnackbarNotifications from '../hooks/useSnackbarNotifications';
@@ -33,6 +35,7 @@ import useSsoToggle from '../hooks/useSsoToggle';
 import useTemplateAndWidgetLoading from '../hooks/useTemplateAndWidgetLoading';
 import useValidationStatus from '../hooks/useValidationStatus';
 import {FlowType} from '../models/flows';
+import type {CreateFlowRequest, FlowDefinitionResponse} from '../models/responses';
 import {ExecutionTypes, StepTypes, type StepData} from '../models/steps';
 import {hasUnpositionedNodes} from '../utils/applyAutoLayout';
 import collapseExecutorChains, {getExecutionStackHeadId} from '../utils/compactGraphTransforms';
@@ -46,7 +49,17 @@ import {
 const SMS_EXECUTORS = new Set<string>([ExecutionTypes.SMSExecutor]);
 
 function FlowBuilder() {
-  const {flowId} = useParams<{flowId: string}>();
+  const {flowId: routeFlowId} = useParams<{flowId: string}>();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const flowRoutes = useFlowRoutes();
+  const draftFlow = (location.state as {draftFlow?: CreateFlowRequest} | null)?.draftFlow;
+  const isDraftFlow = routeFlowId === 'new' && Boolean(draftFlow);
+  const flowId = isDraftFlow ? undefined : routeFlowId;
+  const initialFlowData = useMemo<FlowDefinitionResponse | undefined>(() => {
+    if (!isDraftFlow || !draftFlow) return undefined;
+    return {...draftFlow, id: '', activeVersion: 0, createdAt: '', updatedAt: ''};
+  }, [draftFlow, isDraftFlow]);
   const [nodes, setNodes, defaultOnNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const {t} = useTranslation();
@@ -85,6 +98,8 @@ function FlowBuilder() {
   // Flow naming hook
   const {flowName, flowHandle, needsAutoLayout, setNeedsAutoLayout, handleFlowNameChange} = useFlowNaming({
     existingFlowData: existingFlowData as {name?: string; handle?: string} | undefined,
+    defaultName: initialFlowData?.name,
+    defaultHandle: initialFlowData?.handle,
   });
 
   // Snackbar notifications hook
@@ -116,6 +131,7 @@ function FlowBuilder() {
     resources,
     flowId,
     existingFlowData,
+    initialFlowData,
     isLoadingExistingFlow,
     setNodes,
     setEdges,
@@ -254,7 +270,10 @@ function FlowBuilder() {
     updateNodeInternals,
   });
 
-  const flowType = (existingFlowData as {flowType?: string} | undefined)?.flowType ?? 'AUTHENTICATION';
+  const flowType =
+    (existingFlowData as {flowType?: FlowType} | undefined)?.flowType ??
+    initialFlowData?.flowType ??
+    FlowType.AUTHENTICATION;
 
   // SSO pairing is AUTHENTICATION-only and the confirm-action rule SIGNOUT-only.
   // Every flow type still gets the common rules.
@@ -370,10 +389,14 @@ function FlowBuilder() {
     flowName,
     flowHandle,
     flowType,
+    ouId: existingFlowData?.ouId ?? initialFlowData?.ouId,
     showError,
     showSuccess,
     setOpenValidationPanel,
     onSaved: handleSaved,
+    onCreated: (createdFlowId) => {
+      void navigate(flowRoutes.flows.detail(createdFlowId), {replace: true, state: null});
+    },
   });
 
   // SSO toggle orchestration (enable/disable transformations, placement mode)
@@ -702,38 +725,41 @@ function FlowBuilder() {
           {t('common:messages.readOnlyResource', 'This resource is read-only and cannot be modified.')}
         </Alert>
       )}
-      <CompactStacksContext.Provider value={compactStacksContextValue}>
-        <FlowCanvas
-          resources={resources}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          mutateComponents={mutateComponents}
-          onTemplateLoad={handleTemplateLoad}
-          onWidgetLoad={handleWidgetLoad}
-          onStepLoad={handleStepLoad}
-          onResourceAdd={handleResourceAdd}
-          onSave={existingFlowData?.isReadOnly ? undefined : handleSave}
-          nodes={displayNodes}
-          sourceNodes={nodes}
-          sourceEdges={edges}
-          edges={displayEdges}
-          setNodes={setNodes}
-          setEdges={setEdges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onEdgeClick={sso.handleEdgeClick}
-          flowTitle={flowName}
-          flowHandle={flowHandle}
-          onFlowTitleChange={handleFlowNameChange}
-          triggerAutoLayoutOnLoad={needsAutoLayout}
-          resourcePanelFooter={ssoToggleFooter}
-          onUndo={undo}
-          onRedo={redo}
-          canUndo={canUndo}
-          canRedo={canRedo}
-          isDirty={isDirty}
-        />
-      </CompactStacksContext.Provider>
+      <FlowTypeContext.Provider value={flowType}>
+        <CompactStacksContext.Provider value={compactStacksContextValue}>
+          <FlowCanvas
+            resources={resources}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            mutateComponents={mutateComponents}
+            onTemplateLoad={handleTemplateLoad}
+            onWidgetLoad={handleWidgetLoad}
+            onStepLoad={handleStepLoad}
+            onResourceAdd={handleResourceAdd}
+            onSave={existingFlowData?.isReadOnly ? undefined : handleSave}
+            nodes={displayNodes}
+            sourceNodes={nodes}
+            sourceEdges={edges}
+            onDeleteRefused={showError}
+            edges={displayEdges}
+            setNodes={setNodes}
+            setEdges={setEdges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onEdgeClick={sso.handleEdgeClick}
+            flowTitle={flowName}
+            flowHandle={flowHandle}
+            onFlowTitleChange={handleFlowNameChange}
+            triggerAutoLayoutOnLoad={needsAutoLayout}
+            resourcePanelFooter={ssoToggleFooter}
+            onUndo={undo}
+            onRedo={redo}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            isDirty={isDirty}
+          />
+        </CompactStacksContext.Provider>
+      </FlowTypeContext.Provider>
       <SsoDisableConfirmDialog
         open={sso.isConfirmDialogOpen}
         checkpointCount={sso.ssoState.ssoCheckIds.length}

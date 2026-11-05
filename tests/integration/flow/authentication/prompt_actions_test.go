@@ -13,10 +13,6 @@ import (
 	"github.com/thunder-id/thunderid/tests/integration/testutils"
 )
 
-const (
-	mockPromptActionsNotificationServerPort = 8098
-)
-
 var (
 	promptActionsFlow = testutils.Flow{
 		Name:     "Prompt Actions Auth Flow",
@@ -283,13 +279,11 @@ func (ts *PromptActionsAndMFAFlowTestSuite) SetupSuite() {
 	}
 	promptActionsEntityTypeID = schemaID
 
-	// Start mock notification server
-	ts.mockServer = testutils.NewMockNotificationServer(mockPromptActionsNotificationServerPort)
-	err = ts.mockServer.Start()
+	// Create mock notification server
+	ts.mockServer, err = testutils.NewMockNotificationServer()
 	if err != nil {
-		ts.T().Fatalf("Failed to start mock notification server: %v", err)
+		ts.T().Fatalf("Failed to create mock notification server: %v", err)
 	}
-	time.Sleep(100 * time.Millisecond)
 	ts.T().Log("Mock notification server started successfully")
 
 	// Create test users with the created OU
@@ -389,16 +383,16 @@ func (ts *PromptActionsAndMFAFlowTestSuite) TearDownSuite() {
 		}
 	}
 
+	if promptActionsEntityTypeID != "" {
+		if err := testutils.DeleteUserType(promptActionsEntityTypeID); err != nil {
+			ts.T().Logf("Failed to delete test user type during teardown: %v", err)
+		}
+	}
+
 	// Delete test organization unit
 	if promptActionsTestOUID != "" {
 		if err := testutils.DeleteOrganizationUnit(promptActionsTestOUID); err != nil {
 			ts.T().Logf("Failed to delete test organization unit during teardown: %v", err)
-		}
-	}
-
-	if promptActionsEntityTypeID != "" {
-		if err := testutils.DeleteUserType(promptActionsEntityTypeID); err != nil {
-			ts.T().Logf("Failed to delete test user type during teardown: %v", err)
 		}
 	}
 }

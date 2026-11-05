@@ -4,7 +4,10 @@
 package executor
 
 import (
+	"time"
+
 	"github.com/thunder-id/thunderid/internal/entitytype"
+	"github.com/thunder-id/thunderid/internal/flow/common"
 	"github.com/thunder-id/thunderid/internal/flow/executormeta"
 	oauth2const "github.com/thunder-id/thunderid/internal/oauth/oauth2/constants"
 )
@@ -35,6 +38,7 @@ const (
 	ExecutorNameProvisioning                 = executormeta.ExecutorNameProvisioning
 	ExecutorNameAttributeCollect             = executormeta.ExecutorNameAttributeCollect
 	ExecutorNameAuthorization                = executormeta.ExecutorNameAuthorization
+	ExecutorNameAuthorizationDetail          = executormeta.ExecutorNameAuthorizationDetail
 	ExecutorNamePermissionValidator          = executormeta.ExecutorNamePermissionValidator
 	ExecutorNameOUCreation                   = executormeta.ExecutorNameOUCreation
 	ExecutorNameHTTPRequest                  = executormeta.ExecutorNameHTTPRequest
@@ -64,6 +68,10 @@ const (
 	ExecutorNameActionDeletion               = executormeta.ExecutorNameActionDeletion
 	ExecutorNameOwnerResolver                = executormeta.ExecutorNameOwnerResolver
 	ExecutorNameAgentTypeResolver            = executormeta.ExecutorNameAgentTypeResolver
+	ExecutorNameIdentityGovernance           = executormeta.ExecutorNameIdentityGovernance
+	ExecutorNamePreSuspend                   = executormeta.ExecutorNamePreSuspend
+	ExecutorNameExtension                    = executormeta.ExecutorNameExtension
+	ExecutorNameDeviceCode                   = executormeta.ExecutorNameDeviceCode
 )
 
 // Executor mode constants
@@ -84,10 +92,14 @@ const (
 
 	ExecutorModeRevoke        = executormeta.ExecutorModeRevoke
 	ExecutorModeAdvanceCutoff = executormeta.ExecutorModeAdvanceCutoff
+
+	ExecutorModeUnlock    = executormeta.ExecutorModeUnlock
+	ExecutorModeSuspend   = executormeta.ExecutorModeSuspend
+	ExecutorModeUnsuspend = executormeta.ExecutorModeUnsuspend
 )
 
-// defaultProvisioningCategory is the entity default category a provisioning node provisions into when its
-// mode property is not set.
+// defaultProvisioningCategory is the entity default category a provisioning node works on when no
+// type resolver put one in the runtime data.
 const defaultProvisioningCategory = entitytype.TypeCategoryUser
 
 // categoryUnscoped is the category an executor names when its work is not tied to one kind of
@@ -120,6 +132,7 @@ const (
 
 	revocationInputRole           = "targetRoleId"
 	revocationInputAssignee       = "targetAssigneeId"
+	revocationInputAssignmentOU   = "targetAssignmentOuId"
 	revocationInputGroup          = "targetGroupId"
 	revocationInputMember         = "targetMemberId"
 	revocationInputPermissions    = "targetPermissions"
@@ -127,7 +140,10 @@ const (
 	revocationInputResource       = "targetResourceId"
 	revocationInputAction         = "targetActionId"
 
-	ouIDKey        = "ouId"
+	governanceInputOperatorNote = "operatorNote"
+
+	ouIDKey        = common.RuntimeKeyOUID
+	ouHandleKey    = "ouHandle"
 	defaultOUIDKey = "defaultOUID"
 
 	// Input identifiers a flow definition declares for the entity type, one per category. A prompt
@@ -136,9 +152,12 @@ const (
 	agentTypeKey = "agentType"
 
 	// categoryTypeKey is the runtime slot carrying the resolved type handle. A run provisions one
-	// category, so the resolvers share a single slot. Readers pair the handle with the category they
-	// already hold from the node's mode property, which is what every type lookup needs.
+	// category, so the resolvers share a single slot. Readers pair the handle with the category from
+	// categoryNameKey.
 	categoryTypeKey = "categoryType"
+	// categoryNameKey is the runtime slot carrying the category the resolved type belongs to. The
+	// resolvers write it beside categoryTypeKey.
+	categoryNameKey = "categoryName"
 
 	// The agent record's own fields, collected by the flow rather than declared by the entity type
 	// schema. The agent service owns their validation.
@@ -148,11 +167,18 @@ const (
 	ownerIDKey     = "ownerId"
 	descriptionKey = "description"
 	logoURLKey     = "logoUrl"
+	// validUntilKey carries the RFC 3339 instant the agent's lifespan ends. Absent registers an agent
+	// that does not expire.
+	validUntilKey = "validUntil"
 	// delegatedKey marks an agent that acts on behalf of a signed-in user. Absent means false.
 	delegatedKey = "delegated"
 	// redirectURIsKey carries the callback URIs of a delegated agent, comma separated. It is the
-	// only part of an agent's OAuth configuration a flow supplies; the provider derives the rest.
+	// only part of an agent's OAuth configuration a flow supplies; the agent service derives the rest.
 	redirectURIsKey = "redirectUris"
+	// authFlowIDKey carries the authentication flow a delegated agent's users sign in through.
+	authFlowIDKey = "authFlowId"
+	// allowedUserTypesKey carries the one user type handle a delegated agent's users may belong to.
+	allowedUserTypesKey = "allowedUserTypes"
 
 	// agentAttributeConflictCode is the agent service's unique-attribute clash code. It is repeated
 	// here rather than referenced from internal/agent: that package reaches the flow executor through
@@ -173,11 +199,13 @@ const (
 	propertyKeyAssignRole            = "assignRole"
 	propertyKeySeedGroupsFromMapping = "seedGroupsFromMapping"
 	propertyKeySeedRolesFromMapping  = "seedRolesFromMapping"
-	// propertyKeyProvisioningMode names the entity category a provisioning node provisions into.
-	// The value is the category name; absent or empty means the default category.
-	propertyKeyProvisioningMode = "mode"
-	propertyKeyRequiredScopes   = "requiredScopes"
-	propertyKeyEmailTemplate    = "emailTemplate"
+	// propertyKeyDelegated sets whether a provisioned agent acts on behalf of a signed-in user when the
+	// flow does not collect the choice itself. A value the flow collects takes precedence. It applies
+	// to the agent category only.
+	propertyKeyDelegated      = "delegated"
+	propertyKeyRequiredScopes = "requiredScopes"
+	propertyKeyEmailTemplate  = "emailTemplate"
+	propertyKeyBestEffort     = "bestEffort"
 	// TODO: Revisit propertyKeyTokenExpiry and propertyKeyMagicLinkURL — these should not be node properties.
 	propertyKeyTokenExpiry                             = "tokenExpiry"
 	propertyKeyMagicLinkURL                            = "magicLinkURL"
@@ -192,7 +220,6 @@ const (
 	propertyKeyPresentationDefinitionID                = "presentation_definition_id"
 	propertyKeyCallbackType                            = "callbackType"
 	propertyKeyLoginHintAttribute                      = "loginHintAttribute"
-	propertyKeyMaxOTPAttempts                          = "maxAttempts"
 	propertyKeyOTPLength                               = "otpLength"
 	propertyKeyOTPUseNumericOnly                       = "otpUseNumericOnly"
 	propertyKeyOTPValidityPeriodSeconds                = "otpValidityPeriodSeconds"
@@ -206,6 +233,10 @@ const (
 	// element is optional.
 	propertyKeyConsentFailOnDeny = "failOnDeny"
 )
+
+// suspensionRevocationTTL is how long a suspension's revocation rows are kept.
+// TODO(#5805): use the server-wide maximum token lifetime once it is introduced.
+const suspensionRevocationTTL = 7 * 24 * time.Hour
 
 // nonSearchableInputs contains the list of user inputs/ attributes that are non-searchable.
 var nonSearchableInputs = []string{

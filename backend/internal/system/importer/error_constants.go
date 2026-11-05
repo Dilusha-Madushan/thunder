@@ -7,6 +7,8 @@ package importer
 import (
 	"github.com/thunder-id/thunderid/internal/agent"
 	"github.com/thunder-id/thunderid/internal/application"
+	authzdetailmgt "github.com/thunder-id/thunderid/internal/authzdetail/mgt"
+	"github.com/thunder-id/thunderid/internal/connection/httpconnection"
 	layoutmgt "github.com/thunder-id/thunderid/internal/design/layout/mgt"
 	thememgt "github.com/thunder-id/thunderid/internal/design/theme/mgt"
 	"github.com/thunder-id/thunderid/internal/entitytype"
@@ -37,6 +39,7 @@ var notFoundErrorCodes = map[string]struct{}{
 	role.ErrorRoleNotFound.Code:                     {},
 	group.ErrorGroupNotFound.Code:                   {},
 	resource.ErrorResourceServerNotFound.Code:       {},
+	authzdetailmgt.ErrorTypeNotFound.Code:           {},
 	thememgt.ErrorThemeNotFound.Code:                {},
 	layoutmgt.ErrorLayoutNotFound.Code:              {},
 	user.ErrorUserNotFound.Code:                     {},
@@ -44,6 +47,7 @@ var notFoundErrorCodes = map[string]struct{}{
 	presentation.ErrorDefinitionNotFound.Code:       {},
 	credential.ErrorConfigurationNotFound.Code:      {},
 	notificationtemplate.ErrorTemplateNotFound.Code: {},
+	httpconnection.ErrorNotFound.Code:               {},
 }
 
 var (
@@ -115,6 +119,17 @@ var (
 		ErrorDescription: tidcommon.I18nMessage{
 			Key:          "error.import.unresolvedReference.description",
 			DefaultValue: "The resource refers to a variable or secret this deployment holds no value for",
+		},
+	}
+	// ErrorMisplacedSecret represents a document referring to a secret from a field that is not a
+	// credential, where its value could be read back.
+	ErrorMisplacedSecret = tidcommon.ServiceError{
+		Type:  tidcommon.ClientErrorType,
+		Code:  "IMP-1007",
+		Error: tidcommon.I18nMessage{Key: "error.import.misplacedSecret", DefaultValue: "Misplaced secret reference"},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "error.import.misplacedSecret.description",
+			DefaultValue: "A secret reference may only stand in a field that holds a credential",
 		},
 	}
 )

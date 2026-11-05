@@ -13,6 +13,7 @@ import FlowBuilder from '../FlowBuilder';
 // Use vi.hoisted for mock functions that need to be available during vi.mock hoisting
 const {
   mockNavigate,
+  mockUseLocation,
   mockUseParams,
   mockUseNodesState,
   mockUseEdgesState,
@@ -42,6 +43,7 @@ const {
 
   return {
     mockNavigate: vi.fn(),
+    mockUseLocation: vi.fn(() => ({state: null})),
     mockUseParams: vi.fn(() => ({})),
     mockUseNodesState: vi.fn(),
     mockUseEdgesState: vi.fn(),
@@ -125,6 +127,7 @@ vi.mock('@wso2/oxygen-ui', async (importOriginal) => {
 // Mock react-router
 vi.mock('react-router', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-router')>()),
+  useLocation: () => mockUseLocation(),
   useNavigate: () => mockNavigate,
   useParams: () => mockUseParams(),
 }));
@@ -1026,6 +1029,7 @@ describe('Update Existing Flow', () => {
     mockUseParams.mockReturnValue({flowId: 'existing-flow-123'});
     mockExistingFlowData.value = {
       id: 'existing-flow-123',
+      ouId: 'ou-1',
       name: 'Existing Flow',
       handle: 'existing-flow',
       nodes: [],
@@ -1059,15 +1063,18 @@ describe('Update Existing Flow', () => {
     mockUseParams.mockReturnValue({flowId: 'existing-flow-123'});
     mockExistingFlowData.value = {
       id: 'existing-flow-123',
+      ouId: 'ou-1',
       name: 'Existing Flow',
       handle: 'existing-flow',
       nodes: [],
     };
 
     // Make updateFlow.mutate call the onSuccess callback
-    mockUpdateFlowMutate.mockImplementation((_data: unknown, options: {onSuccess?: () => void}) => {
-      options?.onSuccess?.();
-    });
+    mockUpdateFlowMutate.mockImplementation(
+      (_data: unknown, options: {onSuccess?: (createdFlow?: {id: string}) => void}) => {
+        options?.onSuccess?.({id: 'created-flow-id'});
+      },
+    );
 
     render(<FlowBuilder />);
 
@@ -1083,6 +1090,7 @@ describe('Update Existing Flow', () => {
     mockUseParams.mockReturnValue({flowId: 'existing-flow-123'});
     mockExistingFlowData.value = {
       id: 'existing-flow-123',
+      ouId: 'ou-1',
       name: 'Existing Flow',
       handle: 'existing-flow',
       nodes: [],
@@ -1108,9 +1116,11 @@ describe('Update Existing Flow', () => {
     mockExistingFlowData.value = null;
 
     // Make createFlow.mutate call the onSuccess callback
-    mockCreateFlowMutate.mockImplementation((_data: unknown, options: {onSuccess?: () => void}) => {
-      options?.onSuccess?.();
-    });
+    mockCreateFlowMutate.mockImplementation(
+      (_data: unknown, options: {onSuccess?: (createdFlow?: {id: string}) => void}) => {
+        options?.onSuccess?.({id: 'created-flow-id'});
+      },
+    );
 
     render(<FlowBuilder />);
 
@@ -1177,9 +1187,11 @@ describe('Snackbar Close Handlers', () => {
 
   it('should show success snackbar on successful save', async () => {
     mockIsFlowValid.value = true;
-    mockCreateFlowMutate.mockImplementation((_data: unknown, options: {onSuccess?: () => void}) => {
-      options?.onSuccess?.();
-    });
+    mockCreateFlowMutate.mockImplementation(
+      (_data: unknown, options: {onSuccess?: (createdFlow?: {id: string}) => void}) => {
+        options?.onSuccess?.({id: 'created-flow-id'});
+      },
+    );
 
     render(<FlowBuilder />);
 
@@ -2153,9 +2165,11 @@ describe('Snackbar Close Handlers Extended', () => {
 
   it('should close success snackbar when handleCloseSuccessSnackbar is called', async () => {
     mockIsFlowValid.value = true;
-    mockCreateFlowMutate.mockImplementation((_data: unknown, options: {onSuccess?: () => void}) => {
-      options?.onSuccess?.();
-    });
+    mockCreateFlowMutate.mockImplementation(
+      (_data: unknown, options: {onSuccess?: (createdFlow?: {id: string}) => void}) => {
+        options?.onSuccess?.({id: 'created-flow-id'});
+      },
+    );
 
     render(<FlowBuilder />);
 
@@ -2182,9 +2196,11 @@ describe('Navigation After Save', () => {
 
   it('should call success callback when create flow succeeds', async () => {
     let capturedOnSuccess: (() => void) | undefined;
-    mockCreateFlowMutate.mockImplementation((_data: unknown, options: {onSuccess?: () => void}) => {
-      capturedOnSuccess = options?.onSuccess;
-    });
+    mockCreateFlowMutate.mockImplementation(
+      (_data: unknown, options: {onSuccess?: (createdFlow?: {id: string}) => void}) => {
+        capturedOnSuccess = options?.onSuccess;
+      },
+    );
 
     render(<FlowBuilder />);
 
@@ -2204,14 +2220,17 @@ describe('Navigation After Save', () => {
     mockUseParams.mockReturnValue({flowId: 'existing-flow-id'});
     mockExistingFlowData.value = {
       id: 'existing-flow-id',
+      ouId: 'ou-1',
       name: 'Existing Flow',
       handle: 'existing-flow',
       nodes: [],
     };
 
-    mockUpdateFlowMutate.mockImplementation((_data: unknown, options: {onSuccess?: () => void}) => {
-      capturedOnSuccess = options?.onSuccess;
-    });
+    mockUpdateFlowMutate.mockImplementation(
+      (_data: unknown, options: {onSuccess?: (createdFlow?: {id: string}) => void}) => {
+        capturedOnSuccess = options?.onSuccess;
+      },
+    );
 
     render(<FlowBuilder />);
 
@@ -2241,6 +2260,7 @@ describe('Existing Flow Loading with Layout', () => {
     mockUseParams.mockReturnValue({flowId: 'flow-with-no-layout'});
     mockExistingFlowData.value = {
       id: 'flow-with-no-layout',
+      ouId: 'ou-1',
       name: 'Flow Without Layout',
       handle: 'flow-without-layout',
       nodes: [
@@ -2258,6 +2278,7 @@ describe('Existing Flow Loading with Layout', () => {
     mockUseParams.mockReturnValue({flowId: 'flow-with-layout'});
     mockExistingFlowData.value = {
       id: 'flow-with-layout',
+      ouId: 'ou-1',
       name: 'Flow With Layout',
       handle: 'flow-with-layout',
       nodes: [
@@ -2275,6 +2296,7 @@ describe('Existing Flow Loading with Layout', () => {
     mockUseParams.mockReturnValue({flowId: 'flow-with-handle'});
     mockExistingFlowData.value = {
       id: 'flow-with-handle',
+      ouId: 'ou-1',
       name: 'Flow With Handle',
       handle: 'custom-handle',
       nodes: [],
@@ -2289,6 +2311,7 @@ describe('Existing Flow Loading with Layout', () => {
     mockUseParams.mockReturnValue({flowId: 'flow-without-handle'});
     mockExistingFlowData.value = {
       id: 'flow-without-handle',
+      ouId: 'ou-1',
       name: 'Flow Without Handle',
       nodes: [],
     };
@@ -2627,9 +2650,11 @@ describe('Snackbar Close Handler Functions', () => {
 
   it('should trigger success snackbar on successful save', async () => {
     mockIsFlowValid.value = true;
-    mockCreateFlowMutate.mockImplementation((_data: unknown, options: {onSuccess?: () => void}) => {
-      options?.onSuccess?.();
-    });
+    mockCreateFlowMutate.mockImplementation(
+      (_data: unknown, options: {onSuccess?: (createdFlow?: {id: string}) => void}) => {
+        options?.onSuccess?.({id: 'created-flow-id'});
+      },
+    );
 
     render(<FlowBuilder />);
 
@@ -3618,9 +3643,11 @@ describe('Snackbar State Management - Close Handlers', () => {
   it('should show success snackbar and allow closing via handleCloseSuccessSnackbar', async () => {
     mockIsFlowValid.value = true;
 
-    mockCreateFlowMutate.mockImplementation((_data: unknown, options: {onSuccess?: () => void}) => {
-      options?.onSuccess?.();
-    });
+    mockCreateFlowMutate.mockImplementation(
+      (_data: unknown, options: {onSuccess?: (createdFlow?: {id: string}) => void}) => {
+        options?.onSuccess?.({id: 'created-flow-id'});
+      },
+    );
 
     render(<FlowBuilder />);
 
@@ -3673,9 +3700,11 @@ describe('Snackbar State Management - Close Handlers', () => {
   it('should close snackbar via Snackbar onClose handler', async () => {
     mockIsFlowValid.value = true;
 
-    mockCreateFlowMutate.mockImplementation((_data: unknown, options: {onSuccess?: () => void}) => {
-      options?.onSuccess?.();
-    });
+    mockCreateFlowMutate.mockImplementation(
+      (_data: unknown, options: {onSuccess?: (createdFlow?: {id: string}) => void}) => {
+        options?.onSuccess?.({id: 'created-flow-id'});
+      },
+    );
 
     render(<FlowBuilder />);
 
@@ -4014,6 +4043,7 @@ describe('Existing Flow Loading - useLayoutEffect', () => {
     mockUseParams.mockReturnValue({flowId: 'existing-flow-id'});
     mockExistingFlowData.value = {
       id: 'existing-flow-id',
+      ouId: 'ou-1',
       name: 'Existing Flow',
       handle: 'existing-flow',
       nodes: [
@@ -4035,6 +4065,7 @@ describe('Existing Flow Loading - useLayoutEffect', () => {
     mockUseParams.mockReturnValue({flowId: 'flow-without-layout'});
     mockExistingFlowData.value = {
       id: 'flow-without-layout',
+      ouId: 'ou-1',
       name: 'Flow Without Layout',
       handle: 'flow-without-layout',
       nodes: [
@@ -4058,6 +4089,7 @@ describe('Existing Flow Loading - useLayoutEffect', () => {
     mockUseParams.mockReturnValue({flowId: 'flow-with-layout'});
     mockExistingFlowData.value = {
       id: 'flow-with-layout',
+      ouId: 'ou-1',
       name: 'Flow With Layout',
       handle: 'flow-with-layout',
       nodes: [
@@ -4484,6 +4516,7 @@ describe('updateAllNodeInternals - Node Internals Update', () => {
     mockUseParams.mockReturnValue({flowId: 'existing-flow'});
     mockExistingFlowData.value = {
       id: 'existing-flow',
+      ouId: 'ou-1',
       name: 'Existing',
       handle: 'existing',
       nodes: [
@@ -5171,6 +5204,7 @@ describe('Existing Flow Data Loading - Sync Logic', () => {
     mockUseParams.mockReturnValue({flowId: 'test-flow-id'});
     mockExistingFlowData.value = {
       id: 'test-flow-id',
+      ouId: 'ou-1',
       name: 'My Custom Flow',
       nodes: [],
     };
@@ -5186,6 +5220,7 @@ describe('Existing Flow Data Loading - Sync Logic', () => {
     mockUseParams.mockReturnValue({flowId: 'test-flow-id'});
     mockExistingFlowData.value = {
       id: 'test-flow-id',
+      ouId: 'ou-1',
       name: 'My Custom Flow',
       // No handle property
       nodes: [],
@@ -5203,6 +5238,7 @@ describe('Existing Flow Data Loading - Sync Logic', () => {
     mockUseParams.mockReturnValue({flowId: 'test-flow-id'});
     mockExistingFlowData.value = {
       id: 'test-flow-id',
+      ouId: 'ou-1',
       name: 'My Custom Flow',
       handle: 'custom-handle-value',
       nodes: [],
@@ -5219,6 +5255,7 @@ describe('Existing Flow Data Loading - Sync Logic', () => {
     mockUseParams.mockReturnValue({flowId: 'test-flow-id'});
     mockExistingFlowData.value = {
       id: 'test-flow-id',
+      ouId: 'ou-1',
       name: 'Flow Without Layout',
       nodes: [
         {id: 'node-1', type: 'VIEW', layout: null},
@@ -5238,6 +5275,7 @@ describe('Existing Flow Data Loading - Sync Logic', () => {
     mockUseParams.mockReturnValue({flowId: 'test-flow-id'});
     mockExistingFlowData.value = {
       id: 'test-flow-id',
+      ouId: 'ou-1',
       name: 'Flow With Layout',
       nodes: [
         {id: 'node-1', type: 'VIEW', layout: {position: {x: 100, y: 200}}},
@@ -5286,9 +5324,11 @@ describe('Snackbar Close Handlers - Direct Testing', () => {
 
   it('should close success snackbar after successful save', async () => {
     mockIsFlowValid.value = true;
-    mockCreateFlowMutate.mockImplementation((_data: unknown, options: {onSuccess?: () => void}) => {
-      options?.onSuccess?.();
-    });
+    mockCreateFlowMutate.mockImplementation(
+      (_data: unknown, options: {onSuccess?: (createdFlow?: {id: string}) => void}) => {
+        options?.onSuccess?.({id: 'created-flow-id'});
+      },
+    );
 
     render(<FlowBuilder />);
 
@@ -5482,6 +5522,7 @@ describe('Update Flow - Callbacks', () => {
     mockUseParams.mockReturnValue({flowId: 'existing-flow-123'});
     mockExistingFlowData.value = {
       id: 'existing-flow-123',
+      ouId: 'ou-1',
       name: 'Existing Flow',
       handle: 'existing-flow',
       nodes: [],
@@ -5504,18 +5545,21 @@ describe('Update Flow - Callbacks', () => {
     mockUseParams.mockReturnValue({flowId: 'existing-flow-123'});
     mockExistingFlowData.value = {
       id: 'existing-flow-123',
+      ouId: 'ou-1',
       name: 'Existing Flow',
       handle: 'existing-flow',
       nodes: [],
     };
 
     let onSuccessCalled = false;
-    mockUpdateFlowMutate.mockImplementation((_data: unknown, options: {onSuccess?: () => void}) => {
-      if (options?.onSuccess) {
-        onSuccessCalled = true;
-        options.onSuccess();
-      }
-    });
+    mockUpdateFlowMutate.mockImplementation(
+      (_data: unknown, options: {onSuccess?: (createdFlow?: {id: string}) => void}) => {
+        if (options?.onSuccess) {
+          onSuccessCalled = true;
+          options.onSuccess({id: 'created-flow-id'});
+        }
+      },
+    );
 
     render(<FlowBuilder />);
 
@@ -5531,6 +5575,7 @@ describe('Update Flow - Callbacks', () => {
     mockUseParams.mockReturnValue({flowId: 'existing-flow-123'});
     mockExistingFlowData.value = {
       id: 'existing-flow-123',
+      ouId: 'ou-1',
       name: 'Existing Flow',
       handle: 'existing-flow',
       nodes: [],
@@ -5576,12 +5621,14 @@ describe('Update Flow - Callbacks', () => {
     mockExistingFlowData.value = null;
 
     let onSuccessCalled = false;
-    mockCreateFlowMutate.mockImplementation((_data: unknown, options: {onSuccess?: () => void}) => {
-      if (options?.onSuccess) {
-        onSuccessCalled = true;
-        options.onSuccess();
-      }
-    });
+    mockCreateFlowMutate.mockImplementation(
+      (_data: unknown, options: {onSuccess?: (createdFlow?: {id: string}) => void}) => {
+        if (options?.onSuccess) {
+          onSuccessCalled = true;
+          options.onSuccess({id: 'created-flow-id'});
+        }
+      },
+    );
 
     render(<FlowBuilder />);
 
@@ -5744,9 +5791,11 @@ describe('Snackbar Display and Close - Branch Coverage', () => {
   it('should display success snackbar when flow is created successfully and close it', async () => {
     mockIsFlowValid.value = true;
     mockValidateFlowGraph.mockReturnValue([]);
-    mockCreateFlowMutate.mockImplementation((_data: unknown, options: {onSuccess?: () => void}) => {
-      options?.onSuccess?.();
-    });
+    mockCreateFlowMutate.mockImplementation(
+      (_data: unknown, options: {onSuccess?: (createdFlow?: {id: string}) => void}) => {
+        options?.onSuccess?.({id: 'created-flow-id'});
+      },
+    );
 
     render(<FlowBuilder />);
 
@@ -5811,13 +5860,16 @@ describe('Snackbar Display and Close - Branch Coverage', () => {
     mockUseParams.mockReturnValue({flowId: 'existing-flow-123'});
     mockExistingFlowData.value = {
       id: 'existing-flow-123',
+      ouId: 'ou-1',
       name: 'Existing Flow',
       handle: 'existing-flow',
       nodes: [],
     };
-    mockUpdateFlowMutate.mockImplementation((_data: unknown, options: {onSuccess?: () => void}) => {
-      options?.onSuccess?.();
-    });
+    mockUpdateFlowMutate.mockImplementation(
+      (_data: unknown, options: {onSuccess?: (createdFlow?: {id: string}) => void}) => {
+        options?.onSuccess?.({id: 'created-flow-id'});
+      },
+    );
 
     render(<FlowBuilder />);
 
@@ -5841,6 +5893,7 @@ describe('Snackbar Display and Close - Branch Coverage', () => {
     mockUseParams.mockReturnValue({flowId: 'existing-flow-123'});
     mockExistingFlowData.value = {
       id: 'existing-flow-123',
+      ouId: 'ou-1',
       name: 'Existing Flow',
       handle: 'existing-flow',
       nodes: [],
@@ -6035,6 +6088,7 @@ describe('isEditingExistingFlow Branch Coverage', () => {
     mockUseParams.mockReturnValue({});
     mockExistingFlowData.value = {
       id: 'existing-flow',
+      ouId: 'ou-1',
       name: 'Existing Flow',
       handle: 'existing-flow',
       nodes: [],
@@ -6056,6 +6110,7 @@ describe('isEditingExistingFlow Branch Coverage', () => {
     mockUseParams.mockReturnValue({flowId: 'existing-flow-123'});
     mockExistingFlowData.value = {
       id: 'existing-flow-123',
+      ouId: 'ou-1',
       name: 'Existing Flow',
       handle: 'existing-flow',
       nodes: [],
@@ -6253,9 +6308,11 @@ describe('Snackbar onClose Handlers - Direct Coverage', () => {
 
   it('should call handleCloseSuccessSnackbar when success snackbar onClose is triggered', async () => {
     mockIsFlowValid.value = true;
-    mockCreateFlowMutate.mockImplementation((_data: unknown, options: {onSuccess?: () => void}) => {
-      options?.onSuccess?.();
-    });
+    mockCreateFlowMutate.mockImplementation(
+      (_data: unknown, options: {onSuccess?: (createdFlow?: {id: string}) => void}) => {
+        options?.onSuccess?.({id: 'created-flow-id'});
+      },
+    );
 
     render(<FlowBuilder />);
 

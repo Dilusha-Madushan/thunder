@@ -74,7 +74,7 @@ describe('TokenUserAttributesSection', () => {
 
       // Native mode issues one token and has no response-format controls, so it drops the
       // "& Response" title and the multi-token wording.
-      expect(screen.getByTestId('card-title')).toHaveTextContent('Token Attributes');
+      expect(screen.getByTestId('card-title')).toHaveTextContent('Token attributes');
       expect(screen.getByTestId('card-description')).toHaveTextContent(
         'Choose the attributes included in the token issued to this application.',
       );
@@ -92,7 +92,7 @@ describe('TokenUserAttributesSection', () => {
         />,
       );
 
-      expect(screen.getByTestId('card-title')).toHaveTextContent('Token Attributes & Response');
+      expect(screen.getByTestId('card-title')).toHaveTextContent('Token attributes & response');
     });
 
     it('drops the "user info responses" mention from the description when showUserInfoTab is false', () => {
@@ -299,7 +299,7 @@ describe('TokenUserAttributesSection', () => {
     it('shows User Info panel with inherit toggle when activeTab is "userinfo"', () => {
       render(<TokenUserAttributesSection {...oauthProps} activeTab="userinfo" />);
 
-      expect(screen.getByText('Use same attributes as ID Token')).toBeInTheDocument();
+      expect(screen.getByText('Use same attributes as ID token')).toBeInTheDocument();
     });
 
     it('shows custom user info panel when isUserInfoCustomAttributes is true', () => {
@@ -400,7 +400,7 @@ describe('TokenUserAttributesSection', () => {
     it('does not render the User Info panel when showUserInfoTab is false, even if activeTab is "userinfo"', () => {
       render(<TokenUserAttributesSection {...oauthProps} showUserInfoTab={false} activeTab="userinfo" />);
 
-      expect(screen.queryByText('Use same attributes as ID Token')).not.toBeInTheDocument();
+      expect(screen.queryByText('Use same attributes as ID token')).not.toBeInTheDocument();
     });
 
     it('maps tab clicks to only the two visible tabs when showUserInfoTab is false', async () => {
@@ -468,7 +468,36 @@ describe('TokenUserAttributesSection', () => {
     });
   });
 
-  describe('ID Token response format', () => {
+  describe('ID-JAG note', () => {
+    const oauthProps = {
+      ...baseProps,
+      accessTokenAttributes: ['email'],
+      idTokenAttributes: ['email'],
+      userInfoAttributes: [],
+      onTabChange: vi.fn(),
+    };
+    const idJagNote = /Identity assertions \(ID-JAG\) this agent requests also include the allowed attributes below/i;
+
+    it('tells on the ID token tab that the attributes also go into ID-JAGs when ID-JAG is on', () => {
+      render(<TokenUserAttributesSection {...oauthProps} activeTab="id" entityLabel="agent" idJagEnabled />);
+
+      expect(screen.getByText(idJagNote)).toBeInTheDocument();
+    });
+
+    it('does not show the note when ID-JAG is off', () => {
+      render(<TokenUserAttributesSection {...oauthProps} activeTab="id" entityLabel="agent" />);
+
+      expect(screen.queryByText(idJagNote)).not.toBeInTheDocument();
+    });
+
+    it('does not show the note on the access token tab', () => {
+      render(<TokenUserAttributesSection {...oauthProps} activeTab="access" entityLabel="agent" idJagEnabled />);
+
+      expect(screen.queryByText(idJagNote)).not.toBeInTheDocument();
+    });
+  });
+
+  describe('ID token response format', () => {
     it('renders response type select in ID Token tab', () => {
       render(
         <TokenUserAttributesSection
@@ -482,8 +511,8 @@ describe('TokenUserAttributesSection', () => {
         />,
       );
 
-      expect(screen.getByText('Response Format')).toBeInTheDocument();
-      expect(screen.getByText('Response Type')).toBeInTheDocument();
+      expect(screen.getByText('Response format')).toBeInTheDocument();
+      expect(screen.getByText('Response type')).toBeInTheDocument();
     });
 
     it('shows encryption fields when ID token response type is JWE', () => {
@@ -500,8 +529,8 @@ describe('TokenUserAttributesSection', () => {
         />,
       );
 
-      expect(screen.getByText('Encryption Algorithm')).toBeInTheDocument();
-      expect(screen.getByText('Content Encryption')).toBeInTheDocument();
+      expect(screen.getByText('Encryption algorithm')).toBeInTheDocument();
+      expect(screen.getByText('Content encryption')).toBeInTheDocument();
     });
 
     it('does not show encryption fields when ID token response type is JWT', () => {
@@ -518,7 +547,7 @@ describe('TokenUserAttributesSection', () => {
         />,
       );
 
-      expect(screen.queryByText('Encryption Algorithm')).not.toBeInTheDocument();
+      expect(screen.queryByText('Encryption algorithm')).not.toBeInTheDocument();
     });
   });
 
@@ -538,7 +567,7 @@ describe('TokenUserAttributesSection', () => {
         />,
       );
 
-      expect(screen.getByText('Response Format')).toBeInTheDocument();
+      expect(screen.getByText('Response format')).toBeInTheDocument();
     });
 
     it('does not show a signing algorithm selector when UserInfo response type is JWS', () => {
@@ -558,8 +587,8 @@ describe('TokenUserAttributesSection', () => {
       );
 
       // Signing always uses the server key, so no algorithm is chosen or encryption shown for JWS.
-      expect(screen.queryByText('Signing Algorithm')).not.toBeInTheDocument();
-      expect(screen.queryByText('Encryption Algorithm')).not.toBeInTheDocument();
+      expect(screen.queryByText('Signing algorithm')).not.toBeInTheDocument();
+      expect(screen.queryByText('Encryption algorithm')).not.toBeInTheDocument();
     });
 
     it('shows encryption fields when UserInfo response type is JWE', () => {
@@ -578,8 +607,8 @@ describe('TokenUserAttributesSection', () => {
         />,
       );
 
-      expect(screen.getByText('Encryption Algorithm')).toBeInTheDocument();
-      expect(screen.getByText('Content Encryption')).toBeInTheDocument();
+      expect(screen.getByText('Encryption algorithm')).toBeInTheDocument();
+      expect(screen.getByText('Content encryption')).toBeInTheDocument();
     });
 
     it('does not show algorithm fields when UserInfo response type is JSON', () => {
@@ -599,8 +628,8 @@ describe('TokenUserAttributesSection', () => {
         />,
       );
 
-      expect(screen.queryByText('Signing Algorithm')).not.toBeInTheDocument();
-      expect(screen.queryByText('Encryption Algorithm')).not.toBeInTheDocument();
+      expect(screen.queryByText('Signing algorithm')).not.toBeInTheDocument();
+      expect(screen.queryByText('Encryption algorithm')).not.toBeInTheDocument();
       // With a certificate configured, the certificate-required hint is not shown.
       expect(screen.queryByText(/Encrypted formats require an OAuth client certificate/)).not.toBeInTheDocument();
     });
@@ -638,7 +667,7 @@ describe('TokenUserAttributesSection', () => {
         />,
       );
 
-      expect(screen.getByText('Encryption Algorithm')).toBeInTheDocument();
+      expect(screen.getByText('Encryption algorithm')).toBeInTheDocument();
       expect(screen.getByText(/Encrypted formats require an OAuth client certificate/)).toBeInTheDocument();
     });
 
@@ -776,6 +805,108 @@ describe('TokenUserAttributesSection', () => {
 
       expect(optionByValue('JWE')).not.toHaveAttribute('aria-disabled', 'true');
       expect(optionByValue('NESTED_JWT')).not.toHaveAttribute('aria-disabled', 'true');
+    });
+  });
+
+  describe('Access token only (accessTokenOnly)', () => {
+    const accessOnlyProps = {
+      ...baseProps,
+      userAttributes: ['email', 'username'],
+      accessTokenAttributes: ['email'],
+      idTokenAttributes: ['username'],
+      userInfoAttributes: [],
+      activeTab: 'access' as const,
+      onTabChange: vi.fn(),
+      entityLabel: 'agent',
+      accessTokenOnly: true,
+      scopeMapping: <div data-testid="scope-mapping">mapping</div>,
+    };
+
+    it('should show the access token on its own, without tabs or response format settings', () => {
+      render(<TokenUserAttributesSection {...accessOnlyProps} idTokenResponseType="JWE" />);
+
+      expect(screen.queryByRole('tab')).not.toBeInTheDocument();
+      expect(screen.getByText('Add or remove attributes')).toBeInTheDocument();
+      expect(screen.getByTestId('jwt-preview')).toBeInTheDocument();
+      expect(screen.queryByText('Response format')).not.toBeInTheDocument();
+      expect(screen.queryByText('Encryption algorithm')).not.toBeInTheDocument();
+    });
+
+    it('should title the card for the access token alone', () => {
+      render(<TokenUserAttributesSection {...accessOnlyProps} />);
+
+      expect(screen.getByTestId('card-title')).toHaveTextContent('Access token attributes');
+      expect(screen.getByTestId('card-description')).toHaveTextContent(
+        'The user attributes in the access token issued to this agent on behalf of a user.',
+      );
+    });
+
+    it('should render the scope mapping below the access token', () => {
+      render(<TokenUserAttributesSection {...accessOnlyProps} />);
+
+      const preview = screen.getByTestId('jwt-preview');
+      const mapping = screen.getByTestId('scope-mapping');
+      expect(preview.compareDocumentPosition(mapping) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('should edit the access token attributes', async () => {
+      const user = userEvent.setup();
+      const onAttributeClick = vi.fn();
+      render(<TokenUserAttributesSection {...accessOnlyProps} onAttributeClick={onAttributeClick} />);
+
+      await user.click(screen.getByText('username'));
+
+      expect(onAttributeClick).toHaveBeenCalledWith('username', 'access');
+    });
+
+    it('should show the access token note above the attributes', () => {
+      render(<TokenUserAttributesSection {...accessOnlyProps} accessTokenNote="Only carried attributes are kept." />);
+
+      const note = screen.getByRole('alert');
+      expect(note).toHaveTextContent('Only carried attributes are kept.');
+      expect(
+        note.compareDocumentPosition(screen.getByText('Add or remove attributes')) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it('should hide the attribute picker and preview, keeping the note, when showAccessTokenAttributes is false', () => {
+      render(
+        <TokenUserAttributesSection
+          {...accessOnlyProps}
+          showAccessTokenAttributes={false}
+          accessTokenNote="No user attributes."
+        />,
+      );
+
+      expect(screen.getByRole('alert')).toHaveTextContent('No user attributes.');
+      expect(screen.queryByText('Add or remove attributes')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('jwt-preview')).not.toBeInTheDocument();
+      expect(screen.getByTestId('scope-mapping')).toBeInTheDocument();
+    });
+
+    it('should title the card for the access token, not its attributes, when the picker is hidden', () => {
+      render(<TokenUserAttributesSection {...accessOnlyProps} showAccessTokenAttributes={false} />);
+
+      expect(screen.getByTestId('card-title')).toHaveTextContent(/^Access token$/);
+      expect(screen.getByTestId('card-description')).toHaveTextContent(
+        'The access token issued to this agent on behalf of a user.',
+      );
+    });
+
+    it('should not wrap the access token panel when there is no note', () => {
+      render(<TokenUserAttributesSection {...accessOnlyProps} accessTokenOnly={false} />);
+
+      const panel = screen.getByTestId('jwt-preview').closest('.MuiGrid-container')!;
+      expect(panel.parentElement).not.toHaveClass('MuiStack-root');
+    });
+
+    it('should show the note on the Access token tab in the tabbed layout too', () => {
+      render(
+        <TokenUserAttributesSection {...accessOnlyProps} accessTokenOnly={false} accessTokenNote="A tabbed note." />,
+      );
+
+      expect(screen.getByRole('tab', {name: /access token/i})).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent('A tabbed note.');
     });
   });
 

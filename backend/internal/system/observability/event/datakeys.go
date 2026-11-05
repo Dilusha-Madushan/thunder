@@ -42,12 +42,34 @@ var DataKey = struct {
 	RedirectTo    string
 	FailedStep    string
 
+	// Extension Call Keys
+	ConnectionID  string
+	Outcome       string
+	ErrorKind     string
+	FailureReason string
+
 	// OAuth/Token Keys
 	Scope            string
 	GrantType        string
 	JTI              string
 	RevocationReason string
 	AccessingOUID    string
+	CriterionType    string
+
+	// Administration Keys. Records whether an operator note was given, never the note itself.
+	OperatorNoteRecorded string
+	// ConfigName is the server-config section a change targets.
+	ConfigName string
+
+	// Account Lock Keys. UnlockAt is set only for a lock that expires.
+	LockMethod    string
+	LockCount     string
+	LockPermanent string
+	UnlockAt      string
+
+	// Lifespan Keys
+	ValidUntil         string
+	PreviousValidUntil string
 
 	// Session & Delivery Keys
 	SessionID  string
@@ -91,12 +113,33 @@ var DataKey = struct {
 	RedirectTo:    "redirect_to",
 	FailedStep:    "failed_step",
 
+	// Extension Call Keys
+	ConnectionID:  "connection_id",
+	Outcome:       "outcome",
+	ErrorKind:     "error_kind",
+	FailureReason: "failure_reason",
+
 	// OAuth/Token Keys
 	Scope:            "scope",
 	GrantType:        "grant_type",
 	JTI:              "jti",
 	RevocationReason: "revocation_reason",
 	AccessingOUID:    "accessing_ou_id",
+	CriterionType:    "criterion_type",
+
+	// Administration Keys
+	OperatorNoteRecorded: "operator_note_recorded",
+	ConfigName:           "config_name",
+
+	// Account Lock Keys
+	LockMethod:    "lock_method",
+	LockCount:     "lock_count",
+	LockPermanent: "lock_permanent",
+	UnlockAt:      "unlock_at",
+
+	// Lifespan Keys
+	ValidUntil:         "valid_until",
+	PreviousValidUntil: "previous_valid_until",
 
 	// Session & Delivery Keys
 	SessionID:  "session_id",

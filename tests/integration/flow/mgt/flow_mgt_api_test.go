@@ -13,14 +13,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thunder-id/thunderid/tests/integration/testutils"
 	"github.com/stretchr/testify/suite"
+	"github.com/thunder-id/thunderid/tests/integration/testutils"
 )
 
 const (
-	testServerURL = "https://localhost:8095"
 	flowsEndpoint = "/flows"
 )
+
+var testServerURL = testutils.TestServerURL
 
 var (
 	testAuthFlow = FlowDefinition{
@@ -160,6 +161,18 @@ func generateUniqueHandle(base string) string {
 	timestamp := time.Now().UnixNano()
 	random := rand.Intn(10000)
 	return fmt.Sprintf("%s-%d-%d", base, timestamp, random)
+}
+
+// withOwner returns the flow with the default organization unit as its owner when it names none.
+func withOwner(flow FlowDefinition) FlowDefinition {
+	if flow.OUID == "" {
+		ouID, err := testutils.DefaultOUID()
+		if err != nil {
+			panic(fmt.Sprintf("failed to resolve the default organization unit: %v", err))
+		}
+		flow.OUID = ouID
+	}
+	return flow
 }
 
 // cloneFlowWithUniqueHandle creates a deep copy of a flow definition with a unique handle
@@ -551,6 +564,325 @@ func (suite *FlowMgtAPITestSuite) TestCreateFlow_ValidationErrors() {
 	}
 }
 
+// authFlowWithOUResolver returns an authentication flow with an OUResolverExecutor node carrying the
+// given properties between credentials authentication and the assertion.
+func authFlowWithOUResolver(
+	handle string, properties map[string]interface{}, inputs ...InputDefinition) FlowDefinition {
+	return FlowDefinition{
+		Name:     "OU Resolver Sign-in Flow",
+		Handle:   handle,
+		FlowType: "AUTHENTICATION",
+		Nodes: []NodeDefinition{
+			{ID: "START", Type: "START", OnSuccess: "credentials_auth"},
+			{
+				ID:        "credentials_auth",
+				Type:      "TASK_EXECUTION",
+				Executor:  &ExecutorDefinition{Name: "CredentialsAuthExecutor"},
+				OnSuccess: "ou_resolver",
+			},
+			{
+				ID:         "ou_resolver",
+				Type:       "TASK_EXECUTION",
+				Executor:   &ExecutorDefinition{Name: "OUResolverExecutor", Inputs: inputs},
+				Properties: properties,
+				OnSuccess:  "auth_assert",
+			},
+			{
+				ID:        "auth_assert",
+				Type:      "TASK_EXECUTION",
+				Executor:  &ExecutorDefinition{Name: "AuthAssertExecutor"},
+				OnSuccess: "END",
+			},
+			{ID: "END", Type: "END"},
+		},
+	}
+}
+
+// A sign-in flow has no UserTypeResolver and so no default OU, so an OU resolver that prompts needs
+// parentOuId to know where to select from. The flow is refused at save time rather than failing every
+// sign-in at runtime.
+func (suite *FlowMgtAPITestSuite) TestCreateFlow_OUResolverPromptRequiresParentOUInSignIn() {
+	for name, properties := range map[string]map[string]interface{}{
+		"missing":              {"resolveFrom": "prompt"},
+		"blank":                {"resolveFrom": "prompt", "parentOuId": "  "},
+		"direct children only": {"resolveFrom": "prompt", "directChildrenOnly": true},
+	} {
+		suite.Run(name, func() {
+			flowDef := authFlowWithOUResolver(generateUniqueHandle("ou-prompt-no-parent"), properties)
+			suite.createFlowExpectError(flowDef, http.StatusBadRequest, "FLM-1023")
+		})
+	}
+}
+
+// Properties the strategy would ignore are refused at save time instead of being silently dropped.
+func (suite *FlowMgtAPITestSuite) TestCreateFlow_OUResolverIgnoredPropertiesRejected() {
+	for name, properties := range map[string]map[string]interface{}{
+		"parent with caller":             {"resolveFrom": "caller", "parentOuId": "ou-1"},
+		"parent with prompt all":         {"resolveFrom": "promptAll", "parentOuId": "ou-1"},
+		"direct children with caller":    {"resolveFrom": "caller", "directChildrenOnly": true},
+		"direct children with promptAll": {"resolveFrom": "promptAll", "directChildrenOnly": true},
+	} {
+		suite.Run(name, func() {
+			flowDef := authFlowWithOUResolver(generateUniqueHandle("ou-ignored-property"), properties)
+			suite.createFlowExpectError(flowDef, http.StatusBadRequest, "FLM-1023")
+		})
+	}
+}
+
+// In direct children mode the resolver reads a single required ouId or ouHandle input declared on the node.
+func (suite *FlowMgtAPITestSuite) TestCreateFlow_OUResolverInputsRejected() {
+	idInput := InputDefinition{Ref: "ou_id", Type: "TEXT_INPUT", Identifier: "ouId", Required: true}
+	handleInput := InputDefinition{Ref: "ou_handle", Type: "TEXT_INPUT", Identifier: "ouHandle", Required: true}
+	optionalHandle := InputDefinition{Ref: "ou_handle", Type: "TEXT_INPUT", Identifier: "ouHandle"}
+	directChildren := map[string]interface{}{
+		"resolveFrom": "prompt", "parentOuId": "ou-1", "directChildrenOnly": true,
+	}
+
+	for name, tc := range map[string]struct {
+		properties map[string]interface{}
+		inputs     []InputDefinition
+	}{
+		"handle without direct children": {
+			map[string]interface{}{"resolveFrom": "prompt", "parentOuId": "ou-1"}, []InputDefinition{handleInput},
+		},
+		"optional handle":  {directChildren, []InputDefinition{optionalHandle}},
+		"both identifiers": {directChildren, []InputDefinition{idInput, handleInput}},
+	} {
+		suite.Run(name, func() {
+			flowDef := authFlowWithOUResolver(generateUniqueHandle("ou-inputs"), tc.properties, tc.inputs...)
+			suite.createFlowExpectError(flowDef, http.StatusBadRequest, "FLM-1023")
+		})
+	}
+}
+
+func (suite *FlowMgtAPITestSuite) TestCreateFlow_OUResolverInSignInAccepted() {
+	for name, properties := range map[string]map[string]interface{}{
+		"prompt with parent":      {"resolveFrom": "prompt", "parentOuId": "019d94ff-072c-7d7f-a5c5-0a638c1f62bc"},
+		"prompt all without":      {"resolveFrom": "promptAll"},
+		"caller strategy without": {"resolveFrom": "caller"},
+	} {
+		suite.Run(name, func() {
+			flowDef := authFlowWithOUResolver(generateUniqueHandle("ou-sign-in"), properties)
+			createdFlow := suite.createFlow(flowDef)
+			suite.NotEmpty(createdFlow.ID)
+			suite.deleteFlow(createdFlow.ID)
+		})
+	}
+}
+
+func (suite *FlowMgtAPITestSuite) TestCreateFlow_OUResolverDirectChildrenWithHandleInputAccepted() {
+	properties := map[string]interface{}{
+		"resolveFrom": "prompt", "parentOuId": "019d94ff-072c-7d7f-a5c5-0a638c1f62bc", "directChildrenOnly": true,
+	}
+	handleInput := InputDefinition{Ref: "ou_handle", Type: "TEXT_INPUT", Identifier: "ouHandle", Required: true}
+
+	flowDef := authFlowWithOUResolver(generateUniqueHandle("ou-handle-input"), properties, handleInput)
+	createdFlow := suite.createFlow(flowDef)
+
+	suite.NotEmpty(createdFlow.ID)
+	suite.deleteFlow(createdFlow.ID)
+}
+
+// authFlowNodesWithInputs returns the test authentication flow nodes with the given inputs on the
+// credentials executor.
+func authFlowNodesWithInputs(inputs ...InputDefinition) []NodeDefinition {
+	nodes := make([]NodeDefinition, len(testAuthFlow.Nodes))
+	copy(nodes, testAuthFlow.Nodes)
+	for i := range nodes {
+		if nodes[i].ID == "credentials_auth" {
+			nodes[i].Executor = &ExecutorDefinition{Name: nodes[i].Executor.Name, Inputs: inputs}
+		}
+	}
+	return nodes
+}
+
+// credentialsExecutorInputs returns the inputs of the credentials executor node of the flow.
+func credentialsExecutorInputs(flow *CompleteFlowDefinition) []InputDefinition {
+	for _, node := range flow.Nodes {
+		if node.ID == "credentials_auth" && node.Executor != nil {
+			return node.Executor.Inputs
+		}
+	}
+	return nil
+}
+
+func (suite *FlowMgtAPITestSuite) TestCreateFlow_InvalidInputDefaults() {
+	testCases := []struct {
+		name  string
+		input InputDefinition
+	}{
+		{
+			"constant without a default",
+			InputDefinition{Type: "TEXT_INPUT", Identifier: "locale", Constant: true},
+		},
+		{
+			"default on a password input",
+			InputDefinition{Type: "PASSWORD_INPUT", Identifier: "secret", DefaultValue: "x"},
+		},
+		{
+			"default that is not a boolean",
+			InputDefinition{Type: "BOOLEAN_INPUT", Identifier: "delegated", DefaultValue: "maybe"},
+		},
+		{
+			"unknown type with a default",
+			InputDefinition{Type: "UNSUPPORTED_TYPE", Identifier: "locale", DefaultValue: "en-US"},
+		},
+	}
+
+	for _, tc := range testCases {
+		suite.Run(tc.name, func() {
+			flowDef := FlowDefinition{
+				Name:     "Invalid Input Defaults Flow",
+				Handle:   generateUniqueHandle("invalid-input-defaults"),
+				FlowType: "AUTHENTICATION",
+				Nodes:    authFlowNodesWithInputs(tc.input),
+			}
+
+			suite.createFlowExpectError(flowDef, http.StatusBadRequest, "FLM-1024")
+		})
+	}
+}
+
+// promptFlowWithInput returns an authentication flow with a prompt that holds the given input.
+func promptFlowWithInput(input InputDefinition) FlowDefinition {
+	return FlowDefinition{
+		Name:     "Prompt Default Flow",
+		Handle:   generateUniqueHandle("prompt-default-flow"),
+		FlowType: "AUTHENTICATION",
+		Nodes: []NodeDefinition{
+			{ID: "START", Type: "START", OnSuccess: "prompt"},
+			{
+				ID:   "prompt",
+				Type: "PROMPT",
+				Prompts: []PromptDefinition{{
+					Inputs: []InputDefinition{input},
+					Action: &ActionDefinition{Ref: "submit", NextNode: "auth_assert"},
+				}},
+			},
+			{
+				ID:        "auth_assert",
+				Type:      "TASK_EXECUTION",
+				Executor:  &ExecutorDefinition{Name: "AuthAssertExecutor"},
+				OnSuccess: "END",
+			},
+			{ID: "END", Type: "END"},
+		},
+	}
+}
+
+func (suite *FlowMgtAPITestSuite) TestCreateFlow_PromptInputDefaultsAreKept() {
+	inputs := []InputDefinition{
+		{Type: "TEXT_INPUT", Identifier: "department", DefaultValue: "Computer Science"},
+		{Type: "BOOLEAN_INPUT", Identifier: "newsletter", DefaultValue: "true"},
+		{
+			Type: "TEXT_INPUT", Identifier: "code", DefaultValue: "1234",
+			Validation: []ValidationRuleDefinition{{Type: "regex", Value: "^[0-9]+$"}},
+		},
+	}
+	flowDef := promptFlowWithInput(inputs[0])
+	flowDef.Nodes[1].Prompts[0].Inputs = inputs
+
+	created := suite.createFlow(flowDef)
+	suite.trackFlow(created.ID)
+
+	for _, flow := range []*CompleteFlowDefinition{created, suite.getFlow(created.ID)} {
+		suite.Require().Len(flow.Nodes, 4)
+		suite.Require().Len(flow.Nodes[1].Prompts, 1)
+		suite.Equal(inputs, flow.Nodes[1].Prompts[0].Inputs)
+	}
+}
+
+func (suite *FlowMgtAPITestSuite) TestCreateFlow_PromptInputWithInvalidDefaultsRejected() {
+	testCases := []struct {
+		name  string
+		input InputDefinition
+	}{
+		{
+			"constant with a default",
+			InputDefinition{Type: "TEXT_INPUT", Identifier: "faculty", DefaultValue: "Engineering", Constant: true},
+		},
+		{
+			"constant without a default",
+			InputDefinition{Type: "TEXT_INPUT", Identifier: "faculty", Constant: true},
+		},
+		{
+			"default on a password input",
+			InputDefinition{Type: "PASSWORD_INPUT", Identifier: "secret", DefaultValue: "x"},
+		},
+		{
+			"default that fails a validation rule",
+			InputDefinition{
+				Type: "TEXT_INPUT", Identifier: "code", DefaultValue: "abc",
+				Validation: []ValidationRuleDefinition{{Type: "regex", Value: "^[0-9]+$"}},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		suite.Run(tc.name, func() {
+			suite.createFlowExpectError(promptFlowWithInput(tc.input), http.StatusBadRequest, "FLM-1024")
+		})
+	}
+}
+
+func (suite *FlowMgtAPITestSuite) TestUpdateFlow_PromptConstantRejected() {
+	flowDef := promptFlowWithInput(
+		InputDefinition{Type: "TEXT_INPUT", Identifier: "department", DefaultValue: "Computer Science"})
+	created := suite.createFlow(flowDef)
+	suite.trackFlow(created.ID)
+
+	flowDef.Nodes[1].Prompts[0].Inputs[0].Constant = true
+
+	suite.updateFlowExpectError(created.ID, flowDef, http.StatusBadRequest, "FLM-1024")
+}
+
+// heldConstantFlow returns a flow whose prompt asks for the department and whose executor node holds the
+// department as a constant when constant is true.
+func heldConstantFlow(constant bool) FlowDefinition {
+	flowDef := promptFlowWithInput(InputDefinition{Type: "TEXT_INPUT", Identifier: "department"})
+	flowDef.Nodes[2].Executor.Inputs = []InputDefinition{
+		{Type: "TEXT_INPUT", Identifier: "department", DefaultValue: "Computer Science", Constant: constant},
+	}
+	return flowDef
+}
+
+func (suite *FlowMgtAPITestSuite) TestCreateFlow_PromptInputHeldConstantRejected() {
+	suite.createFlowExpectError(heldConstantFlow(true), http.StatusBadRequest, "FLM-1024")
+
+	created := suite.createFlow(heldConstantFlow(false))
+	suite.trackFlow(created.ID)
+}
+
+func (suite *FlowMgtAPITestSuite) TestUpdateFlow_PromptInputHeldConstantRejected() {
+	created := suite.createFlow(heldConstantFlow(false))
+	suite.trackFlow(created.ID)
+
+	suite.updateFlowExpectError(created.ID, heldConstantFlow(true), http.StatusBadRequest, "FLM-1024")
+}
+
+func (suite *FlowMgtAPITestSuite) TestFlow_ExecutorInputDefaultsAreKept() {
+	inputs := []InputDefinition{
+		{Type: "TEXT_INPUT", Identifier: "locale", DefaultValue: "en-US"},
+		{Type: "BOOLEAN_INPUT", Identifier: "delegated", DefaultValue: "true", Constant: true},
+	}
+	flowDef := FlowDefinition{
+		Name:     "Input Defaults Flow",
+		Handle:   generateUniqueHandle("input-defaults-flow"),
+		FlowType: "AUTHENTICATION",
+		Nodes:    authFlowNodesWithInputs(inputs...),
+	}
+
+	created := suite.createFlow(flowDef)
+	suite.trackFlow(created.ID)
+	suite.Equal(inputs, credentialsExecutorInputs(created))
+	suite.Equal(inputs, credentialsExecutorInputs(suite.getFlow(created.ID)))
+
+	updatedInputs := []InputDefinition{{Type: "TEXT_INPUT", Identifier: "locale", DefaultValue: "fr-FR", Constant: true}}
+	flowDef.Nodes = authFlowNodesWithInputs(updatedInputs...)
+	updated := suite.updateFlow(created.ID, flowDef)
+	suite.Equal(updatedInputs, credentialsExecutorInputs(updated))
+}
+
 func (suite *FlowMgtAPITestSuite) TestGetFlow_Success() {
 	createdFlow := suite.createFlow(cloneFlowWithUniqueHandle(testAuthFlow))
 	suite.trackFlow(createdFlow.ID)
@@ -875,7 +1207,7 @@ func (suite *FlowMgtAPITestSuite) TestRestoreFlowVersion_FlowNotFound() {
 // Helper methods for API interactions
 
 func (suite *FlowMgtAPITestSuite) createFlow(flowDef FlowDefinition) *CompleteFlowDefinition {
-	body, _ := json.Marshal(flowDef)
+	body, _ := json.Marshal(withOwner(flowDef))
 	req, _ := http.NewRequest(http.MethodPost, testServerURL+flowsEndpoint, bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -896,7 +1228,7 @@ func (suite *FlowMgtAPITestSuite) createFlow(flowDef FlowDefinition) *CompleteFl
 
 func (suite *FlowMgtAPITestSuite) createFlowExpectError(
 	flowDef FlowDefinition, expectedStatus int, expectedCode string) {
-	body, _ := json.Marshal(flowDef)
+	body, _ := json.Marshal(withOwner(flowDef))
 	req, _ := http.NewRequest(http.MethodPost, testServerURL+flowsEndpoint, bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 

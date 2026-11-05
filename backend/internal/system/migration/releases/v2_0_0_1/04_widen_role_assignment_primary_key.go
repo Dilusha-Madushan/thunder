@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	widenRoleAssignmentPrimaryKeyOperationID engine.OperationID = "2.0.0-m1-pidp.1/configdb/" +
+	widenRoleAssignmentPrimaryKeyOperationID engine.OperationID = "2.0.0-m1-pidp/configdb/" +
 		"04_widen_role_assignment_primary_key"
 
 	roleAssignmentLegacyPrimaryKey = "ROLE_ID,DEPLOYMENT_ID,ASSIGNMENT_OU_ID,ASSIGNEE_TYPE,ASSIGNEE_ID"

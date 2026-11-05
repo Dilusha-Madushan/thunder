@@ -1,9 +1,10 @@
-// Copyright 2025 The ThunderID Authors
+// Copyright 2025-2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package tokenservice
 
 import (
+	"maps"
 	"time"
 
 	"context"
@@ -13,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/thunder-id/thunderid/internal/attributecache"
+	authnprovidercm "github.com/thunder-id/thunderid/internal/authnprovider/common"
 	"github.com/thunder-id/thunderid/internal/idp"
 	oauthconfig "github.com/thunder-id/thunderid/internal/oauth/config"
 	"github.com/thunder-id/thunderid/internal/oauth/oauth2/constants"
@@ -21,6 +23,7 @@ import (
 	syscontext "github.com/thunder-id/thunderid/internal/system/context"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	systemutils "github.com/thunder-id/thunderid/internal/system/utils"
+	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 )
 
@@ -423,6 +426,7 @@ func ReservedAccessTokenClaimNames() map[string]bool {
 	reserved[constants.ClaimIDP] = true
 	reserved[constants.ClaimTokenFamilyID] = true
 	reserved[constants.ClaimSessionID] = true
+	reserved[constants.ClaimAuthorizationDetails] = true
 	return reserved
 }
 
@@ -457,16 +461,52 @@ func builderOwnedClaimNames() map[string]bool {
 func FilterAttributesByAllowList(
 	attrs map[string]interface{}, subConfig *providers.AccessTokenSubConfig,
 ) map[string]interface{} {
-	filtered := make(map[string]interface{})
-	if subConfig == nil || len(subConfig.Attributes) == 0 {
-		return filtered
+	if subConfig == nil {
+		return make(map[string]interface{})
 	}
-	for _, attr := range subConfig.Attributes {
+	return filterAttributes(attrs, subConfig.Attributes)
+}
+
+// filterAttributes returns the entries of attrs whose names are listed in allowed.
+func filterAttributes(attrs map[string]interface{}, allowed []string) map[string]interface{} {
+	filtered := make(map[string]interface{})
+	for _, attr := range allowed {
 		if val, ok := attrs[attr]; ok {
 			filtered[attr] = val
 		}
 	}
 	return filtered
+}
+
+// idjagIdentityClaims returns the subject attributes an ID-JAG carries: the ones the client's ID token
+// configuration releases, except the names idjagExcludedAttributeNames lists.
+func idjagIdentityClaims(attrs map[string]interface{}, oauthApp *providers.OAuthClient) map[string]interface{} {
+	if oauthApp == nil || oauthApp.Token == nil || oauthApp.Token.IDToken == nil {
+		return make(map[string]interface{})
+	}
+	claims := filterAttributes(attrs, oauthApp.Token.IDToken.UserAttributes)
+	for name := range idjagExcludedAttributeNames() {
+		delete(claims, name)
+	}
+	return claims
+}
+
+// idjagExcludedAttributeNames returns the names a copied attribute never takes in an ID-JAG: the claims
+// the ID token builder writes itself, the claims the grant defines
+// (draft-ietf-oauth-identity-assertion-authz-grant Section 3.1), and roles and groups, which name this
+// deployment's entitlements rather than the target's.
+func idjagExcludedAttributeNames() map[string]bool {
+	excluded := builderOwnedIDTokenClaimNames()
+	for _, name := range []string{
+		constants.ClaimIss, constants.ClaimSub, constants.ClaimSubjectID, constants.ClaimAud,
+		constants.ClaimClientID, constants.ClaimJTI, constants.ClaimExp, constants.ClaimIat, constants.ClaimNbf,
+		constants.ClaimResource, constants.ClaimScope, constants.ClaimAuthorizationDetails, constants.ClaimAct,
+		constants.ClaimTenant, constants.ClaimAudTenant, constants.ClaimAudSub, constants.ClaimCnf,
+		constants.ClaimAMR, constants.UserAttributeRoles, constants.UserAttributeGroups,
+	} {
+		excluded[name] = true
+	}
+	return excluded
 }
 
 // BuildClientAttributes gathers all OAuth client/application-scoped attributes that should be added
@@ -475,12 +515,13 @@ func FilterAttributesByAllowList(
 // The organization claims are not among them: BuildClientEffectiveOUAttributes resolves those, and
 // they travel in a field of their own on the build context.
 func BuildClientAttributes(
+	ctx context.Context,
 	oauthApp *providers.OAuthClient,
 	actorProvider providers.ActorProvider,
 ) (map[string]interface{}, error) {
 	claims := make(map[string]interface{})
 
-	entity, err := fetchClientEntity(oauthApp, actorProvider)
+	entity, err := fetchClientEntity(ctx, oauthApp, actorProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -502,7 +543,7 @@ func BuildClientAttributes(
 		claims[k] = v
 	}
 
-	groupRoleClaims, err := resolveClientGroupRoleClaims(oauthApp, actorProvider)
+	groupRoleClaims, err := resolveClientGroupRoleClaims(ctx, oauthApp, actorProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -533,6 +574,7 @@ func resolvedWithoutEntity(name string) bool {
 // system-attribute resolvers can share it. Returns nil when no requested attribute needs the
 // entity: an empty allow-list, or one that lists only claims resolved elsewhere (OU, groups, roles).
 func fetchClientEntity(
+	ctx context.Context,
 	oauthApp *providers.OAuthClient,
 	actorProvider providers.ActorProvider,
 ) (*providers.Entity, error) {
@@ -551,7 +593,7 @@ func fetchClientEntity(
 		return nil, nil
 	}
 
-	entity, svcErr := actorProvider.GetActor(oauthApp.ID)
+	entity, svcErr := actorProvider.GetActor(ctx, oauthApp.ID)
 	if svcErr != nil {
 		return nil, fmt.Errorf("failed to fetch entity %s for client attributes: %s", oauthApp.ID, svcErr.Error)
 	}
@@ -645,9 +687,11 @@ func resolveClientEntityAttributes(
 	return filtered, nil
 }
 
-// resolveClientSystemAttributes returns the agent system attribute (owner) selected by
+// resolveClientSystemAttributes returns the agent system attributes (owner, sub_valid_until) selected by
 // ClientConfig.Attributes, read from Entity.SystemAttributes. Restricted to agent entities so an
 // application client can never surface these claims regardless of its stored allow-list.
+// sub_valid_until is the stored validUntil, kept in RFC 3339 and surfaced in Unix seconds, as the other
+// time claims are, and is left out when the lifespan does not end.
 func resolveClientSystemAttributes(
 	oauthApp *providers.OAuthClient,
 	entity *providers.Entity,
@@ -666,6 +710,13 @@ func resolveClientSystemAttributes(
 		if !constants.SurfaceableClientSystemClaims[name] {
 			continue
 		}
+		if name == constants.ClaimSubValidUntil {
+			// An unreadable end is refused at issuance, so it never reaches a token.
+			if end, bounded, err := authnprovidercm.ValidUntilOf(entity.SystemAttributes); err == nil && bounded {
+				filtered[name] = end.Unix()
+			}
+			continue
+		}
 		if val, ok := sysAttrs[name]; ok {
 			filtered[name] = val
 		}
@@ -673,10 +724,30 @@ func resolveClientSystemAttributes(
 	return filtered, nil
 }
 
+// ouActorRoleProvider is implemented by an actor provider that can read the roles an actor holds
+// through the assignments made in one organization unit. The server's own provider does.
+type ouActorRoleProvider interface {
+	GetActorRolesInOU(
+		ctx context.Context, actorID string, groupIDs []string, ouID string,
+	) ([]string, *tidcommon.ServiceError)
+}
+
+// actorRolesInOU returns the actor's roles from the assignments made in ouID. A provider that cannot
+// narrow its roles to an organization unit answers with the roles assigned anywhere, as before.
+func actorRolesInOU(
+	ctx context.Context, actorProvider providers.ActorProvider, actorID string, groupIDs []string, ouID string,
+) ([]string, *tidcommon.ServiceError) {
+	if p, ok := actorProvider.(ouActorRoleProvider); ok {
+		return p.GetActorRolesInOU(ctx, actorID, groupIDs, ouID)
+	}
+	return actorProvider.GetActorRoles(ctx, actorID, groupIDs)
+}
+
 // resolveClientGroupRoleClaims returns the client's groups and/or roles claims selected by
 // ClientConfig.Attributes. Groups come from the actor's transitive memberships; roles are resolved
 // from those groups plus direct assignments. The shared group lookup runs once for both.
 func resolveClientGroupRoleClaims(
+	ctx context.Context,
 	oauthApp *providers.OAuthClient,
 	actorProvider providers.ActorProvider,
 ) (map[string]interface{}, error) {
@@ -691,9 +762,17 @@ func resolveClientGroupRoleClaims(
 		return nil, nil
 	}
 
-	groups, svcErr := actorProvider.GetActorGroups(oauthApp.ID)
+	allGroups, svcErr := actorProvider.GetActorGroups(ctx, oauthApp.ID)
 	if svcErr != nil {
 		return nil, fmt.Errorf("failed to fetch groups for client %s: %s", oauthApp.ID, svcErr.Error)
+	}
+	// The client's groups and roles are those of its own organization unit. Groups of an organization
+	// unit it is shared with, and roles assigned to it there, are that unit's, not the client's.
+	groups := make([]providers.EntityGroup, 0, len(allGroups))
+	for _, g := range allGroups {
+		if g.OUID == oauthApp.OUID {
+			groups = append(groups, g)
+		}
 	}
 
 	claims := make(map[string]interface{})
@@ -715,7 +794,7 @@ func resolveClientGroupRoleClaims(
 				groupIDs = append(groupIDs, g.ID)
 			}
 		}
-		roles, roleErr := actorProvider.GetActorRoles(oauthApp.ID, groupIDs)
+		roles, roleErr := actorRolesInOU(ctx, actorProvider, oauthApp.ID, groupIDs, oauthApp.OUID)
 		if roleErr != nil {
 			return nil, fmt.Errorf("failed to fetch roles for client %s: %s", oauthApp.ID, roleErr.Error)
 		}
@@ -754,7 +833,8 @@ func ArtifactLifetime(cfg oauthconfig.Config, client *providers.OAuthClient) tim
 }
 
 // BuildAccessEvaluationsRequest builds a batch access evaluation request, one evaluation per
-// permission, for the given subject. Shared by grant handlers that evaluate authorization permissions.
+// permission, for the given subject, each with the given context when there is one. Shared by grant handlers
+// that evaluate authorization permissions.
 func BuildAccessEvaluationsRequest(
 	entityID string,
 	entityCategory string,
@@ -762,6 +842,7 @@ func BuildAccessEvaluationsRequest(
 	roleIDs []string,
 	permissions []string,
 	resourceServerID string,
+	context map[string]interface{},
 ) providers.AccessEvaluationsRequest {
 	evaluations := make([]providers.AccessEvaluationRequest, 0, len(permissions))
 	for _, permission := range permissions {
@@ -774,6 +855,7 @@ func BuildAccessEvaluationsRequest(
 			},
 			ResourceServer: providers.AccessEvaluationResourceServer{ID: resourceServerID},
 			Permission:     providers.Permission{Name: permission},
+			Context:        maps.Clone(context),
 		})
 	}
 	return providers.AccessEvaluationsRequest{Evaluations: evaluations}
@@ -814,7 +896,7 @@ func ApplyMappedAuthorization(
 	}
 
 	roleIDs, groupIDs, mappedPermissions := idp.SplitAuthorizationTargets(authorizationTargets)
-	groupIDs, err := expandMappedGroupAncestors(actorProvider, groupIDs)
+	groupIDs, err := expandMappedGroupAncestors(ctx, actorProvider, groupIDs)
 	if err != nil {
 		logger.Error(ctx, "Failed to resolve ancestors of a mapped group", log.Error(err))
 		return nil, &model.ErrorResponse{
@@ -839,7 +921,7 @@ func ApplyMappedAuthorization(
 	}
 
 	authzResp, svcErr := authzService.EvaluateAccessBatch(ctx,
-		BuildAccessEvaluationsRequest("", "", groupIDs, roleIDs, pending, resourceServerID))
+		BuildAccessEvaluationsRequest("", "", groupIDs, roleIDs, pending, resourceServerID, nil))
 	if svcErr != nil {
 		logger.Error(ctx, "Failed to evaluate mapped authorization",
 			log.String("error", svcErr.Error.DefaultValue))
@@ -855,14 +937,14 @@ func ApplyMappedAuthorization(
 // expandMappedGroupAncestors adds each mapped group's ancestor groups. Fails closed, like
 // resolveMappedAuthorization above.
 func expandMappedGroupAncestors(
-	actorProvider providers.ActorProvider, groupIDs []string,
+	ctx context.Context, actorProvider providers.ActorProvider, groupIDs []string,
 ) ([]string, error) {
 	if actorProvider == nil || len(groupIDs) == 0 {
 		return groupIDs, nil
 	}
 	expanded := groupIDs
 	for _, groupID := range groupIDs {
-		ancestors, svcErr := actorProvider.GetTransitiveGroupAncestors(groupID)
+		ancestors, svcErr := actorProvider.GetTransitiveGroupAncestors(ctx, groupID)
 		if svcErr != nil {
 			return nil, fmt.Errorf(
 				"%w: failed to resolve ancestors of group %q: %s",

@@ -1,10 +1,10 @@
 // Copyright 2025 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import {fireEvent, render, screen, waitFor} from '@thunderid/test-utils';
+import {fireEvent, render, screen, waitFor, within} from '@thunderid/test-utils';
 import {type ReactNode, useEffect} from 'react';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
-import type {OutboundAuthMethod} from '../../models/connection';
+import type {ConnectionUsagesResponse, NotificationConfigResponse, OutboundAuthMethod} from '../../models/connection';
 import ConnectionDetailPage from '../ConnectionDetailPage';
 
 const updateMock = vi.fn().mockResolvedValue({});
@@ -120,9 +120,36 @@ const AUTHZEN_PDP_API_KEYS = {
   },
 };
 
+const HTTP_CONNECTION = {
+  id: 'http1',
+  type: 'http',
+  name: 'Risk Engine',
+  url: 'https://risk.example.com/evaluate',
+  timeoutMs: 5000,
+  headers: [{name: 'X-Tenant', value: 'acme'}],
+  authentication: {type: 'basic', properties: {username: 'svc', password: '******'}},
+};
+
+const HTTP_NONE_CONNECTION = {
+  ...HTTP_CONNECTION,
+  authentication: undefined,
+};
+
+const HTTP_LOCAL_CONNECTION = {
+  ...HTTP_NONE_CONNECTION,
+  url: 'http://localhost:8090/evaluate',
+};
+
+const ORIGIN_CHANGED_HINT = 'The URL origin changed. Enter the credentials again under Authentication before saving.';
+const HTTPS_REQUIRED = 'Use an https URL when an authentication method is set, or set the method to None.';
+const PASSWORD_FIELD_ID = 'connection-field-authentication.properties.password';
+const USERNAME_FIELD_ID = 'connection-field-authentication.properties.username';
+
 const mockParams: {type: string; id: string} = {type: 'google', id: 'g1'};
 const mockConn: {data: Record<string, unknown>} = {data: CONNECTION};
 const mockMeta: {methods: OutboundAuthMethod[]; isError: boolean} = {methods: [], isError: false};
+const NO_USAGES: ConnectionUsagesResponse = {totalResults: 0, count: 0, summary: {}, usages: []};
+const mockUsages: {data: ConnectionUsagesResponse} = {data: NO_USAGES};
 
 const SMTP_METHODS: OutboundAuthMethod[] = [
   {type: 'none', displayName: 'None'},
@@ -135,6 +162,34 @@ const SMTP_METHODS: OutboundAuthMethod[] = [
     ],
   },
 ];
+
+const HTTP_METHODS: OutboundAuthMethod[] = [
+  ...SMTP_METHODS,
+  {
+    type: 'bearer',
+    displayName: 'Bearer token',
+    fields: [{key: 'token', type: 'string', required: true, credential: true, displayName: 'Bearer token'}],
+  },
+  {
+    type: 'api_key',
+    displayName: 'API key',
+    fields: [],
+    additionalProperties: {key: '', type: 'string', required: true, credential: true, displayName: 'API key headers'},
+  },
+];
+
+const HTTP_BEARER_CONNECTION = {
+  ...HTTP_CONNECTION,
+  authentication: {type: 'bearer', properties: {token: '******'}},
+};
+
+const HTTP_API_KEY_CONNECTION = {
+  ...HTTP_CONNECTION,
+  authentication: {type: 'api_key', properties: {'X-Api-Key': '******'}},
+};
+
+const TOKEN_FIELD_ID = 'connection-field-authentication.properties.token';
+const API_KEY_FIELD_ID = 'connection-field-authentication.additionalProperties';
 
 function smtpConnection(properties: Record<string, string>): Record<string, unknown> {
   return {
@@ -164,8 +219,11 @@ vi.mock('@thunderid/contexts', async (importOriginal) => ({
 }));
 vi.mock('@thunderid/components', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@thunderid/components')>()),
-  SettingsCard: ({title, children}: {title: string; children: ReactNode}) => (
-    <section aria-label={title}>{children}</section>
+  SettingsCard: ({title, description, children}: {title: string; description: ReactNode; children: ReactNode}) => (
+    <section aria-label={title}>
+      {description && <p>{description}</p>}
+      {children}
+    </section>
   ),
   UnsavedChangesBar: ({
     onSave,
@@ -197,7 +255,24 @@ vi.mock('../../api/useUpdateConnection', () => ({
 }));
 vi.mock('../../api/useDeleteConnection', () => ({default: () => ({mutate: deleteMock, isPending: false})}));
 vi.mock('../../api/useGetConnectionUsages', () => ({
-  default: () => ({data: {totalResults: 0, count: 0, summary: {}, usages: []}, isLoading: false}),
+  default: () => ({data: mockUsages.data, isLoading: false, error: null, refetch: vi.fn()}),
+}));
+const mockNotificationConfig: {data: NotificationConfigResponse | undefined; isLoading: boolean; error: Error | null} =
+  {
+    data: {readOnly: {}, writable: {}, merged: {}},
+    isLoading: false,
+    error: null,
+  };
+vi.mock('../../api/useGetNotificationConfig', () => ({default: () => mockNotificationConfig}));
+const mockEmailProviders: {data: {id: string}[] | undefined} = {data: []};
+vi.mock('../../api/useEmailProviders', () => ({default: () => mockEmailProviders}));
+const setDefaultSenderMock = vi.fn();
+vi.mock('../../api/useSetDefaultEmailSender', () => ({
+  default: () => ({mutate: setDefaultSenderMock, isPending: false}),
+}));
+
+vi.mock('../../components/OrganizationUnitSection', () => ({
+  default: ({ouId}: {ouId: string}) => <section aria-label="Organization unit" data-ou-id={ouId} />,
 }));
 
 vi.mock('../../components/ConnectionForm', () => ({
@@ -236,6 +311,27 @@ vi.mock('../../components/ConnectionForm', () => ({
           onClick={() => onFieldChange('batchEndpoint', 'https://other.example.com/access/v1/evaluations')}
         >
           edit batch endpoint
+        </button>
+        <button
+          type="button"
+          data-testid="edit-url-path"
+          onClick={() => onFieldChange('url', 'https://risk.example.com/v2/evaluate')}
+        >
+          edit url path
+        </button>
+        <button
+          type="button"
+          data-testid="edit-url-host"
+          onClick={() => onFieldChange('url', 'https://collector.example.net/evaluate')}
+        >
+          edit url host
+        </button>
+        <button
+          type="button"
+          data-testid="edit-url-back"
+          onClick={() => onFieldChange('url', 'https://risk.example.com/evaluate')}
+        >
+          edit url back
         </button>
         {nameError && <div data-testid="stub-name-error">{nameError}</div>}
       </div>
@@ -369,6 +465,7 @@ describe('ConnectionDetailPage', () => {
     updateMutationState.isError = false;
     mockMeta.methods = [];
     mockMeta.isError = false;
+    mockUsages.data = NO_USAGES;
   });
 
   it('renders the general tab with quick-copy and the credentials form', () => {
@@ -377,6 +474,36 @@ describe('ConnectionDetailPage', () => {
     expect(screen.getByDisplayValue('g1')).toBeInTheDocument();
     expect(screen.getByText('Unique identifier for this connection.')).toBeInTheDocument();
     expect(screen.getByTestId('stub-connection-form')).toBeInTheDocument();
+  });
+
+  it('shows the Organization unit card for the connection owner', () => {
+    mockConn.data = {...CONNECTION, ouId: 'ou-1'};
+    render(<ConnectionDetailPage />);
+    expect(screen.getByRole('region', {name: 'Organization unit'})).toHaveAttribute('data-ou-id', 'ou-1');
+  });
+
+  it.each([
+    ['google', CONNECTION],
+    ['oidc', OIDC_CONNECTION],
+    ['twilio', TWILIO_CONNECTION],
+    ['authzen-pdp', AUTHZEN_PDP_CONNECTION],
+    ['http', HTTP_CONNECTION],
+  ])('shows the Organization unit card for a %s connection', (type, connection) => {
+    mockParams.type = type;
+    mockParams.id = connection.id;
+    mockConn.data = {...connection, ouId: 'ou-9'};
+    render(<ConnectionDetailPage />);
+    expect(screen.getByRole('region', {name: 'Organization unit'})).toHaveAttribute('data-ou-id', 'ou-9');
+  });
+
+  it('omits the Organization unit card when the response carries no owner', () => {
+    render(<ConnectionDetailPage />);
+    expect(screen.queryByRole('region', {name: 'Organization unit'})).not.toBeInTheDocument();
+  });
+
+  it('sets the browser tab title to the connection name', async () => {
+    render(<ConnectionDetailPage />);
+    await waitFor(() => expect(document.title).toBe('Google | ThunderID'));
   });
 
   it('renders the connection form in the Credentials card', () => {
@@ -405,7 +532,7 @@ describe('ConnectionDetailPage', () => {
     mockConn.data = {
       id: 'sms1',
       type: 'sms-gateway',
-      name: 'SMS Gateway',
+      name: 'SMS gateway',
       url: 'https://sms.example.com/send',
       authentication: {type: 'api_key', properties: {'X-API-Key': '******'}},
     };
@@ -425,7 +552,7 @@ describe('ConnectionDetailPage', () => {
     mockConn.data = {
       id: 'sms1',
       type: 'sms-gateway',
-      name: 'SMS Gateway',
+      name: 'SMS gateway',
       url: 'https://sms.example.com/send',
       authentication: {type: 'bearer', properties: {token: '******'}},
     };
@@ -630,6 +757,17 @@ describe('ConnectionDetailPage', () => {
     expect('attributeConfiguration' in payload).toBe(false);
   });
 
+  it('SMS vendor: describes what deleting an SMS provider affects instead of logins', () => {
+    mockParams.type = 'twilio';
+    mockParams.id = 'tw1';
+    mockConn.data = TWILIO_CONNECTION;
+    render(<ConnectionDetailPage />);
+
+    fireEvent.click(screen.getByTestId('connection-tab-advanced'));
+    expect(screen.getByText(/It cannot be deleted while a flow sends SMS through it/)).toBeInTheDocument();
+    expect(screen.queryByText(/stop accepting logins/)).not.toBeInTheDocument();
+  });
+
   it('AuthZEN PDP: shows subject mapping in its own tab and saves it with the connection', () => {
     mockParams.type = 'authzen-pdp';
     mockParams.id = 'pdp1';
@@ -700,7 +838,7 @@ describe('ConnectionDetailPage', () => {
     mockMeta.methods = [{type: 'none', displayName: 'None'}];
     render(<ConnectionDetailPage />);
 
-    expect(screen.getByLabelText('Connection Configuration')).toBeInTheDocument();
+    expect(screen.getByLabelText('Connection configuration')).toBeInTheDocument();
     expect(screen.queryByTestId('connection-authentication-section')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('connection-tab-authentication'));
     expect(screen.getByText('Authentication method')).toBeInTheDocument();
@@ -894,5 +1032,508 @@ describe('ConnectionDetailPage', () => {
 
     const payload = updateMock.mock.calls[0][0] as Record<string, unknown>;
     expect(payload).toMatchObject({authentication: {type: 'none'}});
+  });
+
+  describe('HTTP endpoint', () => {
+    beforeEach(() => {
+      mockParams.type = 'http';
+      mockParams.id = 'http1';
+      mockConn.data = HTTP_CONNECTION;
+      mockMeta.methods = SMTP_METHODS;
+    });
+
+    function selectMethod(name: string): void {
+      fireEvent.mouseDown(screen.getByRole('combobox'));
+      fireEvent.click(screen.getByRole('option', {name}));
+    }
+
+    function field(id: string): HTMLElement {
+      return document.getElementById(id)!;
+    }
+
+    it('edits authentication in the General tab from the vendor metadata', () => {
+      render(<ConnectionDetailPage />);
+
+      expect(screen.getByLabelText('Connection configuration')).toBeInTheDocument();
+      expect(screen.getByRole('region', {name: 'Authentication'})).toContainElement(
+        screen.getByTestId('connection-authentication-section'),
+      );
+      expect(screen.queryByTestId('connection-tab-authentication')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('connection-tab-subject-mapping')).not.toBeInTheDocument();
+      expect(field(PASSWORD_FIELD_ID)).toBeDisabled();
+    });
+
+    it('keeps the stored password by omitting it when saving unrelated changes', () => {
+      render(<ConnectionDetailPage />);
+
+      fireEvent.click(screen.getByTestId('edit-name'));
+      fireEvent.click(screen.getByTestId('save-bar'));
+
+      expect(updateMock.mock.calls[0][0]).toEqual({
+        name: 'Renamed',
+        url: 'https://risk.example.com/evaluate',
+        timeoutMs: 5000,
+        headers: [{name: 'X-Tenant', value: 'acme'}],
+        authentication: {type: 'basic', properties: {username: 'svc'}},
+      });
+    });
+
+    it('keeps the stored password when only the URL path changes', () => {
+      render(<ConnectionDetailPage />);
+
+      fireEvent.click(screen.getByTestId('edit-url-path'));
+
+      expect(screen.queryByText(ORIGIN_CHANGED_HINT)).not.toBeInTheDocument();
+      expect(field(PASSWORD_FIELD_ID)).toBeDisabled();
+      fireEvent.click(screen.getByTestId('save-bar'));
+      expect(updateMock.mock.calls[0][0]).toMatchObject({
+        url: 'https://risk.example.com/v2/evaluate',
+        authentication: {type: 'basic', properties: {username: 'svc'}},
+      });
+    });
+
+    it('blocks Save after a URL origin change until the password is entered again', () => {
+      render(<ConnectionDetailPage />);
+
+      fireEvent.click(screen.getByTestId('edit-url-host'));
+
+      expect(screen.getByTestId('save-bar')).toBeDisabled();
+      expect(screen.getByText(ORIGIN_CHANGED_HINT)).toBeInTheDocument();
+      expect(field(PASSWORD_FIELD_ID)).not.toBeDisabled();
+
+      fireEvent.change(field(PASSWORD_FIELD_ID), {target: {value: 'new-pw'}});
+      expect(screen.getByTestId('save-bar')).not.toBeDisabled();
+      fireEvent.click(screen.getByTestId('save-bar'));
+
+      expect(updateMock.mock.calls[0][0]).toMatchObject({
+        url: 'https://collector.example.net/evaluate',
+        authentication: {type: 'basic', properties: {username: 'svc', password: 'new-pw'}},
+      });
+    });
+
+    it('keeps a password typed during the origin change editable after the URL is changed back', () => {
+      render(<ConnectionDetailPage />);
+
+      fireEvent.click(screen.getByTestId('edit-url-host'));
+      fireEvent.change(field(PASSWORD_FIELD_ID), {target: {value: 'new-pw'}});
+      fireEvent.click(screen.getByTestId('edit-url-back'));
+
+      expect(screen.queryByText(ORIGIN_CHANGED_HINT)).not.toBeInTheDocument();
+      expect(field(PASSWORD_FIELD_ID)).not.toBeDisabled();
+      expect(field(PASSWORD_FIELD_ID)).toHaveValue('new-pw');
+
+      fireEvent.change(field(PASSWORD_FIELD_ID), {target: {value: 'newer-pw'}});
+      fireEvent.click(screen.getByTestId('save-bar'));
+      expect(updateMock.mock.calls[0][0]).toMatchObject({
+        url: 'https://risk.example.com/evaluate',
+        authentication: {type: 'basic', properties: {username: 'svc', password: 'newer-pw'}},
+      });
+    });
+
+    it('asks for the password again when the method is switched away and back after an origin change', () => {
+      render(<ConnectionDetailPage />);
+
+      fireEvent.click(screen.getByTestId('edit-url-host'));
+      selectMethod('None');
+      expect(screen.queryByText(ORIGIN_CHANGED_HINT)).not.toBeInTheDocument();
+      expect(screen.getByTestId('save-bar')).not.toBeDisabled();
+
+      selectMethod('Username and Password');
+      expect(screen.getByText(ORIGIN_CHANGED_HINT)).toBeInTheDocument();
+      expect(screen.getByTestId('save-bar')).toBeDisabled();
+
+      fireEvent.change(field(PASSWORD_FIELD_ID), {target: {value: 'new-pw'}});
+      expect(screen.getByTestId('save-bar')).not.toBeDisabled();
+    });
+
+    it('drops authentication when an origin change comes with a switch to None', () => {
+      render(<ConnectionDetailPage />);
+
+      fireEvent.click(screen.getByTestId('edit-url-host'));
+      selectMethod('None');
+      fireEvent.click(screen.getByTestId('save-bar'));
+
+      expect(updateMock.mock.calls[0][0]).toMatchObject({
+        url: 'https://collector.example.net/evaluate',
+        authentication: {type: 'none'},
+      });
+    });
+
+    it('requires the new credentials when an origin change comes with a switch to a method', () => {
+      mockConn.data = HTTP_NONE_CONNECTION;
+      render(<ConnectionDetailPage />);
+
+      fireEvent.click(screen.getByTestId('edit-url-host'));
+      selectMethod('Username and Password');
+      expect(screen.getByTestId('save-bar')).toBeDisabled();
+
+      fireEvent.change(field(USERNAME_FIELD_ID), {target: {value: 'svc'}});
+      expect(screen.getByTestId('save-bar')).toBeDisabled();
+      fireEvent.change(field(PASSWORD_FIELD_ID), {target: {value: 'pw'}});
+      fireEvent.click(screen.getByTestId('save-bar'));
+
+      expect(updateMock.mock.calls[0][0]).toMatchObject({
+        url: 'https://collector.example.net/evaluate',
+        authentication: {type: 'basic', properties: {username: 'svc', password: 'pw'}},
+      });
+    });
+
+    it('allows a URL origin change without credentials when no authentication is set', () => {
+      mockConn.data = HTTP_LOCAL_CONNECTION;
+      render(<ConnectionDetailPage />);
+
+      fireEvent.click(screen.getByTestId('edit-url-host'));
+
+      expect(screen.queryByText(ORIGIN_CHANGED_HINT)).not.toBeInTheDocument();
+      expect(screen.getByTestId('save-bar')).not.toBeDisabled();
+    });
+
+    it('blocks Save when authentication is set on an http URL', () => {
+      mockConn.data = HTTP_LOCAL_CONNECTION;
+      render(<ConnectionDetailPage />);
+
+      selectMethod('Username and Password');
+      fireEvent.change(field(USERNAME_FIELD_ID), {target: {value: 'svc'}});
+      fireEvent.change(field(PASSWORD_FIELD_ID), {target: {value: 'pw'}});
+
+      expect(screen.getByText(HTTPS_REQUIRED)).toBeInTheDocument();
+      expect(screen.getByTestId('save-bar')).toBeDisabled();
+
+      selectMethod('None');
+      expect(screen.queryByText(HTTPS_REQUIRED)).not.toBeInTheDocument();
+    });
+
+    describe('with every method the server reports', () => {
+      beforeEach(() => {
+        mockMeta.methods = HTTP_METHODS;
+      });
+
+      it('offers None, Username and Password, Bearer token and API key', () => {
+        render(<ConnectionDetailPage />);
+
+        fireEvent.mouseDown(screen.getByRole('combobox'));
+
+        expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+          'None',
+          'Username and Password',
+          'Bearer token',
+          'API key',
+        ]);
+      });
+
+      it('sends a bearer token without the username the previous method stored', () => {
+        render(<ConnectionDetailPage />);
+
+        selectMethod('Bearer token');
+        expect(screen.getByTestId('save-bar')).toBeDisabled();
+        fireEvent.change(field(TOKEN_FIELD_ID), {target: {value: 'tok-1'}});
+        fireEvent.click(screen.getByTestId('save-bar'));
+
+        expect(updateMock.mock.calls[0][0]).toMatchObject({
+          authentication: {type: 'bearer', properties: {token: 'tok-1'}},
+        });
+        expect(
+          (updateMock.mock.calls[0][0] as {authentication: {properties: object}}).authentication.properties,
+        ).toEqual({token: 'tok-1'});
+      });
+
+      it('keeps the stored bearer token by omitting it, and asks for it again after a URL origin change', () => {
+        mockConn.data = HTTP_BEARER_CONNECTION;
+        render(<ConnectionDetailPage />);
+
+        expect(field(TOKEN_FIELD_ID)).toBeDisabled();
+        fireEvent.click(screen.getByTestId('edit-url-host'));
+
+        expect(screen.getByText(ORIGIN_CHANGED_HINT)).toBeInTheDocument();
+        expect(screen.getByTestId('save-bar')).toBeDisabled();
+        fireEvent.change(field(TOKEN_FIELD_ID), {target: {value: 'tok-2'}});
+        fireEvent.click(screen.getByTestId('save-bar'));
+
+        expect(updateMock.mock.calls[0][0]).toMatchObject({
+          url: 'https://collector.example.net/evaluate',
+          authentication: {type: 'bearer', properties: {token: 'tok-2'}},
+        });
+      });
+
+      it('sends entered API-key headers as properties', () => {
+        mockConn.data = HTTP_NONE_CONNECTION;
+        render(<ConnectionDetailPage />);
+
+        selectMethod('API key');
+        expect(screen.getByTestId('save-bar')).toBeDisabled();
+        fireEvent.change(field(`${API_KEY_FIELD_ID}-name-1`), {target: {value: 'X-Api-Key'}});
+        expect(screen.getByText('Enter both a name and value for every header.')).toBeInTheDocument();
+        expect(screen.getByTestId('save-bar')).toBeDisabled();
+        fireEvent.change(field(`${API_KEY_FIELD_ID}-value-1`), {target: {value: 'k-1'}});
+        fireEvent.click(screen.getByTestId('save-bar'));
+
+        expect(updateMock.mock.calls[0][0]).toMatchObject({
+          authentication: {type: 'api_key', properties: {'X-Api-Key': 'k-1'}},
+        });
+      });
+
+      it('restates stored API-key headers masked when saving unrelated changes', () => {
+        mockConn.data = HTTP_API_KEY_CONNECTION;
+        render(<ConnectionDetailPage />);
+
+        expect(field(`${API_KEY_FIELD_ID}-name-1`)).toHaveValue('X-Api-Key');
+        expect(field(`${API_KEY_FIELD_ID}-value-1`)).toBeDisabled();
+        fireEvent.click(screen.getByTestId('edit-name'));
+        fireEvent.click(screen.getByTestId('save-bar'));
+
+        expect(updateMock.mock.calls[0][0]).toMatchObject({
+          name: 'Renamed',
+          authentication: {type: 'api_key', properties: {'X-Api-Key': '******'}},
+        });
+      });
+
+      it('blocks Save when a stored API-key value is cleared, rather than deleting the header', () => {
+        mockConn.data = HTTP_API_KEY_CONNECTION;
+        render(<ConnectionDetailPage />);
+
+        fireEvent.click(screen.getByTestId(`${API_KEY_FIELD_ID}-update-1`));
+
+        expect(screen.getByText('Enter both a name and value for every header.')).toBeInTheDocument();
+        expect(screen.getByTestId('save-bar')).toBeDisabled();
+      });
+
+      it('requires every API-key value again after a URL origin change', () => {
+        mockConn.data = HTTP_API_KEY_CONNECTION;
+        render(<ConnectionDetailPage />);
+
+        fireEvent.click(screen.getByTestId('edit-url-host'));
+        expect(screen.getByText(ORIGIN_CHANGED_HINT)).toBeInTheDocument();
+        expect(screen.getByTestId('save-bar')).toBeDisabled();
+
+        fireEvent.click(screen.getByTestId(`${API_KEY_FIELD_ID}-update-1`));
+        fireEvent.change(field(`${API_KEY_FIELD_ID}-value-1`), {target: {value: 'k-2'}});
+        expect(screen.getByTestId('save-bar')).not.toBeDisabled();
+        fireEvent.click(screen.getByTestId('save-bar'));
+
+        expect(updateMock.mock.calls[0][0]).toMatchObject({
+          url: 'https://collector.example.net/evaluate',
+          authentication: {type: 'api_key', properties: {'X-Api-Key': 'k-2'}},
+        });
+      });
+
+      it('blocks Save when an API-key method is set on an http URL', () => {
+        mockConn.data = HTTP_LOCAL_CONNECTION;
+        render(<ConnectionDetailPage />);
+
+        selectMethod('API key');
+        fireEvent.change(field(`${API_KEY_FIELD_ID}-name-1`), {target: {value: 'X-Api-Key'}});
+        fireEvent.change(field(`${API_KEY_FIELD_ID}-value-1`), {target: {value: 'k-1'}});
+
+        expect(screen.getByText(HTTPS_REQUIRED)).toBeInTheDocument();
+        expect(screen.getByTestId('save-bar')).toBeDisabled();
+      });
+    });
+
+    it('shows the localized message for a rejected URL', async () => {
+      updateMock.mockRejectedValueOnce({response: {status: 400, data: {code: 'CON-1018'}}});
+      render(<ConnectionDetailPage />);
+
+      fireEvent.click(screen.getByTestId('edit-url-path'));
+      fireEvent.click(screen.getByTestId('save-bar'));
+
+      expect(
+        await screen.findByText(
+          'The URL must be an absolute http or https URL without a user name or password, and must use https when authentication is set.',
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it('lists the flows that use the connection in the Usages section', () => {
+      mockUsages.data = {
+        totalResults: 2,
+        count: 2,
+        summary: {flow: 2},
+        usages: [
+          {resourceType: 'flow', id: 'f1', displayName: 'Default sign-in', behaviorOnDelete: 'restrict'},
+          {resourceType: 'flow', id: 'f2', displayName: 'Step-up', behaviorOnDelete: 'restrict'},
+        ],
+      };
+      render(<ConnectionDetailPage />);
+
+      const usages = screen.getByRole('region', {name: 'Usages'});
+      expect(usages).toHaveTextContent('Default sign-in');
+      expect(usages).toHaveTextContent('Step-up');
+      expect(usages).toHaveTextContent('Flow');
+    });
+
+    it('says no resources use the connection when it has no usages', () => {
+      render(<ConnectionDetailPage />);
+
+      expect(screen.getByRole('region', {name: 'Usages'})).toHaveTextContent('No resources use this connection.');
+    });
+
+    it('shows the localized message when the server refuses to delete a connection in use', () => {
+      deleteMock.mockImplementationOnce((_id: string, opts: {onSuccess: () => void; onError?: (e: unknown) => void}) =>
+        opts.onError?.({response: {status: 409, data: {code: 'CON-1026'}}}),
+      );
+      render(<ConnectionDetailPage />);
+
+      fireEvent.click(screen.getByTestId('connection-tab-advanced'));
+      fireEvent.click(screen.getByTestId('connection-delete-button'));
+      fireEvent.click(screen.getByTestId('connection-delete-confirm'));
+
+      expect(
+        screen.getByText(
+          'This connection is used by one or more resources. Remove it from those resources before deleting it.',
+        ),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('does not show a Usages section for connections that do not list usages', () => {
+    render(<ConnectionDetailPage />);
+
+    expect(screen.queryByRole('region', {name: 'Usages'})).not.toBeInTheDocument();
+  });
+});
+
+describe('ConnectionDetailPage default email sender', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockParams.type = 'email-smtp';
+    mockParams.id = 'sm1';
+    mockConn.data = smtpConnection({username: 'mailer', password: '******'});
+    mockMeta.methods = SMTP_METHODS;
+    mockMeta.isError = false;
+    mockNotificationConfig.data = {readOnly: {}, writable: {}, merged: {}};
+    mockNotificationConfig.isLoading = false;
+    mockNotificationConfig.error = null;
+    mockEmailProviders.data = [{id: 'sm1'}, {id: 'sm9'}];
+  });
+
+  it('offers to set an email sender that is not the default', () => {
+    render(<ConnectionDetailPage />);
+    expect(screen.queryByText('Default')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', {name: 'Set as default'}));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', {name: 'Set as default'}));
+
+    expect(setDefaultSenderMock).toHaveBeenCalledWith({defaultEmailSenderId: 'sm1'}, expect.any(Object));
+    expect(within(dialog).queryByText('This will replace the current default email sender.')).not.toBeInTheDocument();
+  });
+
+  it('says the dialog replaces the current default when another sender holds it', () => {
+    mockNotificationConfig.data = {
+      readOnly: {},
+      writable: {defaultEmailSenderId: 'sm9'},
+      merged: {defaultEmailSenderId: 'sm9'},
+    };
+    render(<ConnectionDetailPage />);
+
+    fireEvent.click(screen.getByRole('button', {name: 'Set as default'}));
+    expect(
+      within(screen.getByRole('dialog')).getByText('This will replace the current default email sender.'),
+    ).toBeInTheDocument();
+  });
+
+  // The section keeps a deleted sender's ID, which is no default to replace.
+  it('does not say the dialog replaces a default whose sender no longer exists', () => {
+    mockNotificationConfig.data = {
+      readOnly: {},
+      writable: {defaultEmailSenderId: 'deleted'},
+      merged: {defaultEmailSenderId: 'deleted'},
+    };
+    render(<ConnectionDetailPage />);
+
+    fireEvent.click(screen.getByRole('button', {name: 'Set as default'}));
+    expect(
+      within(screen.getByRole('dialog')).queryByText('This will replace the current default email sender.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('marks the default sender and hides the action', () => {
+    mockNotificationConfig.data = {
+      readOnly: {},
+      writable: {defaultEmailSenderId: 'sm1'},
+      merged: {defaultEmailSenderId: 'sm1'},
+    };
+    render(<ConnectionDetailPage />);
+    expect(screen.getByText('Default')).toBeInTheDocument();
+    expect(screen.queryByRole('button', {name: 'Set as default'})).not.toBeInTheDocument();
+  });
+
+  // A declarative default rejects every write, so no other sender may set it.
+  it('disables the action with the reason when the deployment configuration fixes the default', async () => {
+    mockNotificationConfig.data = {
+      readOnly: {defaultEmailSenderId: 'other'},
+      writable: {},
+      merged: {defaultEmailSenderId: 'other'},
+    };
+    render(<ConnectionDetailPage />);
+    expect(screen.queryByText('Default')).not.toBeInTheDocument();
+    const action = screen.getByRole('button', {name: 'Set as default'});
+    expect(action).toBeDisabled();
+
+    fireEvent.mouseOver(action.parentElement!);
+    expect(
+      await screen.findByText('The default email sender is fixed by the deployment configuration.'),
+    ).toBeInTheDocument();
+  });
+
+  it('hides the action until the notification section loads', () => {
+    mockNotificationConfig.data = undefined;
+    mockNotificationConfig.isLoading = true;
+    render(<ConnectionDetailPage />);
+    expect(screen.queryByRole('button', {name: 'Set as default'})).not.toBeInTheDocument();
+  });
+
+  it('reports a notification section that fails to load and hides the action', () => {
+    mockNotificationConfig.data = undefined;
+    mockNotificationConfig.error = new Error('boom');
+    render(<ConnectionDetailPage />);
+    expect(screen.getByText('Failed to load the default email sender.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', {name: 'Set as default'})).not.toBeInTheDocument();
+  });
+
+  it('does not offer the action on a connection that is not an email sender', () => {
+    mockParams.type = 'google';
+    mockParams.id = 'g1';
+    mockConn.data = CONNECTION;
+    mockMeta.methods = [];
+    mockNotificationConfig.data = {
+      readOnly: {},
+      writable: {defaultEmailSenderId: 'g1'},
+      merged: {defaultEmailSenderId: 'g1'},
+    };
+    render(<ConnectionDetailPage />);
+    expect(screen.queryByRole('button', {name: 'Set as default'})).not.toBeInTheDocument();
+    expect(screen.queryByText('Default')).not.toBeInTheDocument();
+  });
+
+  it('warns before deleting the default sender', () => {
+    mockNotificationConfig.data = {
+      readOnly: {},
+      writable: {defaultEmailSenderId: 'sm1'},
+      merged: {defaultEmailSenderId: 'sm1'},
+    };
+    render(<ConnectionDetailPage />);
+    fireEvent.click(screen.getByTestId('connection-tab-advanced'));
+    fireEvent.click(screen.getByTestId('connection-delete-button'));
+    expect(screen.getByTestId('connection-delete-default-sender-warning')).toBeInTheDocument();
+  });
+
+  it('does not warn before deleting a sender that is not the default', () => {
+    render(<ConnectionDetailPage />);
+    fireEvent.click(screen.getByTestId('connection-tab-advanced'));
+    fireEvent.click(screen.getByTestId('connection-delete-button'));
+    expect(screen.queryByTestId('connection-delete-default-sender-warning')).not.toBeInTheDocument();
+  });
+
+  it('names the product in the configuration description', () => {
+    render(<ConnectionDetailPage />);
+    expect(screen.getByText('Provide the details ThunderID needs to connect to this service.')).toBeInTheDocument();
+  });
+
+  it('describes what deleting an email provider affects instead of logins', () => {
+    render(<ConnectionDetailPage />);
+    fireEvent.click(screen.getByTestId('connection-tab-advanced'));
+    expect(screen.getByText(/It cannot be deleted while a flow sends email through it/)).toBeInTheDocument();
+    expect(screen.queryByText(/stop accepting logins/)).not.toBeInTheDocument();
   });
 });

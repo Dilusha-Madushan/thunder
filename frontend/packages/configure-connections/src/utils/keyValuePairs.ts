@@ -8,6 +8,12 @@ export interface KeyValuePair {
 }
 
 /**
+ * How a key-value field holds its rows in the form state: the "Key: value, ..." text its API also
+ * takes, or a JSON array for an API that takes a list, so values keep their commas.
+ */
+export type KeyValueFormat = 'string' | 'pairs';
+
+/**
  * Parse the form's serialized representation into editable rows.
  */
 export function parseKeyValuePairs(raw: string): KeyValuePair[] {
@@ -36,9 +42,49 @@ export function serializeKeyValuePairs(pairs: KeyValuePair[]): string {
 }
 
 /**
- * Strip delimiters reserved by the form's serialized representation.
+ * Strip characters the wire format cannot represent: commas separate pairs in the string format,
+ * so they are removed from both parts there, and the first colon separates name from value, so it
+ * is removed from names.
  */
-export function sanitizeKeyValuePart(text: string, part: 'name' | 'value'): string {
-  const withoutCommas: string = text.replace(/,/g, '');
-  return part === 'name' ? withoutCommas.replace(/:/g, '') : withoutCommas;
+export function sanitizeKeyValuePart(text: string, part: 'name' | 'value', format: KeyValueFormat = 'string'): string {
+  if (part === 'value') {
+    return format === 'pairs' ? text : text.replace(/,/g, '');
+  }
+  return text.replace(/[,:]/g, '');
+}
+
+/** Read rows from a form value held in the given format. */
+export function decodeKeyValuePairs(raw: string, format: KeyValueFormat = 'string'): KeyValuePair[] {
+  if (format === 'string') {
+    return parseKeyValuePairs(raw);
+  }
+  if (raw.trim() === '') {
+    return [];
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as KeyValuePair[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Write rows to a form value in the given format. The string format leaves out rows that are not
+ * filled in. The pairs format keeps a half-filled row, so clearing a stored value fails validation
+ * instead of silently deleting the row, and leaves out only blank rows.
+ */
+export function encodeKeyValuePairs(pairs: KeyValuePair[], format: KeyValueFormat = 'string'): string {
+  if (format === 'string') {
+    return serializeKeyValuePairs(pairs);
+  }
+  const kept: KeyValuePair[] = pairs
+    .map((pair) => ({name: pair.name.trim(), value: pair.value.trim()}))
+    .filter((pair) => pair.name !== '' || pair.value !== '');
+  return kept.length > 0 ? JSON.stringify(kept) : '';
+}
+
+/** Whether a row has both its name and its value. */
+export function isCompleteKeyValuePair(pair: KeyValuePair): boolean {
+  return pair.name.trim() !== '' && pair.value.trim() !== '';
 }

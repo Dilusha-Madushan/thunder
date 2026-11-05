@@ -63,6 +63,8 @@ describe('ExportPage', () => {
           applications: ['*'],
           connections: ['*'],
           flows: ['*'],
+          organizationUnits: ['*'],
+          projects: ['*'],
           groups: ['*'],
           agents: ['*'],
           serverConfigs: ['*'],
@@ -144,7 +146,7 @@ describe('ExportPage', () => {
   describe('navigation', () => {
     it('renders page title', () => {
       render(<ExportPage />);
-      expect(screen.getByText('Export Configuration')).toBeInTheDocument();
+      expect(screen.getByText('Export configuration')).toBeInTheDocument();
     });
 
     it('calls navigate(-1) when close button is clicked', async () => {

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {zodResolver} from '@hookform/resolvers/zod';
-import {FullScreenCreationWizardLayout, PageLoadingAnimation} from '@thunderid/components';
+import {DocumentTitle, FullScreenCreationWizardLayout, PageLoadingAnimation} from '@thunderid/components';
 import {OrganizationUnitTreePicker} from '@thunderid/configure-organization-units';
 import {CopyableTextAdapter, type FlowComponent, mapEmbeddedFlowTextColor} from '@thunderid/design';
 import {useLogger} from '@thunderid/logger/react';
@@ -13,7 +13,7 @@ import {
   type EmbeddedFlowComponent,
   type InviteUserRenderProps,
 } from '@thunderid/react';
-import type {ApiError} from '@thunderid/types';
+import type {ApiError, I18nMessage} from '@thunderid/types';
 import {EMAIL_REGEX} from '@thunderid/utils';
 import {
   Box,
@@ -83,8 +83,9 @@ function deriveStepLabel(
 
 const FLOW_NOT_FOUND_ERROR_CODE = 'FLM-1003';
 
-function containsFlowNotFoundText(value: string | undefined): boolean {
-  return value?.toLowerCase().includes('flow not found') ?? false;
+function containsFlowNotFoundText(value: I18nMessage | string | undefined): boolean {
+  const text = typeof value === 'object' ? value.defaultValue : value;
+  return text?.toLowerCase().includes('flow not found') ?? false;
 }
 
 function isMissingOnboardingFlow(error: unknown): boolean {
@@ -276,109 +277,109 @@ function InviteUserStepContent({
       type === 'NUMBER_INPUT'
     ) {
       return (
-        <FormControl key={component.id ?? index} required={required}>
-          <FormLabel htmlFor={ref}>{resolve(labelText) ?? labelText}</FormLabel>
-          <Controller
-            name={ref}
-            control={formControl}
-            rules={{required: required ? `${resolve(labelText) ?? labelText} is required` : false}}
-            render={({field}) => (
-              <TextField
-                {...field}
-                fullWidth
-                size="small"
-                id={ref}
-                type={type === 'NUMBER_INPUT' ? 'number' : 'text'}
-                placeholder={resolve(placeholderText) ?? placeholderText}
-                autoComplete="off"
-                required={required}
-                variant="outlined"
-                disabled={isFormLoading}
-                error={!!formErrors[ref]}
-                helperText={formErrors[ref]?.message as string}
-                color={formErrors[ref] ? 'error' : 'primary'}
-                onChange={(e) => {
-                  field.onChange(e);
-                  handleInputChangeFn(ref, e.target.value);
-                }}
-              />
-            )}
-          />
-        </FormControl>
+        <Controller
+          name={ref}
+          control={formControl}
+          rules={{required: required ? `${resolve(labelText) ?? labelText} is required` : false}}
+          render={({field}) => (
+            <TextField
+              labelPlacement="top"
+              label={resolve(labelText) ?? labelText}
+              key={component.id ?? index}
+              {...field}
+              fullWidth
+              size="small"
+              id={ref}
+              type={type === 'NUMBER_INPUT' ? 'number' : 'text'}
+              placeholder={resolve(placeholderText) ?? placeholderText}
+              autoComplete="off"
+              required={required}
+              variant="outlined"
+              disabled={isFormLoading}
+              error={!!formErrors[ref]}
+              helperText={formErrors[ref]?.message as string}
+              color={formErrors[ref] ? 'error' : 'primary'}
+              onChange={(e) => {
+                field.onChange(e);
+                handleInputChangeFn(ref, e.target.value);
+              }}
+            />
+          )}
+        />
       );
     }
 
     if (type === 'EMAIL_INPUT') {
       return (
-        <FormControl key={component.id ?? index} required={required}>
-          <FormLabel htmlFor={ref}>{resolve(labelText) ?? labelText}</FormLabel>
-          <Controller
-            name={ref}
-            control={formControl}
-            rules={{
-              required: required ? `${resolve(labelText) ?? labelText} is required` : false,
-              pattern: {
-                value: EMAIL_REGEX,
-                message: t('validations:field.email.invalid', 'Please enter a valid email address.'),
-              },
-            }}
-            render={({field}) => (
-              <TextField
-                {...field}
-                fullWidth
-                size="small"
-                id={ref}
-                type="email"
-                placeholder={resolve(placeholderText) ?? placeholderText}
-                autoComplete="email"
-                required={required}
-                variant="outlined"
-                disabled={isFormLoading}
-                error={!!formErrors[ref]}
-                helperText={formErrors[ref]?.message as string}
-                color={formErrors[ref] ? 'error' : 'primary'}
-                onChange={(e) => {
-                  field.onChange(e);
-                  handleInputChangeFn(ref, e.target.value);
-                }}
-              />
-            )}
-          />
-        </FormControl>
+        <Controller
+          name={ref}
+          control={formControl}
+          rules={{
+            required: required ? `${resolve(labelText) ?? labelText} is required` : false,
+            pattern: {
+              value: EMAIL_REGEX,
+              message: t('validations:field.email.invalid', 'Please enter a valid email address.'),
+            },
+          }}
+          render={({field}) => (
+            <TextField
+              labelPlacement="top"
+              label={resolve(labelText) ?? labelText}
+              key={component.id ?? index}
+              {...field}
+              fullWidth
+              size="small"
+              id={ref}
+              type="email"
+              placeholder={resolve(placeholderText) ?? placeholderText}
+              autoComplete="email"
+              required={required}
+              variant="outlined"
+              disabled={isFormLoading}
+              error={!!formErrors[ref]}
+              helperText={formErrors[ref]?.message as string}
+              color={formErrors[ref] ? 'error' : 'primary'}
+              onChange={(e) => {
+                field.onChange(e);
+                handleInputChangeFn(ref, e.target.value);
+              }}
+            />
+          )}
+        />
       );
     }
 
     if (type === 'PHONE_INPUT') {
       return (
-        <FormControl key={component.id ?? index} required={required}>
-          <FormLabel htmlFor={ref}>{resolve(labelText) ?? labelText}</FormLabel>
-          <Controller
-            name={ref}
-            control={formControl}
-            rules={{required: required ? `${resolve(labelText) ?? labelText} is required` : false}}
-            render={({field}) => (
-              <TextField
-                {...field}
-                fullWidth
-                size="small"
-                id={ref}
-                type="tel"
-                placeholder={resolve(placeholderText) ?? placeholderText}
-                autoComplete="tel"
-                required={required}
-                variant="outlined"
-                disabled={isFormLoading}
-                error={!!formErrors[ref]}
-                helperText={formErrors[ref]?.message as string}
-                color={formErrors[ref] ? 'error' : 'primary'}
-                onChange={(e) => {
-                  field.onChange(e);
-                  handleInputChangeFn(ref, e.target.value);
-                }}
-              />
-            )}
-          />
-        </FormControl>
+        <Controller
+          name={ref}
+          control={formControl}
+          rules={{required: required ? `${resolve(labelText) ?? labelText} is required` : false}}
+          render={({field}) => (
+            <TextField
+              labelPlacement="top"
+              label={resolve(labelText) ?? labelText}
+              key={component.id ?? index}
+              {...field}
+              fullWidth
+              size="small"
+              id={ref}
+              type="tel"
+              placeholder={resolve(placeholderText) ?? placeholderText}
+              autoComplete="tel"
+              required={required}
+              variant="outlined"
+              disabled={isFormLoading}
+              error={!!formErrors[ref]}
+              helperText={formErrors[ref]?.message as string}
+              color={formErrors[ref] ? 'error' : 'primary'}
+              onChange={(e) => {
+                field.onChange(e);
+                handleInputChangeFn(ref, e.target.value);
+              }}
+            />
+          )}
+        />
       );
     }
 
@@ -921,7 +922,7 @@ function InviteUserStepContent({
               onResetLocalState();
             }}
           >
-            {t('users:addAnother', 'Add Another User')}
+            {t('users:addAnother', 'Add another user')}
           </Button>
         </Stack>
       )}
@@ -1012,7 +1013,7 @@ export default function UserAddPage(): JSX.Element {
   const resetFlowRef = useRef<(() => void) | null>(null);
 
   // Track breadcrumb trail of visited step labels, starting with "Add User"
-  const [breadcrumbs, setBreadcrumbs] = useState<string[]>([t('users:addUser', 'Add User')]);
+  const [breadcrumbs, setBreadcrumbs] = useState<string[]>([t('users:addUser', 'Add user')]);
   const prevStepLabelRef = useRef<string>('');
   const [hasOuStep, setHasOuStep] = useState(false);
 
@@ -1059,7 +1060,7 @@ export default function UserAddPage(): JSX.Element {
   }, []);
 
   const handleResetLocalState = useCallback(() => {
-    setBreadcrumbs([t('users:addUser', 'Add User')]);
+    setBreadcrumbs([t('users:addUser', 'Add user')]);
     prevStepLabelRef.current = '';
     setHasOuStep(false);
     setFlowError(null);
@@ -1076,9 +1077,10 @@ export default function UserAddPage(): JSX.Element {
       <FullScreenCreationWizardLayout
         onClose={handleClose}
         progress={0}
-        breadcrumbItems={[{key: 'breadcrumb-0', label: t('users:addUser', 'Add User')}]}
+        breadcrumbItems={[{key: 'breadcrumb-0', label: t('users:addUser', 'Add user')}]}
         footer={null}
       >
+        <DocumentTitle title={t('users:addUser', 'Add user')} />
         <Box sx={{p: 3}}>
           <Alert severity="error">
             <AlertTitle>
@@ -1117,6 +1119,7 @@ export default function UserAddPage(): JSX.Element {
       })}
       footer={null}
     >
+      <DocumentTitle title={t('users:addUser', 'Add user')} />
       <InviteUser
         onError={(err: Error) => {
           if (isMissingOnboardingFlow(err)) {

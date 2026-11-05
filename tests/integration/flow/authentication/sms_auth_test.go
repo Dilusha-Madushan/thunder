@@ -13,10 +13,6 @@ import (
 	"github.com/thunder-id/thunderid/tests/integration/testutils"
 )
 
-const (
-	mockNotificationServerPort = 8098
-)
-
 var (
 	smsAuthFlowWithMobile = testutils.Flow{
 		Name:     "SMS Auth Flow with Mobile Test",
@@ -323,13 +319,11 @@ func (ts *SMSAuthFlowTestSuite) SetupSuite() {
 	}
 	smsAuthEntityTypeID = schemaID
 
-	// Start mock notification server
-	ts.mockServer = testutils.NewMockNotificationServer(mockNotificationServerPort)
-	err = ts.mockServer.Start()
+	// Create mock notification server
+	ts.mockServer, err = testutils.NewMockNotificationServer()
 	if err != nil {
-		ts.T().Fatalf("Failed to start mock notification server: %v", err)
+		ts.T().Fatalf("Failed to create mock notification server: %v", err)
 	}
-	time.Sleep(100 * time.Millisecond)
 	ts.T().Log("Mock notification server started successfully")
 
 	// Create test user with mobile number using the created OU
@@ -437,17 +431,17 @@ func (ts *SMSAuthFlowTestSuite) TearDownSuite() {
 		}
 	}
 
-	// Delete test organization unit
-	if smsAuthTestOU.ID != "" {
-		if err := testutils.DeleteOrganizationUnit(smsAuthTestOU.ID); err != nil {
-			ts.T().Logf("Failed to delete test organization unit during teardown: %v", err)
-		}
-	}
-
 	// Delete test user type
 	if smsAuthEntityTypeID != "" {
 		if err := testutils.DeleteUserType(smsAuthEntityTypeID); err != nil {
 			ts.T().Logf("Failed to delete test user type during teardown: %v", err)
+		}
+	}
+
+	// Delete test organization unit
+	if smsAuthTestOU.ID != "" {
+		if err := testutils.DeleteOrganizationUnit(smsAuthTestOU.ID); err != nil {
+			ts.T().Logf("Failed to delete test organization unit during teardown: %v", err)
 		}
 	}
 }

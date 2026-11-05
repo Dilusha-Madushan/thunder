@@ -17,10 +17,19 @@ func NewDBSessionInterfaceMock(t interface {
 	mock.TestingT
 	Cleanup(func())
 }) *DBSessionInterfaceMock {
+	if helper, ok := t.(interface{ Helper() }); ok {
+		helper.Helper()
+	}
+
 	mock := &DBSessionInterfaceMock{}
 	mock.Mock.Test(t)
 
-	t.Cleanup(func() { mock.AssertExpectations(t) })
+	t.Cleanup(func() {
+		if helper, ok := t.(interface{ Helper() }); ok {
+			helper.Helper()
+		}
+		mock.AssertExpectations(t)
+	})
 
 	return mock
 }
@@ -40,7 +49,7 @@ func (_m *DBSessionInterfaceMock) EXPECT() *DBSessionInterfaceMock_Expecter {
 
 // QueryContext provides a mock function for the type DBSessionInterfaceMock
 func (_mock *DBSessionInterfaceMock) QueryContext(ctx context.Context, query model.DBQuery, args ...interface{}) ([]map[string]interface{}, error) {
-	var _ca []interface{}
+	var _ca []any
 	_ca = append(_ca, ctx, query)
 	_ca = append(_ca, args...)
 	ret := _mock.Called(_ca...)
@@ -78,9 +87,9 @@ type DBSessionInterfaceMock_QueryContext_Call struct {
 //   - ctx context.Context
 //   - query model.DBQuery
 //   - args ...interface{}
-func (_e *DBSessionInterfaceMock_Expecter) QueryContext(ctx interface{}, query interface{}, args ...interface{}) *DBSessionInterfaceMock_QueryContext_Call {
+func (_e *DBSessionInterfaceMock_Expecter) QueryContext(ctx any, query any, args ...any) *DBSessionInterfaceMock_QueryContext_Call {
 	return &DBSessionInterfaceMock_QueryContext_Call{Call: _e.mock.On("QueryContext",
-		append([]interface{}{ctx, query}, args...)...)}
+		append([]any{ctx, query}, args...)...)}
 }
 
 func (_c *DBSessionInterfaceMock_QueryContext_Call) Run(run func(ctx context.Context, query model.DBQuery, args ...interface{})) *DBSessionInterfaceMock_QueryContext_Call {

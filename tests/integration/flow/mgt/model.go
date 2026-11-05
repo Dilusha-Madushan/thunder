@@ -8,6 +8,7 @@ type FlowDefinition struct {
 	Handle   string           `json:"handle,omitempty"`
 	FlowType string           `json:"flowType"`
 	Nodes    []NodeDefinition `json:"nodes"`
+	OUID     string           `json:"ouId,omitempty"`
 }
 
 type CompleteFlowDefinition struct {
@@ -17,11 +18,13 @@ type CompleteFlowDefinition struct {
 	FlowType      string           `json:"flowType"`
 	ActiveVersion int              `json:"activeVersion"`
 	Nodes         []NodeDefinition `json:"nodes"`
+	OUID          string           `json:"ouId,omitempty"`
 	CreatedAt     string           `json:"createdAt"`
 	UpdatedAt     string           `json:"updatedAt"`
 }
 
 type BasicFlowDefinition struct {
+	OUID          string `json:"ouId,omitempty"`
 	ID            string `json:"id"`
 	FlowType      string `json:"flowType"`
 	Name          string `json:"name"`
@@ -86,30 +89,44 @@ type NodePosition struct {
 }
 
 type NodeDefinition struct {
-	ID         string                    `json:"id"`
-	Type       string                    `json:"type"`
-	Layout     *NodeLayout               `json:"layout,omitempty"`
-	Meta       interface{}               `json:"meta,omitempty"`
-	Inputs     []InputDefinition         `json:"inputs,omitempty"`
-	Actions    []ActionDefinition        `json:"actions,omitempty"`
-	Properties map[string]interface{}    `json:"properties,omitempty"`
-	Executor   *ExecutorDefinition       `json:"executor,omitempty"`
-	Flow       *FlowReferenceDefinition  `json:"flow,omitempty"`
-	OnSuccess  string                    `json:"onSuccess,omitempty"`
-	OnFailure  string                    `json:"onFailure,omitempty"`
-	OnSkip     string                    `json:"onSkip,omitempty"`
-	Condition  *ConditionDefinition      `json:"condition,omitempty"`
+	ID         string                   `json:"id"`
+	Type       string                   `json:"type"`
+	Layout     *NodeLayout              `json:"layout,omitempty"`
+	Meta       interface{}              `json:"meta,omitempty"`
+	Inputs     []InputDefinition        `json:"inputs,omitempty"`
+	Prompts    []PromptDefinition       `json:"prompts,omitempty"`
+	Actions    []ActionDefinition       `json:"actions,omitempty"`
+	Properties map[string]interface{}   `json:"properties,omitempty"`
+	Executor   *ExecutorDefinition      `json:"executor,omitempty"`
+	Flow       *FlowReferenceDefinition `json:"flow,omitempty"`
+	OnSuccess  string                   `json:"onSuccess,omitempty"`
+	OnFailure  string                   `json:"onFailure,omitempty"`
+	OnSkip     string                   `json:"onSkip,omitempty"`
+	Condition  *ConditionDefinition     `json:"condition,omitempty"`
 }
 
 type FlowReferenceDefinition struct {
 	Ref string `json:"ref"`
 }
 
+type ValidationRuleDefinition struct {
+	Type  string      `json:"type"`
+	Value interface{} `json:"value"`
+}
+
 type InputDefinition struct {
-	Ref        string `json:"ref,omitempty"`
-	Type       string `json:"type"`
-	Identifier string `json:"identifier"`
-	Required   bool   `json:"required"`
+	Ref          string                     `json:"ref,omitempty"`
+	Type         string                     `json:"type"`
+	Identifier   string                     `json:"identifier"`
+	Required     bool                       `json:"required"`
+	DefaultValue string                     `json:"defaultValue,omitempty"`
+	Constant     bool                       `json:"constant,omitempty"`
+	Validation   []ValidationRuleDefinition `json:"validation,omitempty"`
+}
+
+type PromptDefinition struct {
+	Inputs []InputDefinition `json:"inputs,omitempty"`
+	Action *ActionDefinition `json:"action,omitempty"`
 }
 
 type ActionDefinition struct {
@@ -118,7 +135,8 @@ type ActionDefinition struct {
 }
 
 type ExecutorDefinition struct {
-	Name string `json:"name"`
+	Name   string            `json:"name"`
+	Inputs []InputDefinition `json:"inputs,omitempty"`
 }
 
 type ConditionDefinition struct {

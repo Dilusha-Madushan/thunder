@@ -9,15 +9,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
+	"time"
 
 	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 
 	"github.com/thunder-id/thunderid/internal/agent/model"
+	authnprovidercm "github.com/thunder-id/thunderid/internal/authnprovider/common"
 	"github.com/thunder-id/thunderid/internal/cert"
 	"github.com/thunder-id/thunderid/internal/entity"
 	"github.com/thunder-id/thunderid/internal/entitytype"
+	"github.com/thunder-id/thunderid/internal/identitygovernance"
 	"github.com/thunder-id/thunderid/internal/inboundclient"
 	inboundmodel "github.com/thunder-id/thunderid/internal/inboundclient/model"
 	oauthutils "github.com/thunder-id/thunderid/internal/oauth/oauth2/utils"
@@ -25,7 +29,9 @@ import (
 	"github.com/thunder-id/thunderid/internal/role"
 	serverconst "github.com/thunder-id/thunderid/internal/system/constants"
 	declarativeresource "github.com/thunder-id/thunderid/internal/system/declarative_resource"
+	"github.com/thunder-id/thunderid/internal/system/filter"
 	"github.com/thunder-id/thunderid/internal/system/log"
+	"github.com/thunder-id/thunderid/internal/system/observability"
 	"github.com/thunder-id/thunderid/internal/system/resourcedependency"
 	"github.com/thunder-id/thunderid/internal/system/security"
 	"github.com/thunder-id/thunderid/internal/system/sysauthz"
@@ -40,6 +46,8 @@ type AgentServiceInterface interface {
 		*tidcommon.ServiceError)
 	GetAgentList(ctx context.Context, limit, offset int, filters map[string]interface{},
 		includeDisplay bool) (*model.AgentListResponse, *tidcommon.ServiceError)
+	GetAgentListByProject(ctx context.Context, projectID string, limit, offset int,
+		filters map[string]interface{}, includeDisplay bool) (*model.AgentListResponse, *tidcommon.ServiceError)
 	UpdateAgent(ctx context.Context, agentID string, req *model.UpdateAgentRequest) (
 		*model.AgentCompleteResponse, *tidcommon.ServiceError)
 	DeleteAgent(ctx context.Context, agentID string) *tidcommon.ServiceError
@@ -54,16 +62,28 @@ type AgentServiceInterface interface {
 	SetDependencyRegistry(r resourcedependency.Registry)
 }
 
+// projectOUResolver finds the organization unit that a resource scoped to a project belongs to.
+type projectOUResolver interface {
+	ResolveProjectOU(ctx context.Context, projectID, ouID string) (string, *tidcommon.ServiceError)
+}
+
 type agentService struct {
 	logger               *log.Logger
 	authzService         sysauthz.SystemAuthorizationServiceInterface
 	entityService        entity.EntityServiceInterface
+	governance           identitygovernance.IdentityGovernanceServiceInterface
 	inboundClientService inboundclient.InboundClientServiceInterface
 	ouService            oupkg.OrganizationUnitServiceInterface
 	dependencyRegistry   resourcedependency.Registry
 	roleService          role.RoleServiceInterface
 	valueCapturer        declarativeresource.ValueCapturer
 	entityTypeService    entitytype.EntityTypeServiceInterface
+	// transactioner spans the entity database, so an update's entity write and its lifespan change
+	// commit together.
+	transactioner    providers.Transactioner
+	observabilitySvc observability.ObservabilityServiceInterface
+	// projectResolver is nil on a deployment that serves no projects.
+	projectResolver projectOUResolver
 }
 
 func newAgentService(
@@ -72,18 +92,26 @@ func newAgentService(
 	inboundClientService inboundclient.InboundClientServiceInterface,
 	ouService oupkg.OrganizationUnitServiceInterface,
 	roleService role.RoleServiceInterface,
+	governance identitygovernance.IdentityGovernanceServiceInterface,
 	valueCapturer declarativeresource.ValueCapturer,
 	entityTypeService entitytype.EntityTypeServiceInterface,
+	transactioner providers.Transactioner,
+	observabilitySvc observability.ObservabilityServiceInterface,
+	projectResolver projectOUResolver,
 ) AgentServiceInterface {
 	return &agentService{
 		logger:               log.GetLogger().With(log.String(log.LoggerKeyComponentName, "AgentService")),
 		authzService:         authzService,
 		entityService:        entityService,
+		governance:           governance,
 		inboundClientService: inboundClientService,
 		ouService:            ouService,
 		roleService:          roleService,
 		valueCapturer:        valueCapturer,
 		entityTypeService:    entityTypeService,
+		transactioner:        transactioner,
+		observabilitySvc:     observabilitySvc,
+		projectResolver:      projectResolver,
 	}
 }
 
@@ -95,9 +123,19 @@ func (s *agentService) CreateAgent(ctx context.Context, agent *providers.Agent) 
 	}
 	normalizeLoginConsent(agent.LoginConsent)
 
+	if svcErr := applyGrantTypes(agent); svcErr != nil {
+		return nil, svcErr
+	}
+
 	// ValidateAgent resolves ouHandle to an OU ID, so the authz check runs after it to evaluate
 	// against the resolved target OU.
 	clientID, clientSecret, _, svcErr := s.ValidateAgent(ctx, agent, "")
+	if svcErr != nil {
+		return nil, svcErr
+	}
+
+	now := time.Now()
+	validUntil, svcErr := resolveRequestedValidUntil(agent.ValidUntil, now, isLifespanRestore(ctx))
 	if svcErr != nil {
 		return nil, svcErr
 	}
@@ -125,7 +163,7 @@ func (s *agentService) CreateAgent(ctx context.Context, agent *providers.Agent) 
 	}
 
 	e, sysCredsJSON, buildErr := buildAgentEntity(agentID, agent.Type, agent.OUID, agent.Attributes,
-		agent.Description, owner, clientID, clientSecret)
+		agent.Description, owner, clientID, clientSecret, validUntil.String())
 	if buildErr != nil {
 		s.logger.Error(ctx, "Failed to build agent entity", log.Error(buildErr))
 		return nil, &tidcommon.InternalServerError
@@ -169,8 +207,10 @@ func (s *agentService) CreateAgent(ctx context.Context, agent *providers.Agent) 
 		agent.ThemeID, agent.LayoutID, assertion, loginConsent,
 		agent.AllowedUserTypes, agent.AllowedAgentTypes, inboundConfigs)
 	resp.OUID = agent.OUID
+	resp.ValidUntil, resp.Lifespan = lifespanView(&validUntil, now)
 	s.populateOUHandleForComplete(ctx, resp)
 	s.captureValues(ctx, resp)
+	s.publishLifespanSet(ctx, agentID, validUntil)
 	return resp, nil
 }
 
@@ -213,7 +253,8 @@ func (s *agentService) GetAgent(ctx context.Context, agentID string, includeDisp
 	return resp, nil
 }
 
-// GetAgentList returns a paginated list of agents.
+// GetAgentList returns a paginated list of agents. An organization unit filter lists the agents that
+// unit owns, followed by the ones shared into it.
 func (s *agentService) GetAgentList(ctx context.Context, limit, offset int,
 	filters map[string]interface{}, includeDisplay bool) (
 	*model.AgentListResponse, *tidcommon.ServiceError) {
@@ -224,7 +265,69 @@ func (s *agentService) GetAgentList(ctx context.Context, limit, offset int,
 		limit = 30
 	}
 
-	// Resolve the set of organization units the caller is authorized to list agents from.
+	listQuery := sysutils.FilterQueryParam(filters) + sysutils.DisplayQueryParam(includeDisplay)
+	ouID, filters, err := filter.SplitOUIDFilter(filters)
+	if err != nil {
+		return nil, &ErrorInvalidFilter
+	}
+	// Other conditions cannot narrow the agents shared into an organization unit yet, so they are
+	// refused alongside one rather than applied to the owned agents only.
+	if ouID != "" && len(filters) > 0 {
+		return nil, &ErrorInvalidFilter
+	}
+
+	if ouID != "" {
+		return s.listAccessibleAgentsInOU(ctx, ouID, limit, offset, includeDisplay, listQuery)
+	}
+
+	accessible, svcErr := s.getAccessibleOUs(ctx)
+	if svcErr != nil {
+		return nil, svcErr
+	}
+
+	// Unfiltered path: system-level caller — return all agents.
+	if accessible.AllAllowed {
+		return s.listAllAgents(ctx, limit, offset, filters, includeDisplay, listQuery)
+	}
+
+	// Filtered path: return agents belonging to the accessible OUs.
+	return s.listAgentsByOUIDs(ctx, accessible.IDs, limit, offset, filters, includeDisplay, listQuery)
+}
+
+// GetAgentListByProject returns a paginated list of the agents an organization unit of the project
+// owns, followed by the ones shared into it. Without an organization unit filter it lists the
+// project's root organization unit. A project that does not exist, or an organization unit outside
+// it, has none.
+func (s *agentService) GetAgentListByProject(ctx context.Context, projectID string, limit, offset int,
+	filters map[string]interface{}, includeDisplay bool) (*model.AgentListResponse, *tidcommon.ServiceError) {
+	if svcErr := validatePaginationParams(limit, offset); svcErr != nil {
+		return nil, svcErr
+	}
+	if limit == 0 {
+		limit = 30
+	}
+
+	listQuery := "&" + projectIDQueryParam + "=" + url.QueryEscape(projectID) +
+		sysutils.FilterQueryParam(filters) + sysutils.DisplayQueryParam(includeDisplay)
+	ouID, rest, err := filter.SplitOUIDFilter(filters)
+	if err != nil || len(rest) > 0 {
+		return nil, &ErrorInvalidFilter
+	}
+
+	ouID, svcErr := s.resolveProjectOU(ctx, projectID, ouID)
+	if svcErr != nil {
+		if svcErr.Type == tidcommon.ClientErrorType {
+			return s.buildListResponse(ctx, []providers.Entity{}, 0, 0, limit, offset, includeDisplay,
+				listQuery), nil
+		}
+		return nil, svcErr
+	}
+	return s.listAccessibleAgentsInOU(ctx, ouID, limit, offset, includeDisplay, listQuery)
+}
+
+// getAccessibleOUs resolves the set of organization units the caller is authorized to list agents from.
+func (s *agentService) getAccessibleOUs(ctx context.Context) (
+	*sysauthz.AccessibleResources, *tidcommon.ServiceError) {
 	accessible, svcErr := s.authzService.GetAccessibleResources(
 		ctx, security.ActionListAgents, security.ResourceTypeOU)
 	if svcErr != nil {
@@ -232,19 +335,47 @@ func (s *agentService) GetAgentList(ctx context.Context, limit, offset int,
 			log.Any("error", svcErr))
 		return nil, &tidcommon.InternalServerError
 	}
+	return accessible, nil
+}
 
-	// Unfiltered path: system-level caller — return all agents.
-	if accessible.AllAllowed {
-		return s.listAllAgents(ctx, limit, offset, filters, includeDisplay)
+// listAccessibleAgentsInOU lists the agents of an organization unit the caller can list agents from.
+// An organization unit the caller cannot list agents from has none to show.
+func (s *agentService) listAccessibleAgentsInOU(ctx context.Context, ouID string, limit, offset int,
+	includeDisplay bool, listQuery string) (*model.AgentListResponse, *tidcommon.ServiceError) {
+	accessible, svcErr := s.getAccessibleOUs(ctx)
+	if svcErr != nil {
+		return nil, svcErr
+	}
+	if !accessible.AllAllowed && !slices.Contains(accessible.IDs, ouID) {
+		return s.buildListResponse(ctx, []providers.Entity{}, 0, 0, limit, offset, includeDisplay,
+			listQuery), nil
+	}
+	return s.listAgentsInOU(ctx, ouID, limit, offset, includeDisplay, listQuery)
+}
+
+// listAgentsInOU lists the agents an organization unit owns, followed by the ones shared into it.
+func (s *agentService) listAgentsInOU(ctx context.Context, ouID string, limit, offset int,
+	includeDisplay bool, listQuery string) (*model.AgentListResponse, *tidcommon.ServiceError) {
+	page, err := s.entityService.GetEntityPageInOU(
+		ctx, providers.EntityCategoryAgent, ouID, entity.OUEntityScopeAll, limit, offset, nil)
+	if err != nil {
+		s.logger.Error(ctx, "Failed to list agents in organization unit",
+			log.String("ouID", ouID), log.Error(err))
+		return nil, &tidcommon.InternalServerError
 	}
 
-	// Filtered path: return agents belonging to the accessible OUs.
-	return s.listAgentsByOUIDs(ctx, accessible.IDs, limit, offset, filters, includeDisplay)
+	// A shared agent is listed under the organization unit it is shared into, not the one owning it.
+	for i := range page.Shared {
+		page.Shared[i].OUID = ouID
+		page.Shared[i].OUHandle = ""
+	}
+	return s.buildListResponse(ctx, slices.Concat(page.Owned, page.Shared), len(page.Owned),
+		page.TotalResults, limit, offset, includeDisplay, listQuery), nil
 }
 
 // listAllAgents retrieves agents without OU filtering.
 func (s *agentService) listAllAgents(ctx context.Context, limit, offset int,
-	filters map[string]interface{}, includeDisplay bool) (
+	filters map[string]interface{}, includeDisplay bool, listQuery string) (
 	*model.AgentListResponse, *tidcommon.ServiceError) {
 	totalCount, err := s.entityService.GetEntityListCount(ctx, providers.EntityCategoryAgent, filters)
 	if err != nil {
@@ -258,16 +389,18 @@ func (s *agentService) listAllAgents(ctx context.Context, limit, offset int,
 		return nil, &tidcommon.InternalServerError
 	}
 
-	return s.buildListResponse(ctx, entities, totalCount, limit, offset, includeDisplay), nil
+	return s.buildListResponse(ctx, entities, len(entities), totalCount, limit, offset, includeDisplay,
+		listQuery), nil
 }
 
 // listAgentsByOUIDs retrieves agents scoped to the given organization unit IDs. The OU filter is
 // applied at the store layer so that page sizes and total counts remain correct.
 func (s *agentService) listAgentsByOUIDs(ctx context.Context, ouIDs []string, limit, offset int,
-	filters map[string]interface{}, includeDisplay bool) (
+	filters map[string]interface{}, includeDisplay bool, listQuery string) (
 	*model.AgentListResponse, *tidcommon.ServiceError) {
 	if len(ouIDs) == 0 {
-		return s.buildListResponse(ctx, []providers.Entity{}, 0, limit, offset, includeDisplay), nil
+		return s.buildListResponse(ctx, []providers.Entity{}, 0, 0, limit, offset, includeDisplay,
+			listQuery), nil
 	}
 
 	totalCount, err := s.entityService.GetEntityListCountByOUIDs(
@@ -284,7 +417,8 @@ func (s *agentService) listAgentsByOUIDs(ctx context.Context, ouIDs []string, li
 		return nil, &tidcommon.InternalServerError
 	}
 
-	return s.buildListResponse(ctx, entities, totalCount, limit, offset, includeDisplay), nil
+	return s.buildListResponse(ctx, entities, len(entities), totalCount, limit, offset, includeDisplay,
+		listQuery), nil
 }
 
 // UpdateAgent applies a full-replacement update to the agent.
@@ -302,7 +436,7 @@ func (s *agentService) UpdateAgent(ctx context.Context, agentID string,
 	if svcErr := validateLogoURL(req.LogoURL); svcErr != nil {
 		return nil, svcErr
 	}
-	existing, err := s.entityService.GetEntity(ctx, agentID)
+	existing, err := s.entityService.GetEntityProfile(ctx, agentID)
 	if err != nil {
 		if errors.Is(err, entity.ErrEntityNotFound) {
 			return nil, &ErrorAgentNotFound
@@ -314,13 +448,29 @@ func (s *agentService) UpdateAgent(ctx context.Context, agentID string,
 	if existing.Category != providers.EntityCategoryAgent {
 		return nil, &ErrorAgentNotFound
 	}
+
+	now := time.Now()
+	lifespan := newLifespanUpdate(existing.SystemAttributes, req.ValidUntil)
+
 	if existing.IsReadOnly {
+		s.refuseLifespanUpdate(ctx, agentID, lifespan, lifespanFailureReadOnly)
 		return nil, &ErrorCannotModifyDeclarativeResource
+	}
+
+	// fail publishes a requested lifespan change as failed with the update.
+	fail := func(svcErr *tidcommon.ServiceError) (*model.AgentCompleteResponse, *tidcommon.ServiceError) {
+		s.failLifespanUpdate(ctx, agentID, lifespan, svcErr)
+		return nil, svcErr
 	}
 
 	// Check authz using the existing agent's OU ID.
 	if svcErr := s.checkAgentAccess(
 		ctx, security.ActionUpdateAgent, existing.OUID, agentID); svcErr != nil {
+		return fail(svcErr)
+	}
+
+	// The lifespan is checked before anything is written, so a refused change applies no field.
+	if svcErr := s.checkLifespanUpdate(ctx, agentID, lifespan, now); svcErr != nil {
 		return nil, svcErr
 	}
 
@@ -328,12 +478,18 @@ func (s *agentService) UpdateAgent(ctx context.Context, agentID string,
 
 	normalizeLoginConsent(req.LoginConsent)
 
+	grantedConfigs, svcErr := resolveGrantTypes(req.InboundAuthConfig, req.Delegated)
+	if svcErr != nil {
+		return fail(svcErr)
+	}
+	req.InboundAuthConfig = grantedConfigs
+
 	var existingOAuthMethod string
 	existingOAuth, oauthErr := s.inboundClientService.GetOAuthProfileByEntityID(ctx, agentID)
 	if oauthErr != nil && !errors.Is(oauthErr, inboundclient.ErrInboundClientNotFound) {
 		s.logger.Error(ctx, "Failed to load existing OAuth profile",
 			log.String("agentID", agentID), log.Error(oauthErr))
-		return nil, &tidcommon.InternalServerError
+		return fail(&tidcommon.InternalServerError)
 	}
 	if existingOAuth != nil {
 		existingOAuthMethod = existingOAuth.TokenEndpointAuthMethod
@@ -342,17 +498,17 @@ func (s *agentService) UpdateAgent(ctx context.Context, agentID string,
 	clientID, clientSecret, svcErr := s.resolveOAuthCredentials(
 		ctx, req.InboundAuthConfig, currentClientID, existingOAuthMethod)
 	if svcErr != nil {
-		return nil, svcErr
+		return fail(svcErr)
 	}
 
 	owner, svcErr := s.resolveUpdateOwner(ctx, req.Owner, currentOwner)
 	if svcErr != nil {
-		return nil, svcErr
+		return fail(svcErr)
 	}
 
 	ouID, svcErr := s.resolveUpdateOUID(ctx, req, existing.OUID)
 	if svcErr != nil {
-		return nil, svcErr
+		return fail(svcErr)
 	}
 
 	// If the agent is moving to a different OU, require authorization for the destination OU as
@@ -361,14 +517,14 @@ func (s *agentService) UpdateAgent(ctx context.Context, agentID string,
 	if ouID != existing.OUID {
 		if svcErr := s.checkAgentAccess(
 			ctx, security.ActionUpdateAgent, ouID, agentID); svcErr != nil {
-			return nil, svcErr
+			return fail(svcErr)
 		}
 	}
 
 	resolvedClient, resolvedOAuth, svcErr := s.reconcileInboundForUpdate(
 		ctx, agentID, req, clientID, clientSecret)
 	if svcErr != nil {
-		return nil, svcErr
+		return fail(svcErr)
 	}
 
 	if resolvedOAuth == nil {
@@ -384,20 +540,17 @@ func (s *agentService) UpdateAgent(ctx context.Context, agentID string,
 		OUID:       ouID,
 		Attributes: req.Attributes,
 	}
-	sysAttrsJSON, marshalErr := buildSystemAttributesJSON(req.Description, owner, clientID)
-	if marshalErr != nil {
-		s.logger.Error(ctx, "Failed to build system attributes for update", log.Error(marshalErr))
-		return nil, &tidcommon.InternalServerError
-	}
-	updatedEntity.SystemAttributes = sysAttrsJSON
+	updatedEntity.SystemAttributes = buildSystemAttributesJSON(req.Description, owner, clientID, "")
 
-	if _, err := s.entityService.UpdateEntity(ctx, agentID, updatedEntity); err != nil {
+	updated, err := s.writeAgentUpdate(ctx, agentID, updatedEntity, lifespan)
+	if err != nil {
 		if mapped := mapEntityError(err); mapped != nil {
-			return nil, mapped
+			return fail(mapped)
 		}
 		s.logger.Error(ctx, "Failed to update agent entity", log.String("agentID", agentID), log.Error(err))
-		return nil, &tidcommon.InternalServerError
+		return fail(&tidcommon.InternalServerError)
 	}
+	currentValidUntil := s.completeLifespanUpdate(ctx, agentID, lifespan, now)
 
 	if clientSecret != "" {
 		sysCredsJSON, credErr := buildSystemCredentialsJSON(clientSecret)
@@ -428,6 +581,10 @@ func (s *agentService) UpdateAgent(ctx context.Context, agentID string,
 		req.ThemeID, req.LayoutID, assertion, loginConsent,
 		req.AllowedUserTypes, req.AllowedAgentTypes, inboundConfigs)
 	resp.OUID = ouID
+	access := s.governance.ReadEntityAccess(ctx, *updated)
+	resp.Status = &access.Status
+	resp.LastLoginAt = access.LastLoginAt
+	resp.ValidUntil, resp.Lifespan = lifespanView(currentValidUntil, now)
 	s.populateOUHandleForComplete(ctx, resp)
 	s.captureValues(ctx, resp)
 	return resp, nil
@@ -445,7 +602,7 @@ func (s *agentService) DeleteAgent(ctx context.Context, agentID string) *tidcomm
 		return &ErrorMissingAgentID
 	}
 
-	existing, err := s.entityService.GetEntity(ctx, agentID)
+	existing, err := s.entityService.GetEntityProfile(ctx, agentID)
 	if err != nil {
 		if errors.Is(err, entity.ErrEntityNotFound) {
 			return &ErrorAgentNotFound
@@ -547,14 +704,13 @@ func (s *agentService) GetResourceDependencies(
 	return usages, nil
 }
 
-// getAgentsByOwner returns the agents that list the given user as their owner. The owner is stored
-// in the agent entity's system attributes, which the entity list filter does not search (it only
-// matches the public attributes column), so agents are listed and matched on owner in memory. The
-// number of agents scanned is bounded by MaxCompositeStoreRecords.
+// getAgentsByOwner returns the agents that list the given user as their owner, found through the owner
+// in the agents' system attributes. The number of agents returned is bounded by MaxCompositeStoreRecords.
 func (s *agentService) getAgentsByOwner(
 	ctx context.Context, ownerID string) ([]resourcedependency.ResourceDependency, error) {
-	entities, err := s.entityService.GetEntityList(
-		ctx, providers.EntityCategoryAgent, serverconst.MaxCompositeStoreRecords, 0, nil)
+	entities, err := s.entityService.GetEntityListBySystemAttributes(ctx, providers.EntityCategoryAgent,
+		entity.SystemAttributeQuery{SystemAttributes: map[string]interface{}{fieldOwner: ownerID}},
+		serverconst.MaxCompositeStoreRecords, 0)
 	if err != nil {
 		s.logger.Error(ctx, "Failed to list agents", log.Error(err))
 		return nil, err
@@ -563,13 +719,6 @@ func (s *agentService) getAgentsByOwner(
 	displayPaths := s.resolveDisplayPaths(ctx, entityTypes(entities))
 	usages := make([]resourcedependency.ResourceDependency, 0)
 	for _, e := range entities {
-		if e.Category != providers.EntityCategoryAgent {
-			continue
-		}
-		_, owner, _ := readSystemAttributes(e.SystemAttributes)
-		if owner != ownerID {
-			continue
-		}
 		// An agent cannot exist without its owner, so ownership blocks the owner's deletion.
 		usages = append(usages, resourcedependency.ResourceDependency{
 			ResourceType:     resourcedependency.ResourceTypeAgent,
@@ -594,7 +743,7 @@ func (s *agentService) GetAgentGroups(ctx context.Context, agentID string, limit
 		limit = 30
 	}
 
-	existing, err := s.entityService.GetEntity(ctx, agentID)
+	existing, err := s.entityService.GetEntityProfile(ctx, agentID)
 	if err != nil {
 		if errors.Is(err, entity.ErrEntityNotFound) {
 			return nil, &ErrorAgentNotFound
@@ -656,7 +805,7 @@ func (s *agentService) GetAgentRoles(ctx context.Context, agentID string, limit,
 		limit = 30
 	}
 
-	existing, err := s.entityService.GetEntity(ctx, agentID)
+	existing, err := s.entityService.GetEntityProfile(ctx, agentID)
 	if err != nil {
 		if errors.Is(err, entity.ErrEntityNotFound) {
 			return nil, &ErrorAgentNotFound
@@ -695,7 +844,7 @@ func (s *agentService) GetAgentRoles(ctx context.Context, agentID string, limit,
 		}
 	}
 
-	roles, svcErr := s.roleService.GetUserRoles(ctx, agentID, groupIDs)
+	roles, svcErr := s.roleService.GetUserRoles(ctx, agentID, groupIDs, "")
 	if svcErr != nil {
 		s.logger.Error(ctx, "Failed to get agent roles", log.String("agentID", agentID))
 		return nil, svcErr
@@ -745,6 +894,15 @@ func (s *agentService) ValidateAgent(ctx context.Context, agent *providers.Agent
 			return "", "", inboundmodel.InboundClient{}, &tidcommon.InternalServerError
 		}
 		agent.OUID = ou.ID
+	}
+	// A project places the agent in its root organization unit, or checks that the one named
+	// belongs to it.
+	if agent.ProjectID != "" {
+		ouID, svcErr := s.resolveProjectOU(ctx, agent.ProjectID, agent.OUID)
+		if svcErr != nil {
+			return "", "", inboundmodel.InboundClient{}, svcErr
+		}
+		agent.OUID = ouID
 	}
 	if svcErr := s.validateOUExists(ctx, agent.OUID); svcErr != nil {
 		return "", "", inboundmodel.InboundClient{}, svcErr
@@ -853,6 +1011,32 @@ func (s *agentService) validateOUExists(ctx context.Context, ouID string) *tidco
 	return nil
 }
 
+// resolveProjectOU returns the organization unit of the project that an agent belongs to: the
+// project's root organization unit when ouID is empty, or ouID when it is in the project. It returns
+// ErrorInvalidProject when no such project exists, ErrorOUNotInProject when the organization unit is
+// outside the project, and ErrorOrganizationUnitNotFound when the organization unit does not exist.
+func (s *agentService) resolveProjectOU(
+	ctx context.Context, projectID, ouID string) (string, *tidcommon.ServiceError) {
+	if projectID == "" || s.projectResolver == nil {
+		return "", &ErrorInvalidProject
+	}
+	resolved, svcErr := s.projectResolver.ResolveProjectOU(ctx, projectID, ouID)
+	if svcErr == nil {
+		return resolved, nil
+	}
+	if svcErr.Type != tidcommon.ClientErrorType {
+		return "", &tidcommon.InternalServerError
+	}
+	switch svcErr.Code {
+	case projectNotFoundErrorCode:
+		return "", &ErrorInvalidProject
+	case ouNotInProjectErrorCode:
+		return "", &ErrorOUNotInProject
+	default:
+		return "", &ErrorOrganizationUnitNotFound
+	}
+}
+
 // resolveUpdateOwner picks the effective owner for an update — either the requested owner or the
 // existing one — and validates it exists when the owner is changing.
 func (s *agentService) resolveUpdateOUID(
@@ -871,12 +1055,15 @@ func (s *agentService) resolveUpdateOUID(
 	}
 	ouID := req.OUID
 	if ouID == "" {
-		return existingOUID, nil
-	}
-	if ouID != existingOUID {
+		ouID = existingOUID
+	} else if ouID != existingOUID {
 		if svcErr := s.validateOUExists(ctx, ouID); svcErr != nil {
 			return "", svcErr
 		}
+	}
+	// A project checks that the agent stays in it; it never moves the agent on its own.
+	if req.ProjectID != "" {
+		return s.resolveProjectOU(ctx, req.ProjectID, ouID)
 	}
 	return ouID, nil
 }
@@ -901,7 +1088,7 @@ func (s *agentService) validateOwnerExists(ctx context.Context, ownerID string) 
 	if ownerID == "" {
 		return nil
 	}
-	_, err := s.entityService.GetEntity(ctx, ownerID)
+	_, err := s.entityService.GetEntityProfile(ctx, ownerID)
 	if err != nil {
 		if errors.Is(err, entity.ErrEntityNotFound) {
 			return &ErrorOwnerNotFound
@@ -1088,6 +1275,7 @@ func (s *agentService) composeGetResponse(ctx context.Context, e *providers.Enti
 	*model.AgentGetResponse, *tidcommon.ServiceError) {
 	description, owner, clientID := readSystemAttributes(e.SystemAttributes)
 
+	access := s.governance.ReadEntityAccess(ctx, *e)
 	resp := &model.AgentGetResponse{
 		ID:          e.ID,
 		OUID:        e.OUID,
@@ -1097,7 +1285,10 @@ func (s *agentService) composeGetResponse(ctx context.Context, e *providers.Enti
 		Owner:       owner,
 		ClientID:    clientID,
 		Attributes:  e.Attributes,
+		Status:      &access.Status,
+		LastLoginAt: access.LastLoginAt,
 	}
+	resp.ValidUntil, resp.Lifespan = lifespanView(storedLifespanEnd(e.SystemAttributes), time.Now())
 
 	inbound, err := s.inboundClientService.GetInboundClientByEntityID(ctx, e.ID)
 	if err != nil {
@@ -1150,13 +1341,19 @@ func (s *agentService) composeGetResponse(ctx context.Context, e *providers.Enti
 }
 
 // buildListResponse builds the paged agent list response from a slice of entities and pagination metadata.
+// The first ownedCount entities are owned by the listed organization unit and the rest are shared into it.
 func (s *agentService) buildListResponse(ctx context.Context, entities []providers.Entity,
-	totalCount, limit, offset int, includeDisplay bool) *model.AgentListResponse {
+	ownedCount, totalCount, limit, offset int, includeDisplay bool, listQuery string) *model.AgentListResponse {
 	logoByID := s.agentLogoMap(ctx, entities)
+	// One read for the page, so the policy resolves once.
+	reads := s.governance.ReadAccess(ctx, entities)
 	agents := make([]model.BasicAgentResponse, 0, len(entities))
+	now := time.Now()
 	for i := range entities {
 		e := &entities[i]
 		description, owner, clientID := readSystemAttributes(e.SystemAttributes)
+		owned := i < ownedCount
+		validUntil, lifespan := lifespanView(storedLifespanEnd(e.SystemAttributes), now)
 		agents = append(agents, model.BasicAgentResponse{
 			ID:          e.ID,
 			OUID:        e.OUID,
@@ -1167,7 +1364,14 @@ func (s *agentService) buildListResponse(ctx context.Context, entities []provide
 			ClientID:    clientID,
 			Owner:       owner,
 			Attributes:  e.Attributes,
-			IsReadOnly:  e.IsReadOnly,
+			ValidUntil:  validUntil,
+			Lifespan:    lifespan,
+			// The organization unit an agent is shared into cannot change it until overlay rules are
+			// supported for agents.
+			IsReadOnly:  e.IsReadOnly || !owned,
+			Status:      &reads[i].Status,
+			LastLoginAt: reads[i].LastLoginAt,
+			IsOwnedByOU: new(owned),
 		})
 	}
 
@@ -1180,13 +1384,12 @@ func (s *agentService) buildListResponse(ctx context.Context, entities []provide
 		s.populateOUHandlesForList(ctx, agents)
 	}
 
-	displayQuery := sysutils.DisplayQueryParam(includeDisplay)
 	return &model.AgentListResponse{
 		TotalResults: totalCount,
 		StartIndex:   offset + 1,
 		Count:        len(agents),
 		Agents:       agents,
-		Links:        sysutils.BuildPaginationLinks(agentBasePath, limit, offset, totalCount, displayQuery),
+		Links:        sysutils.BuildPaginationLinks(agentBasePath, limit, offset, totalCount, listQuery),
 	}
 }
 
@@ -1365,13 +1568,9 @@ func requiresClientSecret(cfg *providers.OAuthConfigWithSecret) bool {
 }
 
 // buildAgentEntity constructs the entity row and system credentials JSON for a new or updated agent.
+// validUntil is the stored lifespan end; empty leaves it out, for writes that carry the stored value.
 func buildAgentEntity(agentID, agentType, ouID string, attributes json.RawMessage,
-	description, owner, clientID, clientSecret string) (*providers.Entity, json.RawMessage, error) {
-	sysAttrsJSON, err := buildSystemAttributesJSON(description, owner, clientID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to build agent system attributes: %w", err)
-	}
-
+	description, owner, clientID, clientSecret, validUntil string) (*providers.Entity, json.RawMessage, error) {
 	sysCredsJSON, err := buildSystemCredentialsJSON(clientSecret)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build agent system credentials: %w", err)
@@ -1384,13 +1583,14 @@ func buildAgentEntity(agentID, agentType, ouID string, attributes json.RawMessag
 		State:            providers.EntityStateActive,
 		OUID:             ouID,
 		Attributes:       attributes,
-		SystemAttributes: sysAttrsJSON,
+		SystemAttributes: buildSystemAttributesJSON(description, owner, clientID, validUntil),
 	}
 	return e, sysCredsJSON, nil
 }
 
-// buildSystemAttributesJSON serializes agent description, owner, and clientID into the systemAttributes blob.
-func buildSystemAttributesJSON(description, owner, clientID string) (json.RawMessage, error) {
+// buildSystemAttributesJSON serializes agent description, owner, clientID, and validUntil into the
+// systemAttributes blob. Marshaling a map of strings cannot fail.
+func buildSystemAttributesJSON(description, owner, clientID, validUntil string) json.RawMessage {
 	attrs := map[string]interface{}{}
 	if description != "" {
 		attrs[fieldDescription] = description
@@ -1401,10 +1601,14 @@ func buildSystemAttributesJSON(description, owner, clientID string) (json.RawMes
 	if clientID != "" {
 		attrs[fieldClientID] = clientID
 	}
-	if len(attrs) == 0 {
-		return nil, nil
+	if validUntil != "" {
+		attrs[authnprovidercm.SystemAttrValidUntil] = validUntil
 	}
-	return json.Marshal(attrs)
+	if len(attrs) == 0 {
+		return nil
+	}
+	raw, _ := json.Marshal(attrs)
+	return raw
 }
 
 // buildSystemCredentialsJSON serializes the client secret into the systemCredentials JSON blob; returns nil when empty.
@@ -1775,6 +1979,18 @@ func translateOAuthValidationError(err error) *tidcommon.ServiceError {
 			Key:          "error.agentservice.response_types_require_authorization_code_description",
 			DefaultValue: "Response types can only be configured with the authorization_code grant type",
 		})
+	case errors.Is(err, inboundclient.ErrOAuthClientIDJAGRequiresTokenExchange):
+		return tidcommon.CustomServiceError(ErrorInvalidOAuthConfiguration, tidcommon.I18nMessage{
+			Key: "error.agentservice.idjag_requires_token_exchange_description",
+			DefaultValue: "ID-JAG configuration requires the " +
+				"urn:ietf:params:oauth:grant-type:token-exchange grant type",
+		})
+	case errors.Is(err, inboundclient.ErrOAuthClientIDJAGRequiresAllowedAudience):
+		return tidcommon.CustomServiceError(ErrorInvalidOAuthConfiguration, tidcommon.I18nMessage{
+			Key: "error.agentservice.idjag_requires_allowed_audience_description",
+			DefaultValue: "ID-JAG configuration requires at least one allowed audience, and allowed " +
+				"audiences must not be blank",
+		})
 
 	// OAuth: token endpoint auth method
 	case errors.Is(err, inboundclient.ErrOAuthInvalidTokenEndpointAuthMethod):
@@ -1808,6 +2024,18 @@ func translateOAuthValidationError(err error) *tidcommon.ServiceError {
 		return tidcommon.CustomServiceError(ErrorInvalidOAuthConfiguration, tidcommon.I18nMessage{
 			Key:          "error.agentservice.client_credentials_cannot_use_none_auth_description",
 			DefaultValue: "client_credentials grant type cannot use 'none' authentication method",
+		})
+	case errors.Is(err, inboundclient.ErrOAuthClientJWTBearerCannotUseNoneAuth):
+		return tidcommon.CustomServiceError(ErrorInvalidOAuthConfiguration, tidcommon.I18nMessage{
+			Key: "error.agentservice.jwt_bearer_cannot_use_none_auth_description",
+			DefaultValue: "jwt-bearer grant type requires a confidential client and cannot use 'none' " +
+				"token endpoint authentication method",
+		})
+	case errors.Is(err, inboundclient.ErrOAuthClientIDJAGCannotUseNoneAuth):
+		return tidcommon.CustomServiceError(ErrorInvalidOAuthConfiguration, tidcommon.I18nMessage{
+			Key: "error.agentservice.idjag_cannot_use_none_auth_description",
+			DefaultValue: "ID-JAG configuration requires a confidential client and cannot use 'none' " +
+				"token endpoint authentication method",
 		})
 
 	// OAuth: public client

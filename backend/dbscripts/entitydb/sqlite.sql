@@ -15,13 +15,26 @@ CREATE TABLE "ORGANIZATION_UNIT" (
 -- Composite index for handle-based OU lookups (queryGetRootOrganizationUnitByHandle, queryGetOrganizationUnitByHandle)
 CREATE INDEX idx_ou_handle_parent ON "ORGANIZATION_UNIT" (DEPLOYMENT_ID, HANDLE, PARENT_ID);
 
+-- Table to store Projects. A project holds only its ID and the root organization unit that backs it;
+-- its handle, name and description are the root organization unit's.
+CREATE TABLE "PROJECT" (
+    DEPLOYMENT_ID   VARCHAR(255) NOT NULL,
+    ID              VARCHAR(36)  NOT NULL,
+    ROOT_OU_ID      VARCHAR(36)  NOT NULL,
+    CREATED_AT      TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (DEPLOYMENT_ID, ID),
+    FOREIGN KEY (DEPLOYMENT_ID, ROOT_OU_ID) REFERENCES "ORGANIZATION_UNIT" (DEPLOYMENT_ID, OU_ID)
+);
+
+-- Each root organization unit backs at most one project; also serves lookups by root OU.
+CREATE UNIQUE INDEX idx_project_root_ou ON "PROJECT" (DEPLOYMENT_ID, ROOT_OU_ID);
+
 -- Table to store Entities (unified identity principals: users, applications, agents)
 CREATE TABLE "ENTITY" (
     DEPLOYMENT_ID       VARCHAR(255) NOT NULL,
     ID                  VARCHAR(36) NOT NULL,
     CATEGORY            VARCHAR(50)  NOT NULL,
     TYPE                VARCHAR(100) NOT NULL,
-    STATE               VARCHAR(50)  NOT NULL,
     OU_ID               VARCHAR(36)  NOT NULL,
     ATTRIBUTES          TEXT,
     SYSTEM_ATTRIBUTES   TEXT,
@@ -37,6 +50,9 @@ CREATE INDEX idx_entity_category_deployment ON "ENTITY" (DEPLOYMENT_ID, CATEGORY
 
 -- Composite index for OU-based entity listing
 CREATE INDEX idx_entity_ou_deployment ON "ENTITY" (DEPLOYMENT_ID, OU_ID);
+
+-- Expression index for looking up agents by their owner
+CREATE INDEX idx_entity_owner ON "ENTITY" (DEPLOYMENT_ID, json_extract(SYSTEM_ATTRIBUTES, '$.owner'));
 
 -- Table to store Groups
 CREATE TABLE "GROUP" (

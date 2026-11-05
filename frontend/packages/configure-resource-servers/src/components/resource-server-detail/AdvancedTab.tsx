@@ -17,6 +17,8 @@ interface AdvancedTabProps {
   identifier: string;
   authorizationEngine: AuthorizationEngine;
   pdpConnectionId: string;
+  /** Whether the edited identifier fails the MCP rule, which shows the field in an error state. */
+  isIdentifierInvalid?: boolean;
   onIdentifierChange: (value: string) => void;
   onAuthorizationEngineChange: (value: AuthorizationEngine) => void;
   onPDPConnectionChange: (value: string) => void;
@@ -27,6 +29,7 @@ export default function AdvancedTab({
   identifier,
   authorizationEngine,
   pdpConnectionId,
+  isIdentifierInvalid = false,
   onIdentifierChange,
   onAuthorizationEngineChange,
   onPDPConnectionChange,
@@ -59,35 +62,38 @@ export default function AdvancedTab({
               )
         }
       >
-        <FormControl fullWidth>
-          <FormLabel htmlFor="resource-server-identifier">
-            {t('resourceServers:edit.advanced.identifier.label', 'Identifier (Audience)')}
-          </FormLabel>
-          <TextField
-            id="resource-server-identifier"
-            value={identifier}
-            onChange={(e) => onIdentifierChange(e.target.value)}
-            fullWidth
-            size="small"
-            placeholder={
-              resourceServer.type === 'MCP'
-                ? t('resourceServers:edit.advanced.identifier.placeholderMcp', 'https://mcp.example.com')
-                : t('resourceServers:edit.advanced.identifier.placeholder', 'https://api.example.com')
-            }
-            helperText={
-              resourceServer.type === 'MCP'
+        <TextField
+          labelPlacement="top"
+          label={t('resourceServers:edit.advanced.identifier.label', 'Identifier (audience)')}
+          id="resource-server-identifier"
+          value={identifier}
+          onChange={(e) => onIdentifierChange(e.target.value)}
+          fullWidth
+          size="small"
+          placeholder={
+            resourceServer.type === 'MCP'
+              ? t('resourceServers:edit.advanced.identifier.placeholderMcp', 'https://mcp.example.com/mcp')
+              : t('resourceServers:edit.advanced.identifier.placeholder', 'https://api.example.com')
+          }
+          error={isIdentifierInvalid}
+          helperText={
+            isIdentifierInvalid
+              ? t(
+                  'resourceServers:edit.advanced.identifier.invalidMcp',
+                  'Enter an http or https URL with no fragment, such as https://mcp.example.com/mcp.',
+                )
+              : resourceServer.type === 'MCP'
                 ? t(
                     'resourceServers:edit.advanced.identifier.hintMcp',
-                    'A unique value that identifies this MCP server. When set as an URI, enables RFC 8707 resource indicator support in OAuth2 authorization requests.',
+                    'The URL MCP clients use to reach this server, such as https://mcp.example.com/mcp. MCP clients send it as the resource parameter, and it becomes the token audience.',
                   )
                 : t(
                     'resourceServers:edit.advanced.identifier.hint',
                     'A unique value that identifies this resource server. When set as an URI, enables RFC 8707 resource indicator support in OAuth2 authorization requests.',
                   )
-            }
-            disabled={resourceServer.isReadOnly}
-          />
-        </FormControl>
+          }
+          disabled={resourceServer.isReadOnly}
+        />
         <FormControl fullWidth error={Boolean(pdpConnections.error)} sx={{mt: 3}}>
           <FormLabel id="resource-server-authorization-engine-label">
             {t('resourceServers:edit.advanced.authorizationEngine.label', 'Authorization engine')}
@@ -110,7 +116,7 @@ export default function AdvancedTab({
             disabled={Boolean(resourceServer.isReadOnly) || pdpConnections.isLoading}
           >
             <MenuItem value={AuthorizationEngines.RBAC}>
-              {t('resourceServers:edit.advanced.authorizationEngine.option.rbac', 'Local - Role Based Access Control')}
+              {t('resourceServers:edit.advanced.authorizationEngine.option.rbac', 'Local - role based access control')}
             </MenuItem>
             {hasSelectedPDP && (
               <MenuItem value={`${PDP_OPTION_PREFIX}${pdpConnectionId}`}>
@@ -145,7 +151,7 @@ export default function AdvancedTab({
             ) : (
               t(
                 'resourceServers:edit.advanced.authorizationEngine.hint',
-                'Choose Local - Role Based Access Control or a configured PDP connection for this resource server.',
+                'Choose Local - role based access control or a configured PDP connection for this resource server.',
               )
             )}
           </FormHelperText>

@@ -10,12 +10,28 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/thunder-id/thunderid/tests/integration/testutils"
 )
 
-const testServerURL = "https://localhost:8095"
+var testServerURL = testutils.TestServerURL
+
+// MockHTTPBaseURL stands in for a suite's mock HTTP server in the HTTP request nodes of a flow
+// definition. UseMockHTTPServer replaces it with the server's URL.
+const MockHTTPBaseURL = "http://mock-http-server"
+
+// UseMockHTTPServer points the HTTP request nodes of a flow definition at the suite's mock HTTP server.
+func UseMockHTTPServer(flow testutils.Flow, server *testutils.MockHTTPServer) {
+	nodes, _ := flow.Nodes.([]map[string]interface{})
+	for _, node := range nodes {
+		properties, _ := node["properties"].(map[string]interface{})
+		if url, ok := properties["url"].(string); ok {
+			properties["url"] = strings.Replace(url, MockHTTPBaseURL, server.GetURL(), 1)
+		}
+	}
+}
 
 // InitiateAuthenticationFlow initiates the authentication flow
 func InitiateAuthenticationFlow(appID string, verbose bool, inputs map[string]string, action string) (
@@ -145,8 +161,17 @@ func ResumeFlow(flowID string) (*FlowStep, error) {
 // CompleteFlow completes the flow with given inputs, action and challenge token
 func CompleteFlow(executionId string, inputs map[string]string, action string, challengeToken string) (
 	*FlowStep, error) {
+	flowStep, _, err := CompleteFlowWithRawResponse(executionId, inputs, action, challengeToken)
+	return flowStep, err
+}
+
+// CompleteFlowWithRawResponse completes a flow step like CompleteFlow and also returns the raw response
+// body, for tests that must check everything the client received and not only the fields FlowStep
+// models.
+func CompleteFlowWithRawResponse(executionID string, inputs map[string]string, action string,
+	challengeToken string) (*FlowStep, string, error) {
 	flowReqBody := map[string]interface{}{
-		"executionId":    executionId,
+		"executionId":    executionID,
 		"challengeToken": challengeToken,
 	}
 	if len(inputs) > 0 {
@@ -158,12 +183,12 @@ func CompleteFlow(executionId string, inputs map[string]string, action string, c
 
 	reqBody, err := json.Marshal(flowReqBody)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request body: %w", err)
+		return nil, "", fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
 	req, err := http.NewRequest("POST", testServerURL+"/flow/execute", bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create flow request: %w", err)
+		return nil, "", fmt.Errorf("failed to create flow request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -173,22 +198,24 @@ func CompleteFlow(executionId string, inputs map[string]string, action string, c
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send flow request: %w", err)
+		return nil, "", fmt.Errorf("failed to send flow request: %w", err)
 	}
 	defer resp.Body.Close()
 
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read response body: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, string(bodyBytes), fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var flowStep FlowStep
-	err = json.NewDecoder(resp.Body).Decode(&flowStep)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse response body: %w", err)
+	if err := json.Unmarshal(bodyBytes, &flowStep); err != nil {
+		return nil, string(bodyBytes), fmt.Errorf("failed to parse response body: %w", err)
 	}
 
-	return &flowStep, nil
+	return &flowStep, string(bodyBytes), nil
 }
 
 // ExecuteAdministrationFlow starts an administration flow, optionally as the admin.
@@ -373,7 +400,12 @@ func UpdateAppConfig(appID, authFlowID, registrationFlowID string) error {
 // CreateNotificationSender creates a custom SMS sender with a specified URL and name via
 // /connections/sms-gateway.
 func CreateNotificationSender(senderURL, senderName string) (string, error) {
+	ouID, err := testutils.DefaultConnectionOUID()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve the connection organization unit: %w", err)
+	}
 	senderRequest := map[string]interface{}{
+		"ouId":        ouID,
 		"name":        senderName,
 		"description": "Custom SMS sender for integration tests",
 		"url":         senderURL,

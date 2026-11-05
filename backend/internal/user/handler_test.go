@@ -18,9 +18,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/thunder-id/thunderid/internal/entitytype"
+	"github.com/thunder-id/thunderid/internal/role"
+	"github.com/thunder-id/thunderid/internal/sharing"
 	"github.com/thunder-id/thunderid/internal/system/error/apierror"
 	"github.com/thunder-id/thunderid/internal/system/resourcedependency"
 	"github.com/thunder-id/thunderid/internal/system/security"
+	"github.com/thunder-id/thunderid/internal/system/sysauthz"
 )
 
 const (
@@ -54,6 +57,38 @@ func TestHandleSelfUserGetRequest_Success(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&respUser))
 	require.Equal(t, expectedUser.ID, respUser.ID)
 	require.JSONEq(t, string(expectedUser.Attributes), string(respUser.Attributes))
+}
+
+func TestHandleSelfUserGetRequest_OmitsOperatorNote(t *testing.T) {
+	userID := testUserID123
+	authCtx := security.NewSecurityContextForTest(userID, "", "", nil, nil)
+
+	mockSvc := NewUserServiceInterfaceMock(t)
+	suspended := &providers.User{ID: userID, Status: &providers.AccessStatusReport{
+		Value: providers.AccessStatusSuspended,
+		Details: &providers.AccessStatusDetails{
+			Reason:       providers.AccessHoldReasonAdministrativeSuspension,
+			Since:        "2026-10-09T10:00:00Z",
+			OperatorNote: "Under investigation",
+		},
+	}}
+	mockSvc.On("GetUser", mock.Anything, userID, false).Return(suspended, nil)
+
+	handler := newUserHandler(mockSvc)
+	req := httptest.NewRequest(http.MethodGet, "/users/me", nil)
+	req = req.WithContext(security.WithSecurityContextTest(req.Context(), authCtx))
+	rr := httptest.NewRecorder()
+
+	handler.HandleSelfUserGetRequest(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NotContains(t, rr.Body.String(), "operatorNote")
+	var respUser providers.User
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&respUser))
+	require.Equal(t, providers.AccessStatusSuspended, respUser.Status.Value)
+	require.Equal(t, "2026-10-09T10:00:00Z", respUser.Status.Details.Since)
+	require.Equal(t, "Under investigation", suspended.Status.Details.OperatorNote,
+		"the service's value is not modified")
 }
 
 func TestHandleSelfUserGetRequest_IncludeDisplay(t *testing.T) {
@@ -117,6 +152,36 @@ func TestHandleSelfUserPutRequest_Success(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&respUser))
 	require.Equal(t, updatedUser.ID, respUser.ID)
 	require.JSONEq(t, string(updatedUser.Attributes), string(respUser.Attributes))
+}
+
+func TestHandleSelfUserPutRequest_OmitsOperatorNote(t *testing.T) {
+	userID := testUserID456
+	authCtx := security.NewSecurityContextForTest(userID, "", "", nil, nil)
+	attributes := json.RawMessage(`{"email":"alice@example.com"}`)
+
+	mockSvc := NewUserServiceInterfaceMock(t)
+	updatedUser := &providers.User{ID: userID, Attributes: attributes, Status: &providers.AccessStatusReport{
+		Value: providers.AccessStatusSuspended,
+		Details: &providers.AccessStatusDetails{Reason: providers.AccessHoldReasonAdministrativeSuspension,
+			Since: "2026-10-21T08:00:00Z", OperatorNote: "Under investigation"},
+	}}
+	mockSvc.On("UpdateUserAttributes", mock.Anything, userID, attributes).Return(updatedUser, nil)
+
+	handler := newUserHandler(mockSvc)
+	body := bytes.NewBufferString(`{"attributes":{"email":"alice@example.com"}}`)
+	req := httptest.NewRequest(http.MethodPut, "/users/me", body)
+	req = req.WithContext(security.WithSecurityContextTest(req.Context(), authCtx))
+	rr := httptest.NewRecorder()
+
+	handler.HandleSelfUserPutRequest(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NotContains(t, rr.Body.String(), "operatorNote")
+	var response providers.User
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &response))
+	require.Equal(t, &providers.AccessStatusReport{Value: providers.AccessStatusSuspended,
+		Details: &providers.AccessStatusDetails{Reason: providers.AccessHoldReasonAdministrativeSuspension,
+			Since: "2026-10-21T08:00:00Z"}}, response.Status, "only the note is withheld from the holder")
 }
 
 func TestHandleSelfUserPutRequest_InvalidBody(t *testing.T) {
@@ -1341,4 +1406,270 @@ func TestHandleSelfUserMetadataGetRequest_ServiceError(t *testing.T) {
 	handler.HandleSelfUserMetadataGetRequest(rr, req)
 
 	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+func TestHandleSharingPolicyPostRequest_RefusesFieldsTheSchemaDoesNotList(t *testing.T) {
+	bodies := map[string]string{
+		"MisspelledExclusion": `{"childUnits":{"mode":"all","excludeOuIds":["ou-1"]}}`,
+		"UnknownTopLevel":     `{"childUnits":{"mode":"all"},"extra":true}`,
+		"FlatTargets":         `{"targets":[{"scope":"child","ouId":"ou-1"}]}`,
+		"PolicyID":            `{"id":"policy-1","childUnits":{"mode":"all"}}`,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			handler := newUserHandler(NewUserServiceInterfaceMock(t))
+			req := httptest.NewRequest(http.MethodPost, "/users/user-1/sharing-policies", strings.NewReader(body))
+			req.SetPathValue("id", "user-1")
+			rr := httptest.NewRecorder()
+
+			handler.HandleSharingPolicyPostRequest(rr, req)
+
+			require.Equal(t, http.StatusBadRequest, rr.Code)
+			var errResp apierror.ErrorResponse
+			require.NoError(t, json.NewDecoder(rr.Body).Decode(&errResp))
+			require.Equal(t, ErrorInvalidRequestFormat.Code, errResp.Code)
+		})
+	}
+}
+
+func TestHandleSharingPolicyPostRequest_RefusesADeploymentWideReach(t *testing.T) {
+	bodies := map[string]string{
+		"AllUnits":               `{"allUnits":{}}`,
+		"AllUnitsWithExclusions": `{"allUnits":{"excludedOuIds":["ou-1"]}}`,
+		"AllOtherTreeRoots":      `{"otherTreeRoots":{"mode":"all"}}`,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			handler := newUserHandler(NewUserServiceInterfaceMock(t))
+			req := httptest.NewRequest(http.MethodPost, "/users/user-1/sharing-policies", strings.NewReader(body))
+			req.SetPathValue("id", "user-1")
+			rr := httptest.NewRecorder()
+
+			handler.HandleSharingPolicyPostRequest(rr, req)
+
+			require.Equal(t, http.StatusBadRequest, rr.Code)
+			var errResp apierror.ErrorResponse
+			require.NoError(t, json.NewDecoder(rr.Body).Decode(&errResp))
+			require.Equal(t, ErrorDeploymentWideSharingNotAllowed.Code, errResp.Code)
+		})
+	}
+}
+
+func TestHandleSharingPolicyPostRequest_PassesTheWireShapeToTheService(t *testing.T) {
+	expected := sharing.PolicyRequest{
+		InitiatingOUID: "ou-child",
+		ChildUnits: &sharing.ChildUnitsRequest{
+			Mode: sharing.ChildUnitsSelected,
+			Units: []sharing.ChildUnitRequest{
+				{OUID: "ou-a", Reach: sharing.ReachUnit},
+				{OUID: "ou-b", Reach: sharing.ReachSubtree},
+			},
+		},
+	}
+	mockSvc := NewUserServiceInterfaceMock(t)
+	mockSvc.On("CreateSharingPolicy", mock.Anything, "user-1", expected).
+		Return(sharing.Policy{ID: "policy-1", Version: 1}, (*tidcommon.ServiceError)(nil)).Once()
+	handler := newUserHandler(mockSvc)
+	body := `{"initiatingOuId":"ou-child","childUnits":{"mode":"selected","units":[` +
+		`{"ouId":"ou-a","reach":"unit"},{"ouId":"ou-b","reach":"subtree"}]}}`
+	req := httptest.NewRequest(http.MethodPost, "/users/user-1/sharing-policies", strings.NewReader(body))
+	req.SetPathValue("id", "user-1")
+	rr := httptest.NewRecorder()
+
+	handler.HandleSharingPolicyPostRequest(rr, req)
+
+	require.Equal(t, http.StatusCreated, rr.Code)
+}
+
+// Overlay rules decode and reach the service, on a section and on a named unit. The refusal is the service's, which
+// the handler answers as it gets it.
+func TestHandleSharingPolicyPostRequest_PassesOverlayRulesToTheService(t *testing.T) {
+	var recorded sharing.PolicyRequest
+	mockSvc := NewUserServiceInterfaceMock(t)
+	mockSvc.On("CreateSharingPolicy", mock.Anything, "user-1", mock.Anything).
+		Run(func(args mock.Arguments) { recorded = args.Get(2).(sharing.PolicyRequest) }).
+		Return(sharing.Policy{}, &ErrorInvalidSharingPolicy).Once()
+	handler := newUserHandler(mockSvc)
+	body := `{"childUnits":{"mode":"selected","overlayRules":{"roles":{"editable":false}},"units":[` +
+		`{"ouId":"ou-1","reach":"unit","overlayRules":{"roles":{"editable":true}}}]}}`
+	req := httptest.NewRequest(http.MethodPost, "/users/user-1/sharing-policies", strings.NewReader(body))
+	req.SetPathValue("id", "user-1")
+	rr := httptest.NewRecorder()
+
+	handler.HandleSharingPolicyPostRequest(rr, req)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	var errResp apierror.ErrorResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&errResp))
+	require.Equal(t, ErrorInvalidSharingPolicy.Code, errResp.Code)
+	require.NotNil(t, recorded.ChildUnits)
+	require.Contains(t, recorded.ChildUnits.OverlayRules, "roles")
+	require.Len(t, recorded.ChildUnits.Units, 1)
+	require.Contains(t, recorded.ChildUnits.Units[0].OverlayRules, "roles")
+}
+
+// A refusal of the roles a share mandates is answered with its own code and a client status, on create and update.
+func TestHandleSharingPolicyWrite_MandatedRoleRefusals(t *testing.T) {
+	cases := []struct {
+		refusal tidcommon.ServiceError
+		status  int
+	}{
+		{ErrorRolesNotOnNamedUnit, http.StatusBadRequest},
+		{ErrorRolesRuleNotFixed, http.StatusBadRequest},
+		{role.ErrorMandatedRoleNotInOU, http.StatusBadRequest},
+		{role.ErrorMandatedRolesNotSupported, http.StatusBadRequest},
+		{sysauthz.ErrorGrantNotPermitted, http.StatusForbidden},
+	}
+	body := `{"childUnits":{"mode":"selected","units":[` +
+		`{"ouId":"ou-1","reach":"unit","overlayRules":{"roles":{"editable":false,"value":["role-a"]}}}]}}`
+	for _, tc := range cases {
+		t.Run(tc.refusal.Code, func(t *testing.T) {
+			mockSvc := NewUserServiceInterfaceMock(t)
+			mockSvc.On("CreateSharingPolicy", mock.Anything, "user-1", mock.Anything).
+				Return(sharing.Policy{}, &tc.refusal).Once()
+			mockSvc.On("UpdateSharingPolicy", mock.Anything, "user-1", "policy-1", mock.Anything).
+				Return(sharing.Policy{}, &tc.refusal).Once()
+			handler := newUserHandler(mockSvc)
+
+			create := httptest.NewRequest(http.MethodPost, "/users/user-1/sharing-policies", strings.NewReader(body))
+			create.SetPathValue("id", "user-1")
+			update := httptest.NewRequest(http.MethodPut, "/users/user-1/sharing-policies/policy-1",
+				strings.NewReader(body))
+			update.SetPathValue("id", "user-1")
+			update.SetPathValue("policyId", "policy-1")
+
+			for _, write := range []struct {
+				req    *http.Request
+				handle func(http.ResponseWriter, *http.Request)
+			}{
+				{create, handler.HandleSharingPolicyPostRequest},
+				{update, handler.HandleSharingPolicyPutRequest},
+			} {
+				rr := httptest.NewRecorder()
+				write.handle(rr, write.req)
+
+				require.Equal(t, tc.status, rr.Code)
+				var errResp apierror.ErrorResponse
+				require.NoError(t, json.NewDecoder(rr.Body).Decode(&errResp))
+				require.Equal(t, tc.refusal.Code, errResp.Code)
+			}
+		})
+	}
+}
+
+func TestHandleSharingPolicyPutRequest_RefusesAChangeOfIssuer(t *testing.T) {
+	handler := newUserHandler(NewUserServiceInterfaceMock(t))
+	body := `{"initiatingOuId":"ou-child","childUnits":{"mode":"all"},"version":1}`
+	req := httptest.NewRequest(http.MethodPut, "/users/user-1/sharing-policies/policy-1", strings.NewReader(body))
+	req.SetPathValue("id", "user-1")
+	req.SetPathValue("policyId", "policy-1")
+	rr := httptest.NewRecorder()
+
+	handler.HandleSharingPolicyPutRequest(rr, req)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	var errResp apierror.ErrorResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&errResp))
+	require.Equal(t, ErrorInvalidRequestFormat.Code, errResp.Code)
+}
+
+func TestHandleSharingPolicyPutRequest_PassesTheSectionsToTheService(t *testing.T) {
+	expected := sharing.PolicyRequest{
+		ChildUnits: &sharing.ChildUnitsRequest{Mode: sharing.ChildUnitsAll, ExcludedOUIDs: []string{"ou-a"}},
+		Version:    3,
+	}
+	mockSvc := NewUserServiceInterfaceMock(t)
+	mockSvc.On("UpdateSharingPolicy", mock.Anything, "user-1", "policy-1", expected).
+		Return(sharing.Policy{ID: "policy-1", Version: 4}, (*tidcommon.ServiceError)(nil)).Once()
+	handler := newUserHandler(mockSvc)
+	body := `{"childUnits":{"mode":"all","excludedOuIds":["ou-a"]},"version":3}`
+	req := httptest.NewRequest(http.MethodPut, "/users/user-1/sharing-policies/policy-1", strings.NewReader(body))
+	req.SetPathValue("id", "user-1")
+	req.SetPathValue("policyId", "policy-1")
+	rr := httptest.NewRecorder()
+
+	handler.HandleSharingPolicyPutRequest(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+}
+
+func TestHandleSharingPolicy_StatusPerError(t *testing.T) {
+	cases := []struct {
+		svcErr tidcommon.ServiceError
+		status int
+	}{
+		{ErrorSharingPolicyNotFound, http.StatusNotFound},
+		{ErrorUserNotFound, http.StatusNotFound},
+		{ErrorUserNotSharedToOU, http.StatusNotFound},
+		{ErrorSharingPolicyExists, http.StatusConflict},
+		{ErrorSharingPolicyVersionMismatch, http.StatusConflict},
+		{ErrorInvalidSharingPolicy, http.StatusBadRequest},
+		{ErrorSharingPolicyDeclared, http.StatusBadRequest},
+		{ErrorMissingOUIDParameter, http.StatusBadRequest},
+		{tidcommon.ErrorUnauthorized, http.StatusForbidden},
+		{tidcommon.InternalServerError, http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.svcErr.Code, func(t *testing.T) {
+			svcErr := tc.svcErr
+			mockSvc := NewUserServiceInterfaceMock(t)
+			mockSvc.On("GetSharingPolicy", mock.Anything, "user-1", "policy-1").
+				Return(sharing.Policy{}, &svcErr).Once()
+			handler := newUserHandler(mockSvc)
+			req := httptest.NewRequest(http.MethodGet, "/users/user-1/sharing-policies/policy-1", nil)
+			req.SetPathValue("id", "user-1")
+			req.SetPathValue("policyId", "policy-1")
+			rr := httptest.NewRecorder()
+
+			handler.HandleSharingPolicyGetRequest(rr, req)
+
+			require.Equal(t, tc.status, rr.Code)
+		})
+	}
+}
+
+func TestHandleSharingPolicyListRequest_Pagination(t *testing.T) {
+	t.Run("DefaultsThePageSize", func(t *testing.T) {
+		mockSvc := NewUserServiceInterfaceMock(t)
+		mockSvc.On("ListSharingPolicies", mock.Anything, "user-1", 30, 0).
+			Return(sharing.PolicyList{}, (*tidcommon.ServiceError)(nil)).Once()
+		req := httptest.NewRequest(http.MethodGet, "/users/user-1/sharing-policies", nil)
+		req.SetPathValue("id", "user-1")
+		rr := httptest.NewRecorder()
+
+		newUserHandler(mockSvc).HandleSharingPolicyListRequest(rr, req)
+
+		require.Equal(t, http.StatusOK, rr.Code)
+	})
+	t.Run("RefusesAMalformedLimit", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/users/user-1/sharing-policies?limit=abc", nil)
+		req.SetPathValue("id", "user-1")
+		rr := httptest.NewRecorder()
+
+		newUserHandler(NewUserServiceInterfaceMock(t)).HandleSharingPolicyListRequest(rr, req)
+
+		require.Equal(t, http.StatusBadRequest, rr.Code)
+	})
+}
+
+// A user with no operator note is returned as is, without a copy.
+func TestWithoutOperatorNote_ReturnsAUserWithoutANoteUnchanged(t *testing.T) {
+	cases := []struct {
+		name string
+		user *providers.User
+	}{
+		{name: "no user"},
+		{name: "no status", user: &providers.User{ID: testUserID123}},
+		{name: "no details", user: &providers.User{ID: testUserID123,
+			Status: &providers.AccessStatusReport{Value: providers.AccessStatusActive}}},
+		{name: "an empty note", user: &providers.User{ID: testUserID123, Status: &providers.AccessStatusReport{
+			Value:   providers.AccessStatusSuspended,
+			Details: &providers.AccessStatusDetails{Reason: providers.AccessHoldReasonAdministrativeSuspension},
+		}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, withoutOperatorNote(tc.user) == tc.user)
+		})
+	}
 }

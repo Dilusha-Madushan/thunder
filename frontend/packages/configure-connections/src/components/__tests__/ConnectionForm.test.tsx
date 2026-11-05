@@ -250,6 +250,14 @@ describe('ConnectionForm', () => {
       expect(toggle).not.toBeChecked();
     });
 
+    it('names the product in the tokenExchangeEnabled hint', () => {
+      render(<ConnectionForm {...oidcEditProps} />);
+
+      expect(
+        screen.getByText("Let backend services exchange this provider's tokens for ThunderID access tokens."),
+      ).toBeInTheDocument();
+    });
+
     it('reports the switch toggle through onFieldChange as a "true"/"false" string', () => {
       const onFieldChange = vi.fn();
       render(<ConnectionForm {...oidcEditProps} onFieldChange={onFieldChange} />);
@@ -457,6 +465,50 @@ describe('ConnectionForm', () => {
 
       expect(getConnectionField('smsHttpHeaders-name-1')).toHaveValue('X-ABC');
       expect(onFieldChange).toHaveBeenLastCalledWith('smsHttpHeaders', 'X-ABC: text/html application/json');
+    });
+  });
+
+  describe('HTTP endpoint headers', () => {
+    const httpProps = {
+      ...baseProps,
+      type: 'http' as const,
+      mode: 'edit' as const,
+      hasStoredSecret: true,
+      vendorDisplayName: 'Service Endpoint',
+      values: {
+        name: 'Risk Engine',
+        url: 'https://risk.example.com/evaluate',
+        timeoutMs: '10000',
+        headers: JSON.stringify([{name: 'X-Tenant', value: 'acme'}]),
+      },
+    };
+
+    it('keeps a stored header whose value is cleared and asks for the value, rather than deleting it', () => {
+      const onFieldChange = vi.fn();
+      render(<ControlledConnectionForm {...httpProps} onFieldChange={onFieldChange} />);
+
+      fireEvent.change(getConnectionField('headers-value-1'), {target: {value: ''}});
+
+      expect(onFieldChange).toHaveBeenLastCalledWith('headers', JSON.stringify([{name: 'X-Tenant', value: ''}]));
+      expect(getConnectionField('headers-name-1')).toHaveValue('X-Tenant');
+      expect(screen.getByText('Enter both a name and value for every header.')).toBeInTheDocument();
+    });
+
+    it('flags a value typed without a header name', () => {
+      render(<ControlledConnectionForm {...httpProps} values={{...httpProps.values, headers: ''}} />);
+
+      fireEvent.change(getConnectionField('headers-value-1'), {target: {value: 'acme'}});
+
+      expect(screen.getByText('Enter both a name and value for every header.')).toBeInTheDocument();
+    });
+
+    it('refuses a header name that commonly carries a credential', () => {
+      render(<ControlledConnectionForm {...httpProps} values={{...httpProps.values, headers: ''}} />);
+
+      fireEvent.change(getConnectionField('headers-name-1'), {target: {value: 'x-api-key'}});
+      fireEvent.change(getConnectionField('headers-value-1'), {target: {value: 'k'}});
+
+      expect(screen.getByText(/Remove reserved headers such as/)).toBeInTheDocument();
     });
   });
 });

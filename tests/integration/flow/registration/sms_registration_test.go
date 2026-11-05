@@ -260,10 +260,6 @@ var (
 	}
 )
 
-const (
-	mockNotificationServerPort = 8098
-)
-
 type SMSRegistrationFlowTestSuite struct {
 	suite.Suite
 	config       *common.TestSuiteConfig
@@ -296,13 +292,11 @@ func (ts *SMSRegistrationFlowTestSuite) SetupSuite() {
 	}
 	ts.entityTypeID = schemaID
 
-	// Start mock notification server
-	ts.mockServer = testutils.NewMockNotificationServer(mockNotificationServerPort)
-	err = ts.mockServer.Start()
+	// Create mock notification server
+	ts.mockServer, err = testutils.NewMockNotificationServer()
 	if err != nil {
-		ts.T().Fatalf("Failed to start mock notification server: %v", err)
+		ts.T().Fatalf("Failed to create mock notification server: %v", err)
 	}
-	time.Sleep(100 * time.Millisecond)
 	ts.T().Log("Mock notification server started successfully")
 
 	// Create notification sender for SMS flows
@@ -393,16 +387,16 @@ func (ts *SMSRegistrationFlowTestSuite) TearDownSuite() {
 		}
 	}
 
+	if ts.entityTypeID != "" {
+		if err := testutils.DeleteUserType(ts.entityTypeID); err != nil {
+			ts.T().Logf("Failed to delete test user type during teardown: %v", err)
+		}
+	}
+
 	// Delete test organization unit
 	if ts.testOUID != "" {
 		if err := testutils.DeleteOrganizationUnit(ts.testOUID); err != nil {
 			ts.T().Logf("Failed to delete test organization unit during teardown: %v", err)
-		}
-	}
-
-	if ts.entityTypeID != "" {
-		if err := testutils.DeleteUserType(ts.entityTypeID); err != nil {
-			ts.T().Logf("Failed to delete test user type during teardown: %v", err)
 		}
 	}
 

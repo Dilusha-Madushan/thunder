@@ -30,6 +30,7 @@ func (suite *ConstantsTestSuite) TestGrantType_IsValid() {
 		GrantTypeRefreshToken,
 		GrantTypeTokenExchange,
 		GrantTypeCIBA,
+		GrantTypeDeviceCode,
 	}
 	for _, gt := range valid {
 		assert.True(suite.T(), gt.IsValid(), "expected %q to be valid", gt)
@@ -41,6 +42,7 @@ func (suite *ConstantsTestSuite) TestGrantType_IsValid() {
 func (suite *ConstantsTestSuite) TestGrantType_IssuesRefreshToken() {
 	assert.True(suite.T(), GrantTypeAuthorizationCode.IssuesRefreshToken())
 	assert.True(suite.T(), GrantTypeCIBA.IssuesRefreshToken())
+	assert.True(suite.T(), GrantTypeDeviceCode.IssuesRefreshToken())
 	assert.False(suite.T(), GrantTypeClientCredentials.IssuesRefreshToken())
 	assert.False(suite.T(), GrantTypeRefreshToken.IssuesRefreshToken())
 	assert.False(suite.T(), GrantTypeTokenExchange.IssuesRefreshToken())
@@ -50,6 +52,7 @@ func (suite *ConstantsTestSuite) TestGrantType_IssuesRefreshToken() {
 func (suite *ConstantsTestSuite) TestAnyIssuesRefreshToken() {
 	assert.True(suite.T(), AnyIssuesRefreshToken([]string{"client_credentials", "authorization_code"}))
 	assert.True(suite.T(), AnyIssuesRefreshToken([]string{string(GrantTypeCIBA)}))
+	assert.True(suite.T(), AnyIssuesRefreshToken([]string{string(GrantTypeDeviceCode)}))
 	assert.False(suite.T(), AnyIssuesRefreshToken([]string{"client_credentials", "refresh_token"}))
 	assert.False(suite.T(), AnyIssuesRefreshToken([]string{}))
 }
@@ -91,4 +94,17 @@ func (suite *ConstantsTestSuite) TestResourceServerType_IsValid() {
 	assert.True(suite.T(), ResourceServerTypeCustom.IsValid())
 	assert.False(suite.T(), ResourceServerType("UNKNOWN").IsValid())
 	assert.False(suite.T(), ResourceServerType("").IsValid())
+}
+
+// The selection inputs are rendering hints the client fills from a managed resource, so the engine
+// has to recognize them before a flow can declare one.
+func (suite *ConstantsTestSuite) TestValidInputTypes_AcceptsTheSelectionInputs() {
+	for _, inputType := range []string{
+		InputTypeUserSelect, InputTypeOUSelect, InputTypeAuthFlowSelect, InputTypeUserTypeSelect,
+	} {
+		assert.True(suite.T(), ValidInputTypes[inputType], inputType)
+	}
+	assert.Equal(suite.T(), "AUTH_FLOW_SELECT", InputTypeAuthFlowSelect)
+	assert.Equal(suite.T(), "USER_TYPE_SELECT", InputTypeUserTypeSelect)
+	assert.False(suite.T(), ValidInputTypes["FLOW_SELECT"])
 }

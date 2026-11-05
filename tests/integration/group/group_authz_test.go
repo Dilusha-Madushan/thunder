@@ -84,8 +84,6 @@ type GroupAuthzTestSuite struct {
 }
 
 const (
-	groupAuthzServerURL = "https://localhost:8095"
-
 	groupAuthzOU1Handle = "authz-group-ou1"
 	groupAuthzOU2Handle = "authz-group-ou2"
 
@@ -94,8 +92,7 @@ const (
 	groupMgrRoleName  = "Group Admin (group-authz-test)"
 	entityTypeOU1Name = "authz-mgr-schema-ou1"
 
-	groupAuthzDevelopClientID    = "CONSOLE"
-	groupAuthzDevelopRedirectURI = "https://localhost:8095/console"
+	groupAuthzDevelopClientID = "CONSOLE"
 
 	memberSchemaOU2Name = "authz-member-schema-ou2"
 
@@ -114,6 +111,10 @@ const (
 	emptyOUMgrPassword   = "EmptyOUMgr@123"
 	groupAuthzScopedRSID = "https://authz-test.example.com/group"
 )
+
+var groupAuthzDevelopRedirectURI = testutils.TestServerURL + "/console"
+
+var groupAuthzServerURL = testutils.TestServerURL
 
 func TestGroupAuthzTestSuite(t *testing.T) {
 	suite.Run(t, new(GroupAuthzTestSuite))
@@ -585,6 +586,39 @@ func (ts *GroupAuthzTestSuite) TestListGroups() {
 		"list must NOT include target group in OU2 (sibling), got IDs: %v", ids)
 }
 
+// TestListGroupsFilteredOnOwnOU verifies an OU filter on the manager's own OU lists that OU's groups.
+func (ts *GroupAuthzTestSuite) TestListGroupsFilteredOnOwnOU() {
+	resp := ts.doGroup(http.MethodGet, "/groups?limit=100&"+groupOUFilter(ts.groupOU1ID), nil)
+	defer resp.Body.Close()
+
+	ts.Require().Equal(http.StatusOK, resp.StatusCode)
+
+	var listResp GroupListResponse
+	ts.Require().NoError(json.NewDecoder(resp.Body).Decode(&listResp))
+
+	ids := make([]string, 0, len(listResp.Groups))
+	for _, g := range listResp.Groups {
+		ts.Equal(ts.groupOU1ID, g.OUID, "group %s", g.Id)
+		ids = append(ids, g.Id)
+	}
+	ts.Containsf(ids, ts.targetGroupOU1ID, "filtered list must include the OU1 group, got IDs: %v", ids)
+}
+
+// TestListGroupsFilteredOnOtherOUReturnsNothing verifies an OU filter on an OU the manager cannot
+// list groups from returns an empty list rather than an error.
+func (ts *GroupAuthzTestSuite) TestListGroupsFilteredOnOtherOUReturnsNothing() {
+	resp := ts.doGroup(http.MethodGet, "/groups?"+groupOUFilter(ts.groupOU2ID), nil)
+	defer resp.Body.Close()
+
+	ts.Require().Equal(http.StatusOK, resp.StatusCode)
+
+	var listResp GroupListResponse
+	ts.Require().NoError(json.NewDecoder(resp.Body).Decode(&listResp))
+
+	ts.Zero(listResp.TotalResults)
+	ts.Empty(listResp.Groups)
+}
+
 // TestGetGroupInOwnOU verifies the group-manager can read a group in their own OU.
 func (ts *GroupAuthzTestSuite) TestGetGroupInOwnOU() {
 	resp := ts.doGroup(http.MethodGet, "/groups/"+ts.targetGroupOU1ID, nil)
@@ -716,8 +750,11 @@ func (ts *GroupAuthzTestSuite) TestAddMemberFromOtherOU() {
 	resp := ts.doGroup(http.MethodPost, "/groups/"+ts.targetGroupOU1ID+"/members/add", payload)
 	defer resp.Body.Close()
 
-	ts.Equal(http.StatusForbidden, resp.StatusCode,
+	ts.Require().Equal(http.StatusBadRequest, resp.StatusCode,
 		"group-manager must not add a user from OU2 to a group in OU1")
+	var errResp ErrorResponse
+	ts.Require().NoError(json.NewDecoder(resp.Body).Decode(&errResp))
+	ts.Equal("GRP-1019", errResp.Code, "a user OU1 neither owns nor has shared with it is outside its boundary")
 }
 
 // TestAddMemberFromOwnOU verifies the group-manager can add a user from OU1 to a group in OU1.

@@ -172,6 +172,37 @@ func newCreateTableOperation(
 	})
 }
 
+// newSchemaChangeOperation returns an atomic schema change that is checked by one verification: it decides
+// whether the change is still to do, done, or blocked, before and after the statements run and when the plan is
+// checked for readiness.
+func newSchemaChangeOperation(
+	definition engine.OperationDefinition,
+	verify func(ctx context.Context, access engine.ReadAccess) (engine.VerificationResult, error),
+	statements []engine.SQLStatement,
+) (engine.Operation, error) {
+	definition.Kind = engine.OperationKindSchemaChange
+	definition.InterruptionMode = engine.InterruptionModeAtomic
+	verifyTarget := func(ctx context.Context, access engine.ReadAccess, _ engine.ExecutionTarget) (
+		engine.VerificationResult, error) {
+		return verify(ctx, access)
+	}
+	return engine.NewSQLOperation(engine.SQLOperationConfig{
+		Definition: definition,
+		ReadinessChecker: func(ctx context.Context, access engine.ReadAccess, _ engine.PlanContext) (
+			engine.ReadinessResult, error) {
+			return readinessFromVerification(ctx, access,
+				func(ctx context.Context, access engine.ReadAccess, _ string) (engine.VerificationResult, error) {
+					return verify(ctx, access)
+				})
+		},
+		PreVerifier: verifyTarget,
+		Implementations: map[engine.DatabaseType]engine.SQLImplementation{
+			engine.DatabaseTypePostgres: {Statements: statements},
+		},
+		PostVerifier: verifyTarget,
+	})
+}
+
 func inspectTable(ctx context.Context, access engine.ReadAccess, table tableSpec) (tableInspection, error) {
 	rows, err := access.Query(ctx, table.storeID, queryTableRelation, table.name)
 	if err != nil {

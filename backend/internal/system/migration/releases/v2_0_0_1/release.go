@@ -57,7 +57,31 @@ func migrationPlan() (engine.MigrationPlan, error) {
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
+	createGatewayMaster, err := newCreateGatewayMasterOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	addGatewayAppliedVersionMasterColumns, err := newAddGatewayAppliedVersionMasterColumnsOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	replaceProjectTable, err := newReplaceProjectTableOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	addEntityProjectID, err := newAddEntityProjectIDOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	addOrganizationUnitProjectID, err := newAddOrganizationUnitProjectIDOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
 	dropSSOSessionTables, err := newDropSSOSessionTablesOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	dropProjectLegacyTable, err := newDropProjectLegacyTableOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
@@ -66,7 +90,7 @@ func migrationPlan() (engine.MigrationPlan, error) {
 		return engine.MigrationPlan{}, err
 	}
 	return engine.MigrationPlan{
-		TargetVersion: "2.0.0-m1-pidp.1",
+		TargetVersion: "2.0.0-m1-pidp",
 		// Expand runs while the previous release still serves, in login-only mode. Everything here is
 		// either invisible to it or harmless to it.
 		Expand: []engine.Operation{
@@ -80,6 +104,13 @@ func migrationPlan() (engine.MigrationPlan, error) {
 			newSnapshotDuplicateUsersOperation(),
 			newCreateOriginalUserSharePoliciesOperation(),
 			newAddOriginalsToDuplicateGroupsOperation(),
+			// The schema the target binary expects for gateways and projects. Nothing here reads or writes
+			// data the previous operations change.
+			createGatewayMaster,
+			addGatewayAppliedVersionMasterColumns,
+			replaceProjectTable,
+			addEntityProjectID,
+			addOrganizationUnitProjectID,
 		},
 		// Migrate runs in the new binary after the previous release is retired.
 		Migrate: []engine.Operation{
@@ -88,12 +119,13 @@ func migrationPlan() (engine.MigrationPlan, error) {
 			newMergeDuplicateLinkedAccountsOperation(),
 		},
 		// Contract removes what the new binary no longer uses: the duplicate users, the previous release's
-		// session tables, and last the working table.
+		// session tables, the project table that expand replaced, and last the working table.
 		Contract: []engine.Operation{
 			newDeleteDuplicateUserSessionsOperation(),
 			newDeleteDuplicateUserAssignmentsOperation(),
 			newDeleteDuplicateUsersOperation(),
 			dropSSOSessionTables,
+			dropProjectLegacyTable,
 			dropUserShareMigrationTable,
 		},
 		Rollback: []engine.RollbackOperation{

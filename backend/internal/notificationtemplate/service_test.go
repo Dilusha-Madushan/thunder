@@ -87,6 +87,24 @@ func (s *NotificationTemplateServiceTestSuite) TestCreateTemplate_Email() {
 	s.Require().Equal(colorSchemeLight, tmpl.Design.ColorScheme)
 }
 
+// TestCreateTemplate_KeepsProvidedID verifies an import's id is kept, so a template has the same id on
+// every plane it is applied to.
+func (s *NotificationTemplateServiceTestSuite) TestCreateTemplate_KeepsProvidedID() {
+	s.mockStore.On("IsHandleExists", mock.Anything, ChannelTypeEmail, "otp-verification").Return(false, nil)
+	s.mockStore.On("CreateTemplate", mock.Anything, mock.MatchedBy(func(d templateDAO) bool {
+		return d.ID == "01900000-0000-7000-8000-0000000000a0"
+	})).Return(nil)
+
+	tmpl, err := s.svc.CreateTemplate(s.ctx, ChannelTypeEmail, CreateTemplateRequest{
+		ID:          "01900000-0000-7000-8000-0000000000a0",
+		Handle:      "otp-verification",
+		DisplayName: "OTP Verification",
+		Content:     TemplateContent{Subject: "s.key", Body: "b.key"},
+	})
+	s.Require().Nil(err)
+	s.Require().Equal("01900000-0000-7000-8000-0000000000a0", tmpl.ID)
+}
+
 // svcWithOU builds a service whose OU service is the given mock, so the create-path ouId validation is
 // exercised (the shared SetupTest service has a nil OU service that skips the check).
 func (s *NotificationTemplateServiceTestSuite) svcWithOU(
@@ -776,4 +794,77 @@ func (s *NotificationTemplateServiceTestSuite) TestUpdateTemplate_ReadOnlyShortC
 	_, err := s.svc.UpdateTemplate(s.ctx, ChannelTypeEmail, "declared-id", UpdateTemplateRequest{
 		DisplayName: "Renamed", Content: TemplateContent{Subject: "s", Body: "b2"}})
 	s.Require().Equal(ErrorTemplateReadOnly.Code, err.Code)
+}
+
+// --- resourcedependency.Provider: reserved system templates ---
+// These verify that templates required by built-in notification endpoints are reported as blocking
+// dependents through the service's resourcedependency.Provider implementation.
+
+// otpDAO builds the reserved SMS OTP templateDAO with the given id.
+func otpDAO(id string) templateDAO {
+	return templateDAO{ID: id, Channel: ChannelTypeSMS, Handle: "otp",
+		DisplayName: "OTP", Content: TemplateContent{Body: "{{ctx(otpCode)}}"}}
+}
+
+// TestBlocksReservedTemplate verifies the reserved OTP template is reported as a blocking dependency.
+func (s *NotificationTemplateServiceTestSuite) TestBlocksReservedTemplate() {
+	s.mockStore.On("GetTemplateByHandle", mock.Anything, ChannelTypeSMS, "otp").
+		Return(otpDAO("otp-id"), nil).Once()
+
+	usages, err := s.svc.GetResourceDependencies(
+		s.ctx, resourcedependency.ResourceTypeNotificationTemplate, "otp-id")
+
+	s.Require().NoError(err)
+	s.Require().Len(usages, 1)
+	s.Equal(resourcedependency.BehaviorRestrict, usages[0].BehaviorOnDelete)
+	s.Equal("sms-otp-authentication", usages[0].ID)
+	s.Len(resourcedependency.BlockingUsages(&resourcedependency.DependenciesResponse{Usages: usages}), 1)
+}
+
+// TestIgnoresUnrelatedTemplate verifies a different template id is not blocked by the OTP reservation.
+func (s *NotificationTemplateServiceTestSuite) TestIgnoresUnrelatedTemplate() {
+	s.mockStore.On("GetTemplateByHandle", mock.Anything, ChannelTypeSMS, "otp").
+		Return(otpDAO("otp-id"), nil).Once()
+
+	usages, err := s.svc.GetResourceDependencies(
+		s.ctx, resourcedependency.ResourceTypeNotificationTemplate, "some-other-id")
+
+	s.Require().NoError(err)
+	s.Empty(usages)
+}
+
+// TestIgnoresOtherResourceTypes verifies the provider only reports for notification-template targets.
+func (s *NotificationTemplateServiceTestSuite) TestIgnoresOtherResourceTypes() {
+	usages, err := s.svc.GetResourceDependencies(s.ctx, resourcedependency.ResourceTypeFlow, "otp-id")
+
+	s.Require().NoError(err)
+	s.Empty(usages)
+	s.mockStore.AssertNotCalled(s.T(), "GetTemplateByHandle")
+}
+
+// TestReservedTemplateNotProvisioned verifies an absent reserved template yields no dependency and no
+// error, so an unrelated template can still be deleted before the OTP template is seeded.
+func (s *NotificationTemplateServiceTestSuite) TestReservedTemplateNotProvisioned() {
+	s.mockStore.On("GetTemplateByHandle", mock.Anything, ChannelTypeSMS, "otp").
+		Return(templateDAO{}, errTemplateNotFound).Once()
+
+	usages, err := s.svc.GetResourceDependencies(
+		s.ctx, resourcedependency.ResourceTypeNotificationTemplate, "otp-id")
+
+	s.Require().NoError(err)
+	s.Empty(usages)
+}
+
+// TestStoreErrorSurfaced verifies a genuine store failure is returned, so the registry treats usage as
+// unknown and the delete fails closed rather than removing a possibly-reserved template.
+func (s *NotificationTemplateServiceTestSuite) TestStoreErrorSurfaced() {
+	storeErr := errors.New("db down")
+	s.mockStore.On("GetTemplateByHandle", mock.Anything, ChannelTypeSMS, "otp").
+		Return(templateDAO{}, storeErr).Once()
+
+	usages, err := s.svc.GetResourceDependencies(
+		s.ctx, resourcedependency.ResourceTypeNotificationTemplate, "otp-id")
+
+	s.Require().Error(err)
+	s.Nil(usages)
 }

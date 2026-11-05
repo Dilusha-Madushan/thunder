@@ -17,10 +17,9 @@ import (
 )
 
 const (
-	mockNotificationServerPort = 8099
-	smsOTPAuthSendEndpoint     = "/auth/otp/sms/send"
-	smsOTPAuthVerifyEndpoint   = "/auth/otp/sms/verify"
-	testMobileNumber           = "+1234567890"
+	smsOTPAuthSendEndpoint   = "/auth/otp/sms/send"
+	smsOTPAuthVerifyEndpoint = "/auth/otp/sms/verify"
+	testMobileNumber         = "+1234567890"
 )
 
 var smsOTPEntityType = testutils.UserType{
@@ -69,11 +68,9 @@ func (suite *SMSOTPAuthTestSuite) SetupSuite() {
 	suite.client = testutils.GetHTTPClient()
 	suite.mobileNumber = testMobileNumber
 
-	suite.mockServer = testutils.NewMockNotificationServer(mockNotificationServerPort)
-	err := suite.mockServer.Start()
-	suite.Require().NoError(err, "Failed to start mock notification server")
-
-	time.Sleep(100 * time.Millisecond)
+	var err error
+	suite.mockServer, err = testutils.NewMockNotificationServer()
+	suite.Require().NoError(err, "Failed to create mock notification server")
 
 	ouID, err := testutils.CreateOrganizationUnit(smsOTPAuthTestOU)
 	suite.Require().NoError(err, "Failed to create test organization unit")
@@ -691,9 +688,14 @@ func (suite *SMSOTPAuthTestSuite) sendOTPAndExtract() (string, string) {
 // createNotificationSender creates a custom SMS sender via /connections/sms-gateway. Only the
 // "custom" provider is used by this suite; other providers aren't supported by this helper.
 func (suite *SMSOTPAuthTestSuite) createNotificationSender(sender NotificationSenderRequest) (string, error) {
+	ouID, err := testutils.DefaultConnectionOUID()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve the connection organization unit: %w", err)
+	}
 	body := map[string]interface{}{
 		"name":        sender.Name,
 		"description": sender.Description,
+		"ouId":        ouID,
 	}
 	for _, prop := range sender.Properties {
 		switch prop.Name {

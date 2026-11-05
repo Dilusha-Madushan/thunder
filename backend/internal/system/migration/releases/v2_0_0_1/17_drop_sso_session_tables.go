@@ -10,7 +10,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
 )
 
-const dropSSOSessionTablesOperationID engine.OperationID = "2.0.0-m1-pidp.1/runtime_persistent/" +
+const dropSSOSessionTablesOperationID engine.OperationID = "2.0.0-m1-pidp/runtime_persistent/" +
 	"17_drop_sso_session_tables"
 
 // newDropSSOSessionTablesOperation drops the previous release's session and participant tables, which the

@@ -19,9 +19,8 @@ import (
 )
 
 const (
-	mockDispatchServerPort = 8099
-	otpSendEndpoint        = "/auth/otp/sms/send"
-	smsGatewayPath         = "/connections/sms-gateway"
+	otpSendEndpoint = "/auth/otp/sms/send"
+	smsGatewayPath  = "/connections/sms-gateway"
 )
 
 var (
@@ -82,8 +81,8 @@ func (ts *DispatchTestSuite) SetupSuite() {
 	ts.Require().NoError(err, "Failed to create test user")
 	ts.userID = userIDs[0]
 
-	ts.mockServer = testutils.NewMockNotificationServer(mockDispatchServerPort)
-	ts.Require().NoError(ts.mockServer.Start(), "Failed to start mock notification server")
+	ts.mockServer, err = testutils.NewMockNotificationServer()
+	ts.Require().NoError(err, "Failed to create mock notification server")
 }
 
 func (ts *DispatchTestSuite) TearDownSuite() {
@@ -120,6 +119,7 @@ func (ts *DispatchTestSuite) createSender(name string, extra map[string]interfac
 	body := map[string]interface{}{
 		"name":        name,
 		"description": "Sender for notification dispatch testing",
+		"ouId":        ts.ouID,
 		"url":         ts.mockServer.GetSendSMSURL(),
 	}
 	for key, value := range extra {
@@ -449,6 +449,7 @@ func (ts *DispatchTestSuite) tryCreateSender(name string, extra map[string]inter
 	body := map[string]interface{}{
 		"name":        name,
 		"description": "Sender for notification dispatch testing",
+		"ouId":        ts.ouID,
 		"url":         ts.mockServer.GetSendSMSURL(),
 	}
 	for key, value := range extra {

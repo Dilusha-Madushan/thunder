@@ -11,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/thunder-id/thunderid/internal/entity"
+	"github.com/thunder-id/thunderid/internal/identitygovernance"
 	"github.com/thunder-id/thunderid/internal/inboundclient"
 	oupkg "github.com/thunder-id/thunderid/internal/ou"
 	"github.com/thunder-id/thunderid/internal/serverconfig"
@@ -26,6 +27,8 @@ import (
 //
 // valueCapturer is optional. Given one, the service hands it every application it creates or changes,
 // so the values the application's export refers to are kept where a reference finds them.
+//
+// projectResolver is nil on a deployment that serves no projects, where a project is never found.
 func Initialize(
 	mux *http.ServeMux,
 	mcpServer *mcp.Server,
@@ -38,15 +41,18 @@ func Initialize(
 	artifactLifetime artifactLifetimeResolver,
 	sharingService sharing.SharingServiceInterface,
 	valueCapturer declarativeresource.ValueCapturer,
+	governance identitygovernance.IdentityGovernanceServiceInterface,
+	projectResolver projectOUResolver,
 ) (ApplicationServiceInterface, declarativeresource.ResourceExporter, error) {
 	appService := newApplicationService(
 		inboundClient, entityService, ouService, i18nService, cryptoSvc, serverConfigSvc, artifactLifetime,
-		valueCapturer, sharingService,
+		valueCapturer, sharingService, governance, projectResolver,
 	)
 
 	// Registered before declarative resources load, because loading seeds the sharing policies those
 	// files declare and the framework refuses a type it does not know.
 	sharingService.RegisterResourceType(newApplicationSharingDeclaration(appService))
+	entityService.RegisterSharedCategory(providers.EntityCategoryApp, ApplicationSharingType)
 
 	if err := entityService.LoadIndexedAttributes(getAppIndexedAttributes()); err != nil {
 		return nil, nil, err

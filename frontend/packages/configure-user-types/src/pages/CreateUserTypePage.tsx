@@ -1,6 +1,7 @@
 // Copyright 2025-2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import {DocumentTitle} from '@thunderid/components';
 import {
   OrganizationUnitPickerScreen,
   useGetOrganizationUnit,
@@ -87,7 +88,7 @@ export default function CreateUserTypePage(): JSX.Element {
   const steps: Partial<Record<UserTypeCreateFlowStep, {label: string}>> = useMemo(() => {
     const map: Partial<Record<UserTypeCreateFlowStep, {label: string}>> = {};
     if (hasMultipleOUs) {
-      map.ORGANIZATION_UNIT = {label: t('userTypes:createWizard.steps.organizationUnit', 'Organization Unit')};
+      map.ORGANIZATION_UNIT = {label: t('userTypes:createWizard.steps.organizationUnit', 'Organization unit')};
     }
     map.NAME = {label: t('userTypes:createWizard.steps.name', 'Details')};
     map.PROPERTIES = {label: t('userTypes:createWizard.steps.properties', 'Properties')};
@@ -462,35 +463,42 @@ export default function CreateUserTypePage(): JSX.Element {
   // than the single-column Name/General forms.
   const isPropertiesStep = currentStep === UserTypeCreateFlowStep.PROPERTIES;
 
+  const pageTitle = t('userTypes:createUserType', 'Create user type');
+
   if (currentStep === UserTypeCreateFlowStep.ORGANIZATION_UNIT) {
     if (isOuLoading || !hasMultipleOUs) {
       return (
         <Box sx={{minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+          <DocumentTitle title={pageTitle} />
           <CircularProgress />
         </Box>
       );
     }
 
     return (
-      <OrganizationUnitPickerScreen
-        icon={<Home size={26} />}
-        title={t('userTypes:createWizard.organizationUnit.title', 'Where should this user type belong?')}
-        subtitle={t(
-          'userTypes:createWizard.organizationUnit.subtitle',
-          "Choose the organization unit that will own this user type. You can't change this once created.",
-        )}
-        value={ouId}
-        onChange={handleOuIdChange}
-        onBack={handleClose}
-        onContinue={handleNextStep}
-        backLabel={t('common:actions.back', 'Back')}
-        continueLabel={t('common:actions.continue', 'Continue')}
-      />
+      <>
+        <DocumentTitle title={pageTitle} />
+        <OrganizationUnitPickerScreen
+          icon={<Home size={26} />}
+          title={t('userTypes:createWizard.organizationUnit.title', 'Where should this user type belong?')}
+          subtitle={t(
+            'userTypes:createWizard.organizationUnit.subtitle',
+            "Choose the organization unit that will own this user type. You can't change this once created.",
+          )}
+          value={ouId}
+          onChange={handleOuIdChange}
+          onBack={handleClose}
+          onContinue={handleNextStep}
+          backLabel={t('common:actions.back', 'Back')}
+          continueLabel={t('common:actions.continue', 'Continue')}
+        />
+      </>
     );
   }
 
   return (
     <Box sx={{minHeight: '100vh', display: 'flex', flexDirection: 'column'}}>
+      <DocumentTitle title={pageTitle} />
       {/* Progress bar at the very top */}
       <LinearProgress variant="determinate" value={getStepProgress()} sx={{height: 6}} />
 

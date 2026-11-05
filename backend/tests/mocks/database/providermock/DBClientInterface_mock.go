@@ -496,7 +496,7 @@ type DBClientInterfaceMock_WithSession_Call struct {
 // WithSession is a helper method to define mock.On call
 //   - ctx context.Context
 //   - fn func(provider.DBSessionInterface) error
-func (_e *DBClientInterfaceMock_Expecter) WithSession(ctx interface{}, fn interface{}) *DBClientInterfaceMock_WithSession_Call {
+func (_e *DBClientInterfaceMock_Expecter) WithSession(ctx any, fn any) *DBClientInterfaceMock_WithSession_Call {
 	return &DBClientInterfaceMock_WithSession_Call{Call: _e.mock.On("WithSession", ctx, fn)}
 }
 

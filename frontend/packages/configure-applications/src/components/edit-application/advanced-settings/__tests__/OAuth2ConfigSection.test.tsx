@@ -301,7 +301,188 @@ describe('OAuth2ConfigSection', () => {
       expect(screen.getByText('authorization_code')).toBeInTheDocument();
       expect(screen.getByText('refresh_token')).toBeInTheDocument();
       expect(screen.getByText('client_credentials')).toBeInTheDocument();
-      expect(screen.getByText('urn:ietf:params:oauth:grant-type:token-exchange')).toBeInTheDocument();
+      expect(screen.getByText('applications:edit.advanced.grantTypes.labels.tokenExchange')).toBeInTheDocument();
+    });
+
+    it('should render readable labels for URN grant types in the selected chips', () => {
+      const oauth2Config: OAuth2Config = {
+        grantTypes: [
+          'urn:ietf:params:oauth:grant-type:token-exchange',
+          'urn:ietf:params:oauth:grant-type:jwt-bearer',
+          'urn:openid:params:grant-type:ciba',
+        ],
+        responseTypes: [],
+        pkceRequired: false,
+        publicClient: false,
+      };
+
+      render(<OAuth2ConfigSection oauth2Config={oauth2Config} />);
+
+      expect(screen.getByText('applications:edit.advanced.grantTypes.labels.tokenExchange')).toBeInTheDocument();
+      expect(screen.getByText('applications:edit.advanced.grantTypes.labels.jwtBearer')).toBeInTheDocument();
+      expect(screen.getByText('applications:edit.advanced.grantTypes.labels.ciba')).toBeInTheDocument();
+      expect(screen.queryByText('urn:ietf:params:oauth:grant-type:token-exchange')).not.toBeInTheDocument();
+      expect(screen.queryByText('urn:ietf:params:oauth:grant-type:jwt-bearer')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Confidential-only grants and ID-JAG', () => {
+    const tokenExchange = 'urn:ietf:params:oauth:grant-type:token-exchange';
+    const jwtBearer = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
+
+    beforeEach(() => {
+      mockUseThunderID.mockReturnValue({
+        discovery: {
+          wellKnown: {
+            grant_types_supported: ['authorization_code', 'refresh_token', tokenExchange, jwtBearer],
+            response_types_supported: ['code'],
+            token_endpoint_auth_methods_supported: ['client_secret_basic', 'none'],
+          },
+        },
+      });
+    });
+
+    afterEach(() => {
+      mockUseThunderID.mockReturnValue({
+        discovery: {
+          wellKnown: {
+            grant_types_supported: [
+              'authorization_code',
+              'refresh_token',
+              'client_credentials',
+              'urn:openid:params:grant-type:ciba',
+            ],
+            response_types_supported: ['code', 'token'],
+            token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
+          },
+        },
+      });
+    });
+
+    // Only the ID-JAG block matters here, so the token config is asserted with just that populated.
+    const idJagToken = (enabled: boolean): OAuth2Config['token'] =>
+      ({idJag: {enabled, allowedAudiences: ['https://idp.example.com']}}) as unknown as OAuth2Config['token'];
+
+    const idJagConfig = (overrides: Partial<OAuth2Config> = {}): OAuth2Config => ({
+      grantTypes: ['authorization_code', tokenExchange],
+      responseTypes: ['code'],
+      pkceRequired: false,
+      publicClient: false,
+      tokenEndpointAuthMethod: 'client_secret_basic',
+      token: idJagToken(true),
+      ...overrides,
+    });
+
+    it('should lock the token exchange item with a reason while ID-JAG is on', async () => {
+      const user = userEvent.setup();
+
+      render(<OAuth2ConfigSection oauth2Config={idJagConfig()} onOAuth2ConfigChange={vi.fn()} />);
+
+      await user.click(document.getElementById('grant_types')!);
+
+      const tokenExchangeOption = screen.getByRole('option', {
+        name: /applications:edit\.advanced\.grantTypes\.labels\.tokenExchange/,
+      });
+      expect(tokenExchangeOption).toHaveAttribute('aria-disabled', 'true');
+      expect(screen.getByText('applications:edit.advanced.grantTypes.requiredByIdJag')).toBeInTheDocument();
+    });
+
+    it('should keep the token exchange item removable once ID-JAG is off', async () => {
+      const user = userEvent.setup();
+      const onOAuth2ConfigChange = vi.fn();
+
+      render(
+        <OAuth2ConfigSection
+          oauth2Config={idJagConfig({token: idJagToken(false)})}
+          onOAuth2ConfigChange={onOAuth2ConfigChange}
+        />,
+      );
+
+      await user.click(document.getElementById('grant_types')!);
+
+      const tokenExchangeOption = screen.getByRole('option', {
+        name: /applications:edit\.advanced\.grantTypes\.labels\.tokenExchange/,
+      });
+      expect(tokenExchangeOption).not.toHaveAttribute('aria-disabled', 'true');
+      expect(screen.queryByText('applications:edit.advanced.grantTypes.requiredByIdJag')).not.toBeInTheDocument();
+
+      await user.click(tokenExchangeOption);
+
+      expect(onOAuth2ConfigChange).toHaveBeenCalledWith(expect.objectContaining({grantTypes: ['authorization_code']}));
+    });
+
+    it('should disable the public client switch with the ID-JAG caption while ID-JAG is on', () => {
+      render(<OAuth2ConfigSection oauth2Config={idJagConfig()} onOAuth2ConfigChange={vi.fn()} />);
+
+      expect(screen.getByLabelText('applications:edit.advanced.labels.publicClient')).toBeDisabled();
+      expect(screen.getByText('applications:edit.advanced.publicClient.incompatibleWithIdJag')).toBeInTheDocument();
+    });
+
+    it('should disable the public client switch with the JWT bearer caption when the JWT bearer grant is selected', () => {
+      const oauth2Config: OAuth2Config = {
+        grantTypes: ['authorization_code', jwtBearer],
+        responseTypes: ['code'],
+        pkceRequired: false,
+        publicClient: false,
+        tokenEndpointAuthMethod: 'client_secret_basic',
+      };
+
+      render(<OAuth2ConfigSection oauth2Config={oauth2Config} onOAuth2ConfigChange={vi.fn()} />);
+
+      expect(screen.getByLabelText('applications:edit.advanced.labels.publicClient')).toBeDisabled();
+      expect(screen.getByText('applications:edit.advanced.publicClient.incompatibleWithJwtBearer')).toBeInTheDocument();
+    });
+
+    it('should disable the none auth method while ID-JAG is on', async () => {
+      const user = userEvent.setup();
+
+      render(<OAuth2ConfigSection oauth2Config={idJagConfig()} onOAuth2ConfigChange={vi.fn()} />);
+
+      await user.click(document.getElementById('token_endpoint_auth_method')!);
+
+      expect(screen.getByRole('option', {name: 'none'})).toHaveAttribute('aria-disabled', 'true');
+    });
+
+    it('should disable the none auth method when the JWT bearer grant is selected', async () => {
+      const user = userEvent.setup();
+      const oauth2Config: OAuth2Config = {
+        grantTypes: ['authorization_code', jwtBearer],
+        responseTypes: ['code'],
+        pkceRequired: false,
+        publicClient: false,
+        tokenEndpointAuthMethod: 'client_secret_basic',
+      };
+
+      render(<OAuth2ConfigSection oauth2Config={oauth2Config} onOAuth2ConfigChange={vi.fn()} />);
+
+      await user.click(document.getElementById('token_endpoint_auth_method')!);
+
+      expect(screen.getByRole('option', {name: 'none'})).toHaveAttribute('aria-disabled', 'true');
+    });
+
+    it('should turn a public client confidential when the JWT bearer grant is selected', async () => {
+      const user = userEvent.setup();
+      const onOAuth2ConfigChange = vi.fn();
+      const oauth2Config: OAuth2Config = {
+        grantTypes: ['authorization_code'],
+        responseTypes: ['code'],
+        pkceRequired: true,
+        publicClient: true,
+        tokenEndpointAuthMethod: 'none',
+      };
+
+      render(<OAuth2ConfigSection oauth2Config={oauth2Config} onOAuth2ConfigChange={onOAuth2ConfigChange} />);
+
+      await user.click(document.getElementById('grant_types')!);
+      await user.click(screen.getByText('applications:edit.advanced.grantTypes.labels.jwtBearer'));
+
+      expect(onOAuth2ConfigChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          grantTypes: ['authorization_code', jwtBearer],
+          publicClient: false,
+          tokenEndpointAuthMethod: 'client_secret_basic',
+        }),
+      );
     });
   });
 
@@ -947,6 +1128,159 @@ describe('OAuth2ConfigSection', () => {
       unmount();
 
       expect(onValidationChange).toHaveBeenLastCalledWith(false);
+    });
+  });
+
+  describe('Metadata document clients', () => {
+    const tokenExchange = 'urn:ietf:params:oauth:grant-type:token-exchange';
+    const jwtBearer = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
+    const tokenExchangeLabel = /applications:edit\.advanced\.grantTypes\.labels\.tokenExchange/;
+    const jwtBearerLabel = /applications:edit\.advanced\.grantTypes\.labels\.jwtBearer/;
+    const defaultDiscovery = {
+      discovery: {
+        wellKnown: {
+          grant_types_supported: [
+            'authorization_code',
+            'refresh_token',
+            'client_credentials',
+            'urn:openid:params:grant-type:ciba',
+          ],
+          response_types_supported: ['code', 'token'],
+          token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
+        },
+      },
+    };
+
+    beforeEach(() => {
+      mockUseThunderID.mockReturnValue({
+        discovery: {
+          wellKnown: {
+            grant_types_supported: [
+              'authorization_code',
+              'refresh_token',
+              'client_credentials',
+              'urn:openid:params:grant-type:ciba',
+              tokenExchange,
+              jwtBearer,
+            ],
+            response_types_supported: ['code'],
+            token_endpoint_auth_methods_supported: ['client_secret_basic', 'private_key_jwt', 'none'],
+          },
+        },
+      });
+    });
+
+    afterEach(() => {
+      mockUseThunderID.mockReturnValue(defaultDiscovery);
+    });
+
+    const cimdConfig = (tokenEndpointAuthMethod: 'none' | 'private_key_jwt'): OAuth2Config => ({
+      clientId: 'https://client.example.com/client.json',
+      clientIdMetadataDocument: true,
+      grantTypes: ['authorization_code', 'refresh_token'],
+      responseTypes: ['code'],
+      pkceRequired: true,
+      publicClient: tokenEndpointAuthMethod === 'none',
+      tokenEndpointAuthMethod,
+    });
+
+    it('should offer only the grants the document rules allow', async () => {
+      const user = userEvent.setup();
+
+      render(<OAuth2ConfigSection oauth2Config={cimdConfig('private_key_jwt')} onOAuth2ConfigChange={vi.fn()} />);
+      await user.click(document.getElementById('grant_types')!);
+
+      expect(screen.getByRole('option', {name: tokenExchangeLabel})).toBeInTheDocument();
+      expect(screen.getByRole('option', {name: jwtBearerLabel})).toBeInTheDocument();
+      expect(screen.queryByRole('option', {name: /client_credentials/})).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('option', {name: /applications:edit\.advanced\.grantTypes\.labels\.ciba/}),
+      ).not.toBeInTheDocument();
+    });
+
+    it('should keep the authorization code grant with a reason', async () => {
+      const user = userEvent.setup();
+
+      render(<OAuth2ConfigSection oauth2Config={cimdConfig('private_key_jwt')} onOAuth2ConfigChange={vi.fn()} />);
+      await user.click(document.getElementById('grant_types')!);
+
+      expect(screen.getByRole('option', {name: /^authorization_code/})).toHaveAttribute('aria-disabled', 'true');
+      expect(screen.getByText('applications:edit.advanced.grantTypes.requiredByMetadataDocument')).toBeInTheDocument();
+    });
+
+    it('should disable the identity assertion grants with a reason on a public document client', async () => {
+      const user = userEvent.setup();
+
+      render(<OAuth2ConfigSection oauth2Config={cimdConfig('none')} onOAuth2ConfigChange={vi.fn()} />);
+      await user.click(document.getElementById('grant_types')!);
+
+      expect(screen.getByRole('option', {name: tokenExchangeLabel})).toHaveAttribute('aria-disabled', 'true');
+      expect(screen.getByRole('option', {name: jwtBearerLabel})).toHaveAttribute('aria-disabled', 'true');
+      expect(screen.getAllByText('applications:edit.advanced.grantTypes.requiresPrivateKeyJwt')).toHaveLength(2);
+    });
+
+    it('should add the JWT bearer grant to a private key JWT document client without changing its authentication', async () => {
+      const user = userEvent.setup();
+      const onOAuth2ConfigChange = vi.fn();
+
+      render(
+        <OAuth2ConfigSection
+          oauth2Config={cimdConfig('private_key_jwt')}
+          onOAuth2ConfigChange={onOAuth2ConfigChange}
+        />,
+      );
+      await user.click(document.getElementById('grant_types')!);
+      await user.click(screen.getByRole('option', {name: jwtBearerLabel}));
+
+      expect(onOAuth2ConfigChange).toHaveBeenCalledWith({
+        grantTypes: ['authorization_code', 'refresh_token', jwtBearer],
+      });
+    });
+
+    it('should tie the token exchange grant to identity assertions', async () => {
+      const user = userEvent.setup();
+
+      render(<OAuth2ConfigSection oauth2Config={cimdConfig('private_key_jwt')} onOAuth2ConfigChange={vi.fn()} />);
+      await user.click(document.getElementById('grant_types')!);
+
+      expect(screen.getByRole('option', {name: tokenExchangeLabel})).toHaveAttribute('aria-disabled', 'true');
+      expect(screen.getByText('applications:edit.advanced.grantTypes.followsIdJag')).toBeInTheDocument();
+    });
+
+    it('should give the identity assertions lock as the reason while ID-JAG is on', async () => {
+      const user = userEvent.setup();
+      const oauth2Config = {
+        ...cimdConfig('private_key_jwt'),
+        grantTypes: ['authorization_code', tokenExchange],
+        token: {idJag: {enabled: true, allowedAudiences: ['https://as.example.com']}},
+      } as unknown as OAuth2Config;
+
+      render(<OAuth2ConfigSection oauth2Config={oauth2Config} onOAuth2ConfigChange={vi.fn()} />);
+      await user.click(document.getElementById('grant_types')!);
+
+      expect(screen.getByRole('option', {name: tokenExchangeLabel})).toHaveAttribute('aria-disabled', 'true');
+      expect(screen.getByText('applications:edit.advanced.grantTypes.requiredByIdJag')).toBeInTheDocument();
+      expect(screen.queryByText('applications:edit.advanced.grantTypes.followsIdJag')).not.toBeInTheDocument();
+    });
+
+    it('should explain the grant limits below the picker', () => {
+      render(<OAuth2ConfigSection oauth2Config={cimdConfig('none')} onOAuth2ConfigChange={vi.fn()} />);
+
+      expect(screen.getByText('applications:edit.advanced.grantTypes.metadataDocumentHint')).toBeInTheDocument();
+      expect(screen.queryByText('applications:edit.advanced.grantTypes.hint')).not.toBeInTheDocument();
+    });
+
+    it('should lock the authentication settings the document owns', () => {
+      render(<OAuth2ConfigSection oauth2Config={cimdConfig('private_key_jwt')} onOAuth2ConfigChange={vi.fn()} />);
+
+      expect(document.getElementById('token_endpoint_auth_method')).toHaveAttribute('aria-disabled', 'true');
+      expect(
+        screen.getByText('applications:edit.advanced.tokenEndpointAuthMethod.metadataDocumentLockedHint'),
+      ).toBeInTheDocument();
+      expect(screen.getByLabelText('applications:edit.advanced.labels.publicClient')).toBeDisabled();
+      expect(screen.getByText('applications:edit.advanced.publicClient.setByMetadataDocument')).toBeInTheDocument();
+      expect(screen.getByLabelText('applications:edit.advanced.labels.pkceRequired')).toBeDisabled();
+      expect(screen.getByText('applications:edit.advanced.pkce.requiredForMetadataDocument')).toBeInTheDocument();
     });
   });
 });

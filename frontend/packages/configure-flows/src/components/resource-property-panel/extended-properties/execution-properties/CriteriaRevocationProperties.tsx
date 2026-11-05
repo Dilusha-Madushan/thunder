@@ -28,7 +28,7 @@ function CriteriaRevocationProperties({resource, onChange}: CommonResourceProper
       placeholder={t('flows:core.executions.criteriaRevocation.mode.placeholder', 'Select a mode')}
       hint={t(
         'flows:core.executions.criteriaRevocation.mode.hint',
-        'Revoke runs before the change. Advance Revocation Cutoff runs after the change commits, closing the window a token could be minted in. A node without a mode revokes.',
+        'Revoke runs before the change. Advance revocation cutoff runs after the change commits, closing the window a token could be minted in. A node without a mode revokes.',
       )}
     />
   );

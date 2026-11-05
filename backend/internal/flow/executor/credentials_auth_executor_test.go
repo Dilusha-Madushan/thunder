@@ -208,7 +208,7 @@ func (suite *CredentialsAuthExecutorTestSuite) TestExecute_Success_RegistrationF
 		RuntimeData: make(map[string]string),
 	}
 
-	suite.mockEntityProvider.On("IdentifyEntity", map[string]interface{}{
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything, map[string]interface{}{
 		userAttributeUsername: "newuser",
 	}).Return(nil, entityprovider.NewEntityProviderError(entityprovider.ErrorCodeEntityNotFound, "", ""))
 
@@ -245,7 +245,7 @@ func (suite *CredentialsAuthExecutorTestSuite) TestExecute_RegistrationFlow_Link
 	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
 	assert.True(suite.T(), resp.AuthUser.IsAuthenticated())
 	suite.mockAuthnProvider.AssertExpectations(suite.T())
-	suite.mockEntityProvider.AssertNotCalled(suite.T(), "IdentifyEntity", mock.Anything)
+	suite.mockEntityProvider.AssertNotCalled(suite.T(), "IdentifyEntity", mock.Anything, mock.Anything)
 }
 
 func (suite *CredentialsAuthExecutorTestSuite) TestExecute_Success_WithMultipleAttributes() {
@@ -381,7 +381,7 @@ func (suite *CredentialsAuthExecutorTestSuite) TestExecute_UserAlreadyExists_Reg
 	}
 
 	userID := testUserID
-	suite.mockEntityProvider.On("IdentifyEntity", map[string]interface{}{
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything, map[string]interface{}{
 		userAttributeUsername: "existinguser",
 	}).Return(&userID, nil)
 
@@ -560,7 +560,7 @@ func (suite *CredentialsAuthExecutorTestSuite) TestAuthenticateUser_Registration
 		RuntimeData: make(map[string]string),
 	}
 
-	suite.mockEntityProvider.On("IdentifyEntity", map[string]interface{}{
+	suite.mockEntityProvider.On("IdentifyEntity", mock.Anything, map[string]interface{}{
 		userAttributeUsername: "newuser",
 	}).Return(nil, entityprovider.NewEntityProviderError(entityprovider.ErrorCodeEntityNotFound, "", ""))
 
@@ -715,4 +715,44 @@ func (suite *CredentialsAuthExecutorTestSuite) TestExecute_PreResolvedUser_WithP
 	assert.NotNil(suite.T(), resp)
 	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
 	assert.True(suite.T(), resp.AuthUser.IsAuthenticated())
+}
+
+// A stated hold re-prompts, so the form still offers recovery.
+func (suite *CredentialsAuthExecutorTestSuite) TestExecute_StatedHoldsDifferFromEachOther() {
+	cases := []struct {
+		name     string
+		svcErr   *tidcommon.ServiceError
+		wantCode string
+	}{
+		{name: "a stated lock", svcErr: &authnprovidermgr.ErrorAccountLocked, wantCode: ErrAccountLocked.Code},
+		{name: "a stated suspension", svcErr: &authnprovidermgr.ErrorAccountSuspended,
+			wantCode: ErrAccountSuspended.Code},
+	}
+
+	for _, tc := range cases {
+		suite.Run(tc.name, func() {
+			suite.SetupTest()
+			suite.mockAuthnProvider.On("AuthenticateUser", mock.Anything,
+				map[string]interface{}{userAttributeUsername: "testuser"},
+				map[string]interface{}{userAttributePassword: "correcthorse"},
+				mock.Anything, mock.Anything, mock.Anything).
+				Return(providers.AuthUser{}, (providers.AuthenticatedClaims)(nil), tc.svcErr).Once()
+
+			resp, err := suite.executor.Execute(&providers.NodeContext{
+				ExecutionID: "flow-hold",
+				FlowType:    providers.FlowTypeAuthentication,
+				UserInputs: map[string]string{
+					userAttributeUsername: "testuser",
+					userAttributePassword: "correcthorse",
+				},
+				RuntimeData: make(map[string]string),
+			})
+
+			suite.Require().NoError(err)
+			suite.Equal(providers.ExecUserInputRequired, resp.Status)
+			suite.Require().NotNil(resp.Error)
+			suite.Equal(tc.wantCode, resp.Error.Code)
+			suite.NotEmpty(resp.Inputs)
+		})
+	}
 }

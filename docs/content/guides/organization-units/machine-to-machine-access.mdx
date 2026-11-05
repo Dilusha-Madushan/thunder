@@ -43,7 +43,7 @@ Declare a sharing policy in one of three places:
 
 - **The application's resource file**, shown below.
 - **Management API**, through the [Application Sharing API](../../apis.mdx#tag/application-sharing).
-- **Console** (coming soon)
+- **Console**, on the application's **Organization Access** tab. The Console cannot create a policy that reaches every organization unit in the deployment or the root of every other tree, because only a resource file or an import can set those. A policy that the application's resource file declares is read-only in the Console.
 
 Add a `sharingPolicies` list to the application document:
 

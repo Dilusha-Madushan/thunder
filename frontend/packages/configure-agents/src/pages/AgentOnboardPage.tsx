@@ -2,41 +2,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {useQuery} from '@tanstack/react-query';
-import {FullScreenCreationWizardLayout} from '@thunderid/components';
+import {DocumentTitle, FullScreenCreationWizardLayout} from '@thunderid/components';
 import {OrganizationUnitTreePicker} from '@thunderid/configure-organization-units';
-import {useFlowTextResolver, useGetUsers} from '@thunderid/configure-users';
-import {useConfig} from '@thunderid/contexts';
-import {CopyableTextAdapter, type FlowComponent} from '@thunderid/design';
-import {useCopyToClipboard} from '@thunderid/hooks';
+import {useFlowTextResolver} from '@thunderid/configure-users';
+import {useConfig, useToast} from '@thunderid/contexts';
+import {FlowComponentRenderer, getResourceSelectAdapter, type RenderFlowField} from '@thunderid/design';
 import {useLogger} from '@thunderid/logger/react';
 import {
   BaseInviteUser,
+  toUserSelectOption,
   useThunderID,
   type BaseInviteUserRenderProps,
   type EmbeddedFlowComponent,
   type InviteUserFlowResponse,
+  type ManagedUser,
 } from '@thunderid/react';
-import {
-  Alert,
-  AlertTitle,
-  Box,
-  Button,
-  Checkbox,
-  CircularProgress,
-  FormControl,
-  FormControlLabel,
-  FormLabel,
-  IconButton,
-  InputAdornment,
-  MenuItem,
-  Select,
-  Stack,
-  TextField,
-  Typography,
-} from '@wso2/oxygen-ui';
-import {Copy, Eye, EyeOff} from '@wso2/oxygen-ui-icons-react';
+import {getErrorMessage} from '@thunderid/utils';
+import {Alert, AlertTitle, Box, Button, CircularProgress, FormControl, FormLabel, Stack} from '@wso2/oxygen-ui';
 import type {JSX} from 'react';
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {useTranslation} from 'react-i18next';
 import {useLocation, useNavigate} from 'react-router';
 import AgentQueryKeys from '../constants/agent-query-keys';
@@ -46,14 +30,10 @@ import resolveAgentOnboardingFlow, {AgentOnboardingFlowProblem} from '../utils/r
 /** The flow's identifier for the owner input, matching ownerKey backend side. */
 const ownerInputRef = 'owner';
 
-/** A flow component with the optional fields the renderer below reads. */
+/** A flow component with the optional fields the page itself reads. The adapters read the rest. */
 type FlowSubComponent = EmbeddedFlowComponent & {
   variant?: string;
   required?: boolean;
-  placeholder?: string;
-  options?: unknown[];
-  masked?: boolean;
-  source?: string;
   components?: FlowSubComponent[];
 };
 
@@ -69,6 +49,57 @@ const requiredRefs = (components: FlowSubComponent[]): string[] =>
         ? [component.ref]
         : [],
   );
+
+const isSubmitAction = (component: FlowSubComponent): boolean =>
+  (component.type === 'ACTION' || component.type === 'RESEND') && component.eventType === 'SUBMIT';
+
+const isInput = (component: FlowSubComponent): boolean =>
+  typeof component.ref === 'string' && !!component.ref && component.type !== 'ACTION' && component.type !== 'RESEND';
+
+/** Whether a component, or anything inside it, is a BLOCK. */
+const containsBlock = (component: FlowSubComponent): boolean =>
+  component.type === 'BLOCK' || (component.components ?? []).some(containsBlock);
+
+/** Whether a component, or anything inside it, is an input or a submit action. */
+const containsInputOrSubmit = (component: FlowSubComponent): boolean =>
+  isInput(component) || isSubmitAction(component) || (component.components ?? []).some(containsInputOrSubmit);
+
+/**
+ * Puts each run of inputs and submit actions that sit outside a block into a block of its own. The
+ * shared renderer draws inputs, and submit actions, only inside a block, while a flow may place them
+ * at the top of a step or in a stack. Wrapping them keeps every one of them drawn, at any depth.
+ */
+const wrapLooseInputs = (components: FlowSubComponent[], idPrefix = 'step'): FlowSubComponent[] => {
+  const wrapped: FlowSubComponent[] = [];
+  let run: FlowSubComponent[] = [];
+
+  const closeRun = (): void => {
+    if (run.length === 0) return;
+    wrapped.push({components: run, id: `${idPrefix}-inputs-${wrapped.length}`, type: 'BLOCK'} as FlowSubComponent);
+    run = [];
+  };
+
+  components.forEach((component, index) => {
+    if (component.type === 'BLOCK') {
+      closeRun();
+      wrapped.push(component);
+    } else if (component.type === 'STACK' && containsBlock(component)) {
+      closeRun();
+      wrapped.push({
+        ...component,
+        components: wrapLooseInputs(component.components ?? [], `${component.id ?? idPrefix}-${index}`),
+      });
+    } else if (containsInputOrSubmit(component)) {
+      run.push(component);
+    } else {
+      closeRun();
+      wrapped.push(component);
+    }
+  });
+  closeRun();
+
+  return wrapped;
+};
 
 /** Whether a step carries anything to fill in or submit, as opposed to only displaying a result. */
 const hasActionsOrInputs = (components: FlowSubComponent[]): boolean =>
@@ -99,129 +130,9 @@ const deriveStepLabel = (
   return heading && typeof heading.label === 'string' ? t(resolve(heading.label) ?? heading.label) : '';
 };
 
-/** Names a user the way the deployment identifies them, falling back to something readable. */
-const userLabel = (user: {id: string; display?: string; attributes?: Record<string, unknown>}): string => {
-  if (user.display) return user.display;
-  const attributes = user.attributes ?? {};
-  const username = typeof attributes['username'] === 'string' ? attributes['username'] : undefined;
-  const email = typeof attributes['email'] === 'string' ? attributes['email'] : undefined;
-
-  return username ?? email ?? user.id;
-};
-
-interface SecretFieldProps {
-  id: string;
-  label: string;
-  value: string;
-}
-
 /**
- * Read-only field for a value that must not sit on screen in the clear: masked by default,
- * revealed on request, and copyable without being read. Mirrors ShowClientSecret.
- */
-function SecretField({id, label, value}: SecretFieldProps): JSX.Element {
-  const {t} = useTranslation();
-  const [isRevealed, setIsRevealed] = useState(false);
-  const {copy} = useCopyToClipboard({resetDelay: 2000}) as {copy: (text: string) => Promise<void>};
-
-  return (
-    <Box>
-      <Typography variant="caption" color="text.secondary" sx={{display: 'block', mb: 0.5}}>
-        {label}
-      </Typography>
-      <TextField
-        fullWidth
-        id={id}
-        data-testid={id}
-        type={isRevealed ? 'text' : 'password'}
-        value={value}
-        size="small"
-        InputProps={{
-          endAdornment: (
-            <InputAdornment position="end">
-              <IconButton
-                aria-label={isRevealed ? t('common:actions.hide', 'Hide') : t('common:actions.show', 'Show')}
-                onClick={() => setIsRevealed(!isRevealed)}
-                edge="end"
-                size="small"
-              >
-                {isRevealed ? <EyeOff size={16} /> : <Eye size={16} />}
-              </IconButton>
-              <IconButton
-                aria-label={t('common:actions.copy', 'Copy')}
-                onClick={() => {
-                  copy(value).catch(() => null);
-                }}
-                edge="end"
-                size="small"
-                sx={{ml: 0.5}}
-              >
-                <Copy size={16} />
-              </IconButton>
-            </InputAdornment>
-          ),
-          readOnly: true,
-        }}
-      />
-    </Box>
-  );
-}
-
-interface UserSelectProps {
-  id: string;
-  label: string;
-  placeholder: string;
-  required: boolean;
-  value: string;
-  defaultUserId: string | null;
-  onChange: (value: string) => void;
-}
-
-/**
- * Picker for a USER_SELECT input. As with OU_SELECT the flow sends no candidates, so the list is
- * fetched here; the row shown is the user's display value while the value submitted is their id.
- */
-function UserSelect({id, label, placeholder, required, value, defaultUserId, onChange}: UserSelectProps): JSX.Element {
-  const {data} = useGetUsers({limit: 100, offset: 0});
-  const users = data?.users ?? [];
-
-  // Default to the current user once we have one and nothing is selected. The server would resolve
-  // an unset owner to the same person, so this only makes that visible before submitting.
-  useEffect(() => {
-    if (!value && defaultUserId) {
-      onChange(defaultUserId);
-    }
-  }, [value, defaultUserId, onChange]);
-
-  return (
-    <FormControl fullWidth required={required}>
-      <FormLabel htmlFor={id}>{label}</FormLabel>
-      <Select
-        id={id}
-        value={value}
-        size="small"
-        displayEmpty
-        required={required}
-        onChange={(e) => onChange(String(e.target.value))}
-      >
-        <MenuItem value="">{placeholder}</MenuItem>
-        {users.map((user) => (
-          <MenuItem key={user.id} value={user.id}>
-            {userLabel(user)}
-          </MenuItem>
-        ))}
-      </Select>
-    </FormControl>
-  );
-}
-
-/**
- * Renders one step of the onboarding flow.
- *
- * Components are matched here rather than delegated to FlowComponentRenderer, as UserCreatePage
- * and UserAddPage also do. That renderer covers only the context-free adapters: TEXT and RICH_TEXT
- * read the DesignProvider the console does not mount, and it has no case for OU_SELECT or
- * USER_SELECT.
+ * Renders one step of the onboarding flow with the shared flow renderer, so every component type the renderer
+ * supports is available to the flow. Submitting is held back until the step's required inputs are filled.
  */
 function AgentOnboardStep({
   renderProps,
@@ -238,7 +149,20 @@ function AgentOnboardStep({
   const resolve = useFlowTextResolver();
   const currentUser = useThunderID().user as {id?: string} | null | undefined;
   const currentUserId = currentUser?.id ?? null;
-  const {additionalData, components, values, isLoading, handleInputChange, handleSubmit, resetFlow} = renderProps;
+  const currentUserLabel = currentUserId ? toUserSelectOption(currentUser as unknown as ManagedUser)?.label : undefined;
+  const {showToast} = useToast();
+  const {
+    additionalData,
+    components,
+    fieldErrors,
+    handleInputBlur,
+    handleInputChange,
+    handleSubmit,
+    isLoading,
+    resetFlow,
+    touched,
+    values,
+  } = renderProps;
 
   const stepLabel = deriveStepLabel(components as FlowSubComponent[], resolve, t);
 
@@ -256,128 +180,51 @@ function AgentOnboardStep({
     }
   }, [resetFlow, onResetFlowAvailable]);
 
-  const text = (component: FlowSubComponent): string => {
-    const label = typeof component.label === 'string' ? component.label : '';
-
-    return t(resolve(label) ?? label);
-  };
-
-  const placeholderOf = (component: FlowSubComponent, fallback: string): string =>
-    component.placeholder ? (resolve(component.placeholder) ?? fallback) : fallback;
+  // A picker has nowhere on the page to show a failed load, so it is reported as a toast.
+  const handleOptionsError = useCallback(
+    (error: Error): void => {
+      showToast(
+        getErrorMessage(error, t, 'agents:onboarding.errors.optionsFailed', 'Could not load the list. Try again.'),
+        'error',
+      );
+    },
+    [showToast, t],
+  );
 
   // A step cannot be submitted while it is missing something it asked for. Without this the
   // action posts, the engine refuses it, and the screen simply does not move.
-  const isIncomplete = requiredRefs(components as FlowSubComponent[]).some(
-    (ref) => !((values as Record<string, unknown>)?.[ref] as string),
-  );
+  const isIncomplete = requiredRefs(components as FlowSubComponent[]).some((ref) => !values?.[ref]?.trim());
 
-  const renderComponent = (component: FlowSubComponent, index: number): JSX.Element | null => {
-    const key = component.id ?? index;
-    const ref = component.ref;
-    const required = component.required ?? false;
-    const value = ((values as Record<string, unknown>)?.[ref ?? ''] as string) ?? '';
+  // Fields the shared adapters do not draw: the organization unit picker and the resource pickers, which load
+  // their options with the signed-in user's token.
+  const renderField: RenderFlowField = (component, fieldProps) => {
+    const ResourceSelect = getResourceSelectAdapter(component.type);
 
-    if (component.type === 'TEXT') {
-      return component.variant === 'HEADING_1' ? (
-        <Typography key={key} variant="h1" gutterBottom>
-          {text(component)}
-        </Typography>
-      ) : (
-        <Typography key={key} variant="body1" color="text.secondary">
-          {text(component)}
-        </Typography>
-      );
-    }
+    if (ResourceSelect) {
+      const isOwner = component.ref === ownerInputRef;
 
-    if (
-      component.type === 'TEXT_INPUT' ||
-      component.type === 'EMAIL_INPUT' ||
-      component.type === 'NUMBER_INPUT' ||
-      component.type === 'PHONE_INPUT' ||
-      component.type === 'PASSWORD_INPUT'
-    ) {
-      if (!ref) return null;
-
-      const inputTypes: Record<string, string> = {
-        EMAIL_INPUT: 'email',
-        NUMBER_INPUT: 'number',
-        PASSWORD_INPUT: 'password',
-        PHONE_INPUT: 'tel',
-      };
-
+      // The server would resolve an unset owner to the signed-in user, so preselecting them only makes
+      // that visible before submitting.
       return (
-        <FormControl key={key} fullWidth required={required}>
-          <FormLabel htmlFor={ref}>{text(component)}</FormLabel>
-          <TextField
-            id={ref}
-            type={inputTypes[component.type] ?? 'text'}
-            value={value}
-            size="small"
-            required={required}
-            placeholder={placeholderOf(component, '')}
-            onChange={(e) => handleInputChange(ref, e.target.value)}
-          />
-        </FormControl>
-      );
-    }
-
-    if (component.type === 'SELECT') {
-      const options = component.options ?? [];
-      if (!ref || !options.length) return null;
-
-      return (
-        <FormControl key={key} fullWidth required={required}>
-          <FormLabel htmlFor={ref}>{text(component)}</FormLabel>
-          <Select
-            id={ref}
-            value={value}
-            size="small"
-            displayEmpty
-            required={required}
-            onChange={(e) => handleInputChange(ref, String(e.target.value))}
-          >
-            <MenuItem value="">{placeholderOf(component, t('agents:onboarding.selectPlaceholder'))}</MenuItem>
-            {options.map((option: unknown) => {
-              const isObject = typeof option === 'object' && option !== null;
-              const optionValue = String(isObject ? (option as Record<string, unknown>)['value'] : option);
-              const optionLabel = isObject ? String((option as Record<string, unknown>)['label']) : optionValue;
-
-              return (
-                <MenuItem key={optionValue} value={optionValue}>
-                  {optionLabel}
-                </MenuItem>
-              );
-            })}
-          </Select>
-        </FormControl>
-      );
-    }
-
-    if (component.type === 'USER_SELECT') {
-      if (!ref) return null;
-
-      return (
-        <UserSelect
-          key={key}
-          id={ref}
-          label={text(component)}
-          placeholder={placeholderOf(component, t('agents:onboarding.selectPlaceholder'))}
-          required={required}
-          value={value}
-          defaultUserId={ref === ownerInputRef ? currentUserId : null}
-          onChange={(selected) => handleInputChange(ref, selected)}
+        <ResourceSelect
+          {...fieldProps}
+          defaultValue={isOwner ? (currentUserId ?? undefined) : undefined}
+          defaultLabel={isOwner ? currentUserLabel : undefined}
+          onError={handleOptionsError}
         />
       );
     }
 
     if (component.type === 'OU_SELECT') {
-      if (!ref) return null;
+      const {ref} = component;
+
+      if (!ref || typeof ref !== 'string') return null;
 
       return (
-        <FormControl key={key} fullWidth required={required}>
-          <FormLabel htmlFor={ref}>{text(component)}</FormLabel>
+        <FormControl fullWidth required={component.required ?? false}>
+          <FormLabel htmlFor={ref}>{t(resolve(component.label) ?? '')}</FormLabel>
           <OrganizationUnitTreePicker
-            value={value}
+            value={values?.[ref] ?? ''}
             onChange={(ouId: string) => handleInputChange(ref, ouId)}
             rootOuId={additionalData?.['rootOuId'] as string | undefined}
           />
@@ -385,77 +232,35 @@ function AgentOnboardStep({
       );
     }
 
-    if (component.type === 'BOOLEAN_INPUT') {
-      if (!ref) return null;
-
-      return (
-        <FormControl key={key} required={required}>
-          <FormControlLabel
-            control={
-              <Checkbox
-                id={ref}
-                size="small"
-                checked={value === 'true'}
-                onChange={(e) => handleInputChange(ref, String(e.target.checked))}
-              />
-            }
-            label={text(component)}
-          />
-        </FormControl>
-      );
-    }
-
-    if (component.type === 'COPYABLE_TEXT') {
-      if (component.masked) {
-        const source = component.source ?? '';
-        const secret = (additionalData as Record<string, string> | undefined)?.[source] ?? '';
-
-        return <SecretField key={key} id={component.id ?? source} label={text(component)} value={secret} />;
-      }
-
-      return (
-        <CopyableTextAdapter
-          key={key}
-          component={component as FlowComponent}
-          resolve={resolve}
-          additionalData={additionalData as Record<string, unknown> | undefined}
-        />
-      );
-    }
-
-    if (component.type === 'ACTION') {
-      return (
-        <Button
-          key={key}
-          variant={component.variant === 'OUTLINED' ? 'outlined' : 'contained'}
-          disabled={isLoading || isIncomplete}
-          fullWidth
-          size="large"
-          onClick={() => {
-            void handleSubmit(component, values);
-          }}
-        >
-          {text(component)}
-        </Button>
-      );
-    }
-
-    if (component.components) {
-      return (
-        <Stack key={key} direction="column" spacing={2}>
-          {component.components.map((nested, nestedIndex) => renderComponent(nested, nestedIndex))}
-        </Stack>
-      );
-    }
-
-    return null;
+    return undefined;
   };
 
   const steps = components as FlowSubComponent[];
+  const renderedSteps = useMemo(() => wrapLooseInputs(steps), [steps]);
 
   return (
     <Stack spacing={2}>
-      {steps.map((component, index) => renderComponent(component, index))}
+      {renderedSteps.map((component, index) => (
+        <FlowComponentRenderer
+          key={component.id ?? index}
+          component={component}
+          index={index}
+          values={values}
+          touched={touched}
+          fieldErrors={fieldErrors}
+          isLoading={isLoading}
+          isSubmitDisabled={isIncomplete}
+          rendersInputsWithoutSubmit
+          resolve={resolve}
+          additionalData={additionalData}
+          onInputChange={handleInputChange}
+          onBlur={handleInputBlur}
+          onSubmit={(action, inputs) => {
+            void handleSubmit(action, inputs);
+          }}
+          renderField={renderField}
+        />
+      ))}
       {/* A step with nothing to submit is the end of the run, so the way out is offered here
           rather than leaving the close control in the header as the only exit. */}
       {steps.length > 0 && !hasActionsOrInputs(steps) && (
@@ -464,7 +269,7 @@ function AgentOnboardStep({
             {t('common:actions.close', 'Close')}
           </Button>
           <Button variant="contained" onClick={() => resetFlow()}>
-            {t('agents:onboarding.addAnother', 'Add Another Agent')}
+            {t('agents:onboarding.addAnother', 'Add another agent')}
           </Button>
         </Stack>
       )}
@@ -495,7 +300,7 @@ export default function AgentOnboardPage(): JSX.Element {
   // completion.
   const [stepsSeen, setStepsSeen] = useState(0);
   // The trail of step headings visited so far, seeded with the page itself.
-  const [breadcrumbs, setBreadcrumbs] = useState<string[]>([t('agents:addAgent', 'Add Agent')]);
+  const [breadcrumbs, setBreadcrumbs] = useState<string[]>([t('agents:addAgent', 'Add agent')]);
   const prevStepLabelRef = useRef<string>('');
   const resetFlowRef = useRef<(() => void) | null>(null);
   const [isFlowComplete, setIsFlowComplete] = useState(false);
@@ -535,7 +340,7 @@ export default function AgentOnboardPage(): JSX.Element {
     prevStepLabelRef.current = '';
     setStepsSeen(0);
     setIsFlowComplete(false);
-    setBreadcrumbs([t('agents:addAgent', 'Add Agent')]);
+    setBreadcrumbs([t('agents:addAgent', 'Add agent')]);
   }, [t]);
 
   const executeFlow = useCallback(
@@ -658,6 +463,7 @@ export default function AgentOnboardPage(): JSX.Element {
       }))}
       footer={null}
     >
+      <DocumentTitle title={t('agents:addAgent', 'Add agent')} />
       {renderBody()}
     </FullScreenCreationWizardLayout>
   );

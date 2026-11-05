@@ -246,16 +246,16 @@ func (ts *BasicRegistrationFlowTestSuite) TearDownSuite() {
 		}
 	}
 
+	if ts.entityTypeID != "" {
+		if err := testutils.DeleteUserType(ts.entityTypeID); err != nil {
+			ts.T().Logf("Failed to delete test user type during teardown: %v", err)
+		}
+	}
+
 	// Delete test organization unit
 	if ts.testOUID != "" {
 		if err := testutils.DeleteOrganizationUnit(ts.testOUID); err != nil {
 			ts.T().Logf("Failed to delete test organization unit during teardown: %v", err)
-		}
-	}
-
-	if ts.entityTypeID != "" {
-		if err := testutils.DeleteUserType(ts.entityTypeID); err != nil {
-			ts.T().Logf("Failed to delete test user type during teardown: %v", err)
 		}
 	}
 }
@@ -343,6 +343,31 @@ func (ts *BasicRegistrationFlowTestSuite) TestBasicRegistrationFlowSuccess() {
 	// Store the created user for cleanup
 	if user != nil {
 		ts.config.CreatedUserIDs = append(ts.config.CreatedUserIDs, user.ID)
+	}
+}
+
+func (ts *BasicRegistrationFlowTestSuite) TestBasicRegistrationFlowDynamicInputsOrder() {
+	expected := []string{"email", "family_name", "given_name"}
+
+	// The schema attributes were returned in random order, so repeat to make a lucky pass unlikely.
+	for i := 0; i < 10; i++ {
+		flowStep, err := common.InitiateRegistrationFlow(ts.testAppID, false, nil, "")
+		ts.Require().NoError(err, "Failed to initiate registration flow")
+
+		inputs := map[string]string{
+			"username": common.GenerateUniqueUsername("orderuser"),
+			"password": "testpassword123",
+		}
+		step, err := common.CompleteFlow(flowStep.ExecutionID, inputs, "action_credentials",
+			flowStep.ChallengeToken)
+		ts.Require().NoError(err, "Failed to submit the credentials")
+		ts.Require().Equal("INCOMPLETE", step.FlowStatus, "Expected the schema attributes prompt")
+
+		identifiers := make([]string, 0, len(step.Data.Inputs))
+		for _, input := range step.Data.Inputs {
+			identifiers = append(identifiers, input.Identifier)
+		}
+		ts.Require().Equal(expected, identifiers, "Dynamic inputs should be ordered by attribute name")
 	}
 }
 

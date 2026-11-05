@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"strings"
 	"time"
 
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
@@ -34,15 +35,25 @@ type flowEngineInterface interface {
 	Execute(ctx *EngineContext) (FlowStep, *tidcommon.ServiceError)
 }
 
+// variableValueProvider supplies the values the variables of a flow hold for an organization unit it was shared with,
+// where they differ from the owner's defaults, when the application driving the flow is owned by or shared with that
+// unit. An engine given none leaves every flow on the defaults its owner declared.
+type variableValueProvider interface {
+	GetEffectiveVariableValues(
+		ctx context.Context, flowID string, app providers.Application, ouID string,
+	) (map[string]string, *tidcommon.ServiceError)
+}
+
 // FlowEngine is the main engine implementation for orchestrating flow executions.
 type flowEngine struct {
-	executorRegistry  executor.ExecutorRegistryInterface
-	interceptorRunner InterceptorRunnerInterface
-	observabilitySvc  providers.ObservabilityProvider
-	flowProvider      providers.FlowProvider
-	graphBuilder      graphbuilder.GraphBuilderInterface
-	featureGate       *featuregate.Gate
-	logger            *log.Logger
+	executorRegistry       executor.ExecutorRegistryInterface
+	interceptorRunner      InterceptorRunnerInterface
+	observabilitySvc       providers.ObservabilityProvider
+	flowProvider           providers.FlowProvider
+	graphBuilder           graphbuilder.GraphBuilderInterface
+	variableValuesProvider variableValueProvider
+	featureGate            *featuregate.Gate
+	logger                 *log.Logger
 }
 
 // newFlowEngine creates a new flow engine with the given dependencies.
@@ -52,16 +63,18 @@ func newFlowEngine(
 	observabilitySvc providers.ObservabilityProvider,
 	flowProvider providers.FlowProvider,
 	graphBuilder graphbuilder.GraphBuilderInterface,
+	variableValuesProvider variableValueProvider,
 	featureGate *featuregate.Gate,
 ) flowEngineInterface {
 	return &flowEngine{
-		executorRegistry:  executorRegistry,
-		interceptorRunner: interceptorRunner,
-		observabilitySvc:  observabilitySvc,
-		flowProvider:      flowProvider,
-		graphBuilder:      graphBuilder,
-		featureGate:       featureGate,
-		logger:            log.GetLogger().With(log.String(log.LoggerKeyComponentName, "FlowEngine")),
+		executorRegistry:       executorRegistry,
+		interceptorRunner:      interceptorRunner,
+		observabilitySvc:       observabilitySvc,
+		flowProvider:           flowProvider,
+		graphBuilder:           graphBuilder,
+		variableValuesProvider: variableValuesProvider,
+		featureGate:            featureGate,
+		logger:                 log.GetLogger().With(log.String(log.LoggerKeyComponentName, "FlowEngine")),
 	}
 }
 
@@ -158,7 +171,7 @@ func (fe *flowEngine) executeNodePackage(ctx *EngineContext,
 	currentNode core.NodeInterface, flowStep *FlowStep, flowStartTime int64) (
 	core.NodeInterface, bool, *tidcommon.ServiceError) {
 	logger := fe.logger.With(log.String(log.LoggerKeyExecutionID, ctx.ExecutionID),
-		log.String("nodeID", currentNode.GetID()), log.String("nodeType", string(currentNode.GetType())))
+		log.String(log.LoggerKeyNodeID, currentNode.GetID()), log.String("nodeType", string(currentNode.GetType())))
 
 	logger.Debug(ctx.Context, "Executing node")
 
@@ -179,6 +192,10 @@ func (fe *flowEngine) executeNodePackage(ctx *EngineContext,
 			AllowedUserTypes:  ctx.Application.AllowedUserTypes,
 			AllowedAgentTypes: ctx.Application.AllowedAgentTypes,
 		})
+	}
+	// A recovery flow is marked too, so the default provider checks its proofs at the recovery plane.
+	if ctx.FlowType == providers.FlowTypeRecovery {
+		nodeCtxContext = authnprovidercm.WithRecoveryFlow(nodeCtxContext)
 	}
 	fe.replayPromptInputs(ctx)
 
@@ -219,8 +236,7 @@ func (fe *flowEngine) executeNodePackage(ctx *EngineContext,
 
 	// Check if the node should be executed based on its condition
 	if !currentNode.ShouldExecute(nodeCtx) {
-		logger.Debug(ctx.Context, "Skipping node due to unmet condition",
-			log.String("nodeID", currentNode.GetID()))
+		logger.Debug(ctx.Context, "Skipping node due to unmet condition")
 		nextNode, svcErr := fe.skipToNextNode(ctx, currentNode, logger)
 		if svcErr != nil {
 			return nil, false, svcErr
@@ -255,6 +271,9 @@ func (fe *flowEngine) executeNodePackage(ctx *EngineContext,
 	publishNodeExecutionStartedEvent(ctx, currentNode, fe.observabilitySvc)
 
 	nodeResp, nodeErr := currentNode.Execute(nodeCtx)
+	if nodeErr == nil {
+		nodeErr = fe.applyVariableValues(ctx, currentNode, nodeResp, logger)
+	}
 	executionEndTime := time.Now().UnixMilli()
 
 	if consumed := nodeCtx.GetConsumedInputs(); len(consumed) > 0 {
@@ -437,6 +456,55 @@ func (fe *flowEngine) runPostRequestInterceptorsOnExit(
 	return true, nil
 }
 
+// applyVariableValues makes a VARIABLES node resolve to the values its flow holds for the organization unit a prompt
+// picked, when the flow was shared with that unit. A flow resolves for no other unit: not the one that owns the flow
+// nor the one that owns the application. A flow the unit owns, or does not hold, runs on its own defaults. A connection
+// variable that is still without a connection then stops the flow.
+func (fe *flowEngine) applyVariableValues(
+	ctx *EngineContext, node core.NodeInterface, nodeResp *common.NodeResponse, logger *log.Logger,
+) *tidcommon.ServiceError {
+	if nodeResp == nil || node.GetType() != common.NodeTypeVariables {
+		return nil
+	}
+	if nodeResp.RuntimeData == nil {
+		nodeResp.RuntimeData = make(map[string]string)
+	}
+	if svcErr := fe.applyHeldValues(ctx, node, nodeResp, logger); svcErr != nil {
+		return svcErr
+	}
+	if unset := core.UnsetConnectionVariables(node, nodeResp.RuntimeData); len(unset) > 0 {
+		logger.Warn(ctx.Context, "The flow needs a connection that is not set for the organization unit",
+			log.String("flowID", ctx.Graph.GetID()), log.String("ouID", ctx.RuntimeData[common.RuntimeKeyOUID]),
+			log.String("variables", strings.Join(unset, ",")))
+		return &ErrorFlowConnectionNotSet
+	}
+	return nil
+}
+
+// applyHeldValues puts the values the organization unit a prompt picked holds in place of the defaults.
+func (fe *flowEngine) applyHeldValues(
+	ctx *EngineContext, node core.NodeInterface, nodeResp *common.NodeResponse, logger *log.Logger,
+) *tidcommon.ServiceError {
+	unit := ctx.RuntimeData[common.RuntimeKeyOUID]
+	if fe.variableValuesProvider == nil || ctx.Graph == nil || ctx.Graph.GetID() == "" || unit == "" {
+		return nil
+	}
+	raws, svcErr := fe.variableValuesProvider.GetEffectiveVariableValues(
+		ctx.Context, ctx.Graph.GetID(), ctx.Application, unit)
+	if svcErr != nil {
+		logger.Error(ctx.Context, "Failed to read the values of the variables for the organization unit",
+			log.String("flowID", ctx.Graph.GetID()), log.String("ouID", unit), log.String("code", svcErr.Code))
+		return &tidcommon.InternalServerError
+	}
+	values, err := core.VariableRuntimeValues(node, raws)
+	if err != nil {
+		logger.Error(ctx.Context, "The value of a variable is not usable", log.Error(err))
+		return &tidcommon.InternalServerError
+	}
+	maps.Copy(nodeResp.RuntimeData, values)
+	return nil
+}
+
 // trackPresentedOptionalInputs records the optional inputs presented in an incomplete view response
 // into the node response's runtime data so they can be skipped in subsequent execution steps.
 func (fe *flowEngine) trackPresentedOptionalInputs(ctx *EngineContext, nodeResp *common.NodeResponse) {
@@ -520,8 +588,7 @@ func (fe *flowEngine) setNodeExecutor(
 	}
 	executableNode, ok := node.(core.ExecutorBackedNodeInterface)
 	if !ok {
-		logger.Error(ctx, "Task execution node does not implement ExecutorBackedNodeInterface",
-			log.String("nodeID", node.GetID()))
+		logger.Error(ctx, "Task execution node does not implement ExecutorBackedNodeInterface")
 		return &tidcommon.InternalServerError
 	}
 
@@ -530,20 +597,18 @@ func (fe *flowEngine) setNodeExecutor(
 		return nil
 	}
 
-	logger.Debug(ctx, "Executor not set for the node. Constructing executor.",
-		log.String("nodeID", node.GetID()))
+	logger.Debug(ctx, "Executor not set for the node. Constructing executor.")
 
 	executorName := executableNode.GetExecutorName()
 	if executorName == "" {
-		logger.Error(ctx, "Executor name not configured for executable node",
-			log.String("nodeID", node.GetID()))
+		logger.Error(ctx, "Executor name not configured for executable node")
 		return &tidcommon.InternalServerError
 	}
 
 	executor, err := fe.getExecutorByName(executorName)
 	if err != nil {
-		logger.Error(ctx, "Error constructing executor for node", log.String("nodeID", node.GetID()),
-			log.String("executorName", executorName), log.Error(err))
+		logger.Error(ctx, "Error constructing executor for node",
+			log.String(log.LoggerKeyExecutorName, executorName), log.Error(err))
 		return &tidcommon.InternalServerError
 	}
 
@@ -1007,17 +1072,18 @@ func (fe *flowEngine) handleCallResponse(ctx *EngineContext,
 		return nil, &ErrorMaxCallDepthExceeded
 	}
 
-	flow, svcErr := fe.flowProvider.GetFlow(ctx.Context, nodeResp.CallTargetFlowID)
+	targetFlowID := nodeResp.CallTargetFlowID
+	flow, svcErr := fe.flowProvider.GetFlow(ctx.Context, targetFlowID)
 	if svcErr != nil {
 		logger.Error(ctx.Context, "Failed to get call target flow",
-			log.String("targetFlowID", nodeResp.CallTargetFlowID))
+			log.String("targetFlowID", targetFlowID))
 		return nil, &tidcommon.InternalServerError
 	}
 
 	calleeGraph, svcErr := fe.graphBuilder.GetGraph(ctx.Context, flow)
 	if svcErr != nil {
 		logger.Error(ctx.Context, "Failed to build call target graph",
-			log.String("targetFlowID", nodeResp.CallTargetFlowID))
+			log.String("targetFlowID", targetFlowID))
 		return nil, &tidcommon.InternalServerError
 	}
 	if required, ok := requiredFlowFeature(calleeGraph.GetType()); ok &&
@@ -1025,17 +1091,22 @@ func (fe *flowEngine) handleCallResponse(ctx *EngineContext,
 		return nil, &ErrorFlowFeatureDisabled
 	}
 
-	return fe.switchContextToCallee(ctx, nodeResp, calleeGraph, logger)
+	return fe.switchContextToCallee(ctx, nodeResp, calleeGraph, flow.FlowType, flow.ActiveVersion, logger)
 }
 
 // switchContextToCallee switches the engine context to the callee flow's graph and
 // sets the current node to the start node.
 func (fe *flowEngine) switchContextToCallee(ctx *EngineContext,
-	nodeResp *common.NodeResponse, calleeGraph core.GraphInterface, logger *log.Logger) (
+	nodeResp *common.NodeResponse, calleeGraph core.GraphInterface, calleeFlowType providers.FlowType,
+	calleeFlowVersion int,
+	logger *log.Logger) (
 	core.NodeInterface, *tidcommon.ServiceError) {
 	// Push the current frame before switching to the callee
 	resumeCallNodeID := ctx.CurrentNode.GetID()
 	ctx.pushFrame(resumeCallNodeID)
+	if calleeFlowType == providers.FlowTypeAuthentication {
+		ctx.SSOFlowVersion = calleeFlowVersion
+	}
 
 	// Switch context to the callee flow. Per-frame transient state is reset so the callee
 	// starts with a clean slate; shared identity/input state (UserInputs, AuthUser, etc.) is
@@ -1165,13 +1236,12 @@ func (fe *flowEngine) skipToNextNode(ctx *EngineContext, currentNode core.NodeIn
 
 	// Condition must specify where to skip to
 	if condition == nil || condition.OnSkip == "" {
-		logger.Error(ctx.Context, "Node has condition but onSkip is not specified",
-			log.String("nodeID", currentNode.GetID()))
+		logger.Error(ctx.Context, "Node has condition but onSkip is not specified")
 		return nil, &tidcommon.InternalServerError
 	}
 
 	logger.Debug(ctx.Context, "Using condition's onSkip for skipped node",
-		log.String("nodeID", currentNode.GetID()), log.String("onSkip", condition.OnSkip))
+		log.String("onSkip", condition.OnSkip))
 
 	nodeResp := &common.NodeResponse{NextNodeID: condition.OnSkip}
 
@@ -1346,7 +1416,8 @@ func (fe *flowEngine) isSegmentRestartAllowed(ctx *EngineContext, logger *log.Lo
 		return false
 	}
 
-	if svcErr := fe.setNodeExecutor(ctx.Context, segStartNode, logger); svcErr != nil {
+	nodeLogger := logger.With(log.String(log.LoggerKeyNodeID, seg.StartNodeID))
+	if svcErr := fe.setNodeExecutor(ctx.Context, segStartNode, nodeLogger); svcErr != nil {
 		return false
 	}
 
@@ -1450,7 +1521,7 @@ func publishNodeExecutionStartedEvent(
 	}
 
 	evt := event.NewEvent(
-		ctx.ExecutionID, // Use ExecutionID as TraceID
+		ctx.TraceID,
 		string(event.EventTypeFlowNodeExecutionStarted),
 		event.ComponentFlowEngine,
 	).
@@ -1521,7 +1592,7 @@ func publishNodeExecutionCompletedEvent(ctx *EngineContext, node core.NodeInterf
 	durationMs := executionEndTime - executionStartTime
 
 	evt := event.NewEvent(
-		ctx.ExecutionID, // Use ExecutionID as TraceID
+		ctx.TraceID,
 		string(eventType),
 		event.ComponentFlowEngine,
 	).
@@ -1558,7 +1629,7 @@ func publishFlowStartedEvent(ctx *EngineContext, obsSvc providers.ObservabilityP
 	}
 
 	evt := event.NewEvent(
-		ctx.ExecutionID, // Use ExecutionID as TraceID, so the whole flow shares one trace
+		ctx.TraceID,
 		string(event.EventTypeFlowStarted),
 		event.ComponentFlowEngine,
 	).
@@ -1585,7 +1656,7 @@ func publishFlowCompletedEvent(
 	durationMs := flowEndTime - flowStartTime
 
 	evt := event.NewEvent(
-		ctx.ExecutionID, // Use ExecutionID as TraceID
+		ctx.TraceID,
 		string(event.EventTypeFlowCompleted),
 		event.ComponentFlowEngine,
 	).
@@ -1609,7 +1680,7 @@ func publishFlowFailedEvent(ctx *EngineContext, svcErr *tidcommon.ServiceError,
 	durationMs := flowEndTime - flowStartTime
 
 	evt := event.NewEvent(
-		ctx.ExecutionID, // Use ExecutionID as TraceID, so the whole flow shares one trace
+		ctx.TraceID,
 		string(event.EventTypeFlowFailed),
 		event.ComponentFlowEngine,
 	).

@@ -59,6 +59,16 @@ func (h *flowExecutionHandler) HandleFlowExecutionRequest(w http.ResponseWriter,
 	challengeToken := sysutils.SanitizeString(flowR.ChallengeToken)
 	flowSecret := sysutils.SanitizeString(r.Header.Get(serverconst.FlowSecretHeaderName))
 	attestationToken := sysutils.SanitizeString(r.Header.Get(serverconst.AttestationTokenHeaderName))
+	sessionData := make([]SessionData, 0, len(flowR.SessionData))
+	for _, entry := range flowR.SessionData {
+		flowIdentifier := sysutils.SanitizeString(entry.FlowIdentifier)
+		sessionHandle := sysutils.SanitizeString(entry.SessionHandle)
+		if flowIdentifier == "" || sessionHandle == "" {
+			sysutils.WriteErrorResponse(r.Context(), w, http.StatusBadRequest, APIErrorInvalidSessionData)
+			return
+		}
+		sessionData = append(sessionData, SessionData{FlowIdentifier: flowIdentifier, SessionHandle: sessionHandle})
+	}
 
 	// Read the inbound SSO transport inputs and make them available to the flow service, which
 	// selects the handle once the flow is known.
@@ -80,19 +90,15 @@ func (h *flowExecutionHandler) HandleFlowExecutionRequest(w http.ResponseWriter,
 	var flowErr *tidcommon.ServiceError
 	if flowID != "" {
 		flowStep, flowErr = h.flowExecService.ExecuteByID(
-			ctx, flowID, executionID, verbose, action, inputs, challengeToken)
+			ctx, flowID, executionID, verbose, action, inputs, challengeToken, sessionData)
 	} else {
 		flowStep, flowErr = h.flowExecService.Execute(
 			ctx, appID, executionID, flowTypeStr, verbose, action, inputs, challengeToken,
-			flowSecret, attestationToken)
+			flowSecret, attestationToken, sessionData)
 	}
 
 	if flowErr != nil {
-		errorAssertion := ""
-		if flowStep != nil {
-			errorAssertion = flowStep.ErrorAssertion
-		}
-		handleFlowError(r.Context(), w, flowErr, errorAssertion)
+		handleFlowError(r.Context(), w, flowErr, flowStep)
 		return
 	}
 
@@ -118,15 +124,17 @@ func (h *flowExecutionHandler) HandleFlowExecutionRequest(w http.ResponseWriter,
 	}
 
 	flowResp := FlowResponse{
-		ExecutionID:    flowStep.ExecutionID,
-		StepID:         flowStep.StepID,
-		FlowStatus:     string(flowStep.Status),
-		Type:           string(flowStep.Type),
-		Data:           flowStep.Data,
-		Assertion:      flowStep.Assertion,
-		ErrorAssertion: flowStep.ErrorAssertion,
-		Error:          stepErrorResp,
-		ChallengeToken: flowStep.ChallengeToken,
+		ExecutionID:     flowStep.ExecutionID,
+		StepID:          flowStep.StepID,
+		FlowStatus:      string(flowStep.Status),
+		Type:            string(flowStep.Type),
+		Data:            flowStep.Data,
+		Assertion:       flowStep.Assertion,
+		ErrorAssertion:  flowStep.ErrorAssertion,
+		Error:           stepErrorResp,
+		ChallengeToken:  flowStep.ChallengeToken,
+		SessionData:     flowStep.SessionData,
+		ClearedSessions: flowStep.ClearedSessions,
 	}
 
 	sysutils.WriteSuccessResponse(r.Context(), w, http.StatusOK, flowResp)
@@ -140,12 +148,13 @@ func (h *flowExecutionHandler) HandleFlowExecutionRequest(w http.ResponseWriter,
 // OAuth callback so the failure reaches the waiting authorization request.
 type flowErrorResponse struct {
 	apierror.ErrorResponse
-	ErrorAssertion string `json:"errorAssertion,omitempty"`
+	ErrorAssertion string    `json:"errorAssertion,omitempty"`
+	Data           *FlowData `json:"data,omitempty"`
 }
 
 // handleFlowError handles errors that occur during flow execution as an API error response.
 func handleFlowError(ctx context.Context, w http.ResponseWriter, flowErr *tidcommon.ServiceError,
-	errorAssertion string) {
+	flowStep *FlowStep) {
 	errResp := apierror.ErrorResponse{
 		Code:        flowErr.Code,
 		Message:     flowErr.Error,
@@ -156,7 +165,7 @@ func handleFlowError(ctx context.Context, w http.ResponseWriter, flowErr *tidcom
 	if flowErr.Type == tidcommon.ClientErrorType {
 		switch flowErr.Code {
 		case ErrorDirectFlowInitiationNotPermitted.Code, ErrorFlowIDExecutionNotPermitted.Code,
-			ErrorAdministrationPermissionRequired.Code:
+			ErrorAdministrationPermissionRequired.Code, ErrorFlowApplicationNotUsable.Code:
 			statusCode = http.StatusForbidden
 		case ErrorFlowFeatureDisabled.Code:
 			statusCode = http.StatusServiceUnavailable
@@ -169,9 +178,16 @@ func handleFlowError(ctx context.Context, w http.ResponseWriter, flowErr *tidcom
 		}
 	}
 
-	if errorAssertion != "" {
+	if flowStep != nil && flowStep.ErrorAssertion != "" {
+		response := flowErrorResponse{
+			ErrorResponse:  errResp,
+			ErrorAssertion: flowStep.ErrorAssertion,
+		}
+		if len(flowStep.Data.AdditionalData) > 0 {
+			response.Data = &flowStep.Data
+		}
 		sysutils.WriteSuccessResponse(ctx, w, statusCode,
-			flowErrorResponse{ErrorResponse: errResp, ErrorAssertion: errorAssertion})
+			response)
 		return
 	}
 

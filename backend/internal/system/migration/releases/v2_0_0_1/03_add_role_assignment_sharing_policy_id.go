@@ -12,7 +12,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
 )
 
-const addRoleAssignmentSharingPolicyIDOperationID engine.OperationID = "2.0.0-m1-pidp.1/configdb/" +
+const addRoleAssignmentSharingPolicyIDOperationID engine.OperationID = "2.0.0-m1-pidp/configdb/" +
 	"03_add_role_assignment_sharing_policy_id"
 
 var (

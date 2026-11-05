@@ -83,7 +83,7 @@ func (s *idpStore) CreateIdentityProvider(ctx context.Context, idp providers.IDP
 	}
 
 	_, err = dbClient.ExecuteContext(ctx,
-		queryCreateIdentityProvider, idp.ID, idp.Name, idp.Description, idp.Type, propertiesJSON,
+		queryCreateIdentityProvider, idp.ID, idp.Name, idp.Description, idp.Type, idp.OUID, propertiesJSON,
 		attributeConfigurationJSON, s.scope(ctx),
 	)
 	if err != nil {
@@ -212,6 +212,7 @@ func (s *idpStore) GetIdentityProvidersByProperty(ctx context.Context,
 			Name:                   basicIDP.Name,
 			Description:            basicIDP.Description,
 			Type:                   basicIDP.Type,
+			OUID:                   basicIDP.OUID,
 			Properties:             properties,
 			AttributeConfiguration: attributeConfiguration,
 		})
@@ -281,6 +282,7 @@ func (s *idpStore) getIDP(ctx context.Context, query dbmodel.DBQuery, identifier
 		Name:                   basicIDP.Name,
 		Description:            basicIDP.Description,
 		Type:                   basicIDP.Type,
+		OUID:                   basicIDP.OUID,
 		Properties:             properties,
 		AttributeConfiguration: attributeConfiguration,
 	}
@@ -362,11 +364,17 @@ func buildIDPFromResultRow(row map[string]interface{}) (*BasicIDPDTO, error) {
 		return nil, fmt.Errorf("failed to parse type as string")
 	}
 
+	idpOUID, ok := row["ou_id"].(string)
+	if !ok {
+		return nil, fmt.Errorf("failed to parse ou_id as string")
+	}
+
 	idp := BasicIDPDTO{
 		ID:          idpID,
 		Name:        idpName,
 		Description: idpDescription,
 		Type:        providers.IDPType(idpType),
+		OUID:        idpOUID,
 	}
 
 	return &idp, nil
@@ -390,7 +398,7 @@ func idJagEnabledFromRow(ctx context.Context, logger *log.Logger, idpID string, 
 	properties, err := cmodels.DeserializePropertiesFromJSONObject(propertiesJSON)
 	if err != nil {
 		logger.Warn(ctx, "Failed to deserialize IDP properties; omitting idJagEnabled flag",
-			log.String("idpID", idpID), log.Error(err))
+			log.String(log.LoggerKeyIDPID, idpID), log.Error(err))
 		return nil
 	}
 	return idJagEnabledFromProperties(properties)

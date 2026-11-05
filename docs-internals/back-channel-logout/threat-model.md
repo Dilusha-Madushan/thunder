@@ -53,7 +53,7 @@ flowchart LR
     MINT[logout token builder<br/>token service]
     DEL[delivery client<br/>timeout, no redirects, retry]
     CFG[(OAUTH_INBOUND_PROFILE)]
-    SESS[(SSO_SESSION<br/>SSO_SESSION_PARTICIPANT)]
+    SESS[(SESSION<br/>SESSION_PARTICIPANT)]
     OBS[observability bus and logs]
   end
   ADMIN -->|HTTPS: register backchannel_logout_uri| CFG
@@ -120,7 +120,7 @@ The trust boundary sits at the deployment edge. Everything inside it is ThunderI
 | System JOSE layer | `jwtService.GenerateJWT` for signing and `jweService.Encrypt` for encryption, including key selection and rotation. Owned by the JWT and key management area |
 | `syshttp` HTTP client | `NewHTTPClientWithoutRedirects`: transport, TLS minimum version from server configuration, the caller's timeout, and a redirect policy that returns 3xx instead of following it. While `reject_private_addresses` is on, which is the default, delivery dials through the package's SSRF-safe dialer; `IsPrivateHost` shares its range list with that dialer for the registration check |
 | Observability bus | Delivery of `BACKCHANNEL_LOGOUT_DELIVERED` and `BACKCHANNEL_LOGOUT_FAILED` events to whatever sink the operator configured. Retention and access control are the operator's |
-| Runtime persistent database | `SSO_SESSION_PARTICIPANT` is the notification set and `OAUTH_INBOUND_PROFILE` holds the registered URI. Both are reused without schema change |
+| Runtime persistent database | `SESSION_PARTICIPANT` is the notification set and `OAUTH_INBOUND_PROFILE` holds the registered URI. Both are reused without schema change |
 
 ## Threats and mitigations
 
@@ -244,7 +244,7 @@ sequenceDiagram
 
 | Initiator | Intermediate | Target |
 | --- | --- | --- |
-| Sign-out flow or administration flow | `session.Service`, `SSO_SESSION_PARTICIPANT` | `TerminationListener` and the dispatch queue |
+| Sign-out flow or administration flow | `session.Service`, `SESSION_PARTICIPANT` | `TerminationListener` and the dispatch queue |
 
 **Data flow**
 
@@ -348,7 +348,7 @@ sequenceDiagram
 
 **Description**
 
-The worker POSTs `logout_token=<JWT>` as `application/x-www-form-urlencoded` to the registered URI, with a per-attempt timeout, a redirect policy returning `http.ErrUseLastResponse`, and a capped response drain. 200 and 204 are success. Connection errors, timeouts, 5xx, and 429 are retryable with exponential backoff from `retry_delay`, honouring a `Retry-After` on 429 up to the longest wait of that schedule. While `reject_private_addresses` is on, the connection goes through the SSRF-safe dialer. Any other 4xx and any 3xx fail immediately. Concurrency across the dispatcher is bounded by `max_in_flight`.
+The worker POSTs `logout_token=<JWT>` as `application/x-www-form-urlencoded` to the registered URI, with a per-attempt timeout, a redirect policy returning `http.ErrUseLastResponse`, and a capped response drain. 200 and 204 are success. Connection errors, timeouts, 5xx, and 429 are retryable with exponential backoff from `retry_delay`, honouring a `Retry-After` on 429 up to the longest wait of that schedule. While `reject_private_addresses` is on, the connection goes through the SSRF-safe dialer. Any other status, including a 2xx other than 200 and 204, any 3xx and any other 4xx, fails immediately. Concurrency across the dispatcher is bounded by `max_in_flight`.
 
 **Assets involved**
 
@@ -532,3 +532,4 @@ The feature processes one personal identifier, the subject id, and one identifie
 | Version | Date | Change |
 |---|---|---|
 | 0.1 | 2026-09-16 | Initial threat model, from design discussion #5258 version 0.3. |
+| 0.2 | 2026-10-26 | Delivery classifies a 2xx other than 200 and 204 as rejected, as reviewed in #5777. |

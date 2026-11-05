@@ -5,16 +5,17 @@ import {Stack} from '@wso2/oxygen-ui';
 import {useCallback, useMemo, type ReactNode} from 'react';
 import AccessChangeValidatorProperties from './execution-properties/AccessChangeValidatorProperties';
 import AgentTypeResolverProperties from './execution-properties/AgentTypeResolverProperties';
-import AttributeUniquenessValidatorProperties from './execution-properties/AttributeUniquenessValidatorProperties';
 import ConsentProperties from './execution-properties/ConsentProperties';
 import {EXECUTOR_TO_IDP_TYPE_MAP, EXECUTORS_WITH_FIXED_INPUTS} from './execution-properties/constants';
 import CriteriaRevocationProperties from './execution-properties/CriteriaRevocationProperties';
 import EmailProperties from './execution-properties/EmailProperties';
 import ExecutorInputsEditor from './execution-properties/ExecutorInputsEditor';
+import ExtensionProperties from './execution-properties/ExtensionProperties';
 import FederationProperties from './execution-properties/FederationProperties';
 import GroupExecutorProperties from './execution-properties/GroupExecutorProperties';
 import HttpRequestProperties from './execution-properties/HttpRequestProperties';
 import IdentifyingProperties from './execution-properties/IdentifyingProperties';
+import IdentityGovernanceProperties from './execution-properties/IdentityGovernanceProperties';
 import InviteProperties from './execution-properties/InviteProperties';
 import MagicLinkProperties from './execution-properties/MagicLinkProperties';
 import NoConfigProperties from './execution-properties/NoConfigProperties';
@@ -31,9 +32,11 @@ import SessionSignOutProperties from './execution-properties/SessionSignOutPrope
 import SmsProperties from './execution-properties/SmsProperties';
 import SsoCheckProperties from './execution-properties/SsoCheckProperties';
 import UserTypeResolverProperties from './execution-properties/UserTypeResolverProperties';
+import useResourceFieldError from '../../../hooks/useResourceFieldError';
 import type {FlowNodeInput} from '../../../models/responses';
 import {ExecutionTypes} from '../../../models/steps';
 import type {StepData} from '../../../models/steps';
+import {getExecutorInputs} from '../../../utils/executorInputs';
 import type {CommonResourcePropertiesPropsInterface} from '../CommonResourceProperties';
 
 /**
@@ -54,10 +57,7 @@ function ExecutionExtendedProperties({resource, onChange}: ExecutionExtendedProp
     return stepData?.action?.executor?.name;
   }, [resource]);
 
-  const currentInputs = useMemo((): FlowNodeInput[] => {
-    const stepData = resource?.data as StepData | undefined;
-    return (stepData?.action?.executor as {inputs?: FlowNodeInput[]} | undefined)?.inputs ?? [];
-  }, [resource]);
+  const currentInputs = useMemo((): FlowNodeInput[] => (resource ? getExecutorInputs(resource) : []), [resource]);
 
   const handleInputsChange = useCallback(
     (inputs: FlowNodeInput[]) => {
@@ -65,6 +65,8 @@ function ExecutionExtendedProperties({resource, onChange}: ExecutionExtendedProp
     },
     [onChange, resource],
   );
+
+  const inputsError: string = useResourceFieldError(resource?.id, 'data.action.executor.inputs');
 
   if (!executorName) {
     return null;
@@ -117,6 +119,9 @@ function ExecutionExtendedProperties({resource, onChange}: ExecutionExtendedProp
     case ExecutionTypes.GroupExecutor:
       executorSpecificProperties = <GroupExecutorProperties resource={resource} onChange={onChange} />;
       break;
+    case ExecutionTypes.IdentityGovernance:
+      executorSpecificProperties = <IdentityGovernanceProperties resource={resource} onChange={onChange} />;
+      break;
     case ExecutionTypes.ProvisioningExecutor:
       executorSpecificProperties = <ProvisioningProperties resource={resource} onChange={onChange} />;
       break;
@@ -132,6 +137,9 @@ function ExecutionExtendedProperties({resource, onChange}: ExecutionExtendedProp
     case ExecutionTypes.HTTPRequestExecutor:
       executorSpecificProperties = <HttpRequestProperties resource={resource} onChange={onChange} />;
       break;
+    case ExecutionTypes.ExtensionExecutor:
+      executorSpecificProperties = <ExtensionProperties resource={resource} onChange={onChange} />;
+      break;
     case ExecutionTypes.MagicLinkExecutor:
       executorSpecificProperties = <MagicLinkProperties resource={resource} onChange={onChange} />;
       break;
@@ -145,9 +153,8 @@ function ExecutionExtendedProperties({resource, onChange}: ExecutionExtendedProp
       executorSpecificProperties = <SessionSignOutProperties resource={resource} onChange={onChange} />;
       break;
     case ExecutionTypes.AttributeUniquenessValidator:
-      executorSpecificProperties = <AttributeUniquenessValidatorProperties resource={resource} onChange={onChange} />;
-      break;
     case ExecutionTypes.CredentialSetter:
+    case ExecutionTypes.PreSuspend:
     case ExecutionTypes.Session:
     case ExecutionTypes.OwnerResolver:
     case ExecutionTypes.AccountLinking:
@@ -164,7 +171,9 @@ function ExecutionExtendedProperties({resource, onChange}: ExecutionExtendedProp
   return (
     <Stack gap={2}>
       {executorSpecificProperties}
-      {showInputsEditor && <ExecutorInputsEditor inputs={currentInputs} onChange={handleInputsChange} />}
+      {showInputsEditor && (
+        <ExecutorInputsEditor inputs={currentInputs} onChange={handleInputsChange} errorMessage={inputsError} />
+      )}
     </Stack>
   );
 }

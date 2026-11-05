@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	rehomeOriginalUsersOperationID engine.OperationID = "2.0.0-m1-pidp.1/entitydb/12_rehome_original_users"
-	rehomeOriginalUsersRollbackID  engine.OperationID = "2.0.0-m1-pidp.1/entitydb/" +
+	rehomeOriginalUsersOperationID engine.OperationID = "2.0.0-m1-pidp/entitydb/12_rehome_original_users"
+	rehomeOriginalUsersRollbackID  engine.OperationID = "2.0.0-m1-pidp/entitydb/" +
 		"12_rehome_original_users_rollback"
 
 	// rehomeOriginalUsersBatchSize is the number of originals moved per batch.

@@ -32,9 +32,6 @@ import (
 )
 
 const (
-	introspectEndpoint = testutils.TestServerURL + "/oauth2/introspect"
-	revokeEndpoint     = testutils.TestServerURL + "/oauth2/revoke"
-	tokenEndpoint      = testutils.TestServerURL + "/oauth2/token"
 
 	// userClient runs the authorization_code login. ObtainAccessTokenWithPassword always sends the
 	// client credentials in the token request body, so this client must register client_secret_post.
@@ -68,6 +65,12 @@ const (
 	testGivenName = "Intro"
 	testFamily    = "Spection"
 )
+
+var tokenEndpoint = testutils.TestServerURL + "/oauth2/token"
+
+var revokeEndpoint = testutils.TestServerURL + "/oauth2/revoke"
+
+var introspectEndpoint = testutils.TestServerURL + "/oauth2/introspect"
 
 var testUserType = testutils.UserType{
 	Handle:      "introspect-person",
@@ -199,14 +202,14 @@ func (ts *IntrospectionTestSuite) TearDownSuite() {
 			ts.T().Logf("Failed to delete test user: %v", err)
 		}
 	}
-	if ts.ouID != "" {
-		if err := testutils.DeleteOrganizationUnit(ts.ouID); err != nil {
-			ts.T().Logf("Failed to delete test organization unit: %v", err)
-		}
-	}
 	if ts.entityTypeID != "" {
 		if err := testutils.DeleteUserType(ts.entityTypeID); err != nil {
 			ts.T().Logf("Failed to delete test user type: %v", err)
+		}
+	}
+	if ts.ouID != "" {
+		if err := testutils.DeleteOrganizationUnit(ts.ouID); err != nil {
+			ts.T().Logf("Failed to delete test organization unit: %v", err)
 		}
 	}
 }

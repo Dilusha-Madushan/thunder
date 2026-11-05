@@ -20,13 +20,14 @@ import (
 )
 
 const (
-	testServerURL      = "https://localhost:8095"
 	clientID           = "claims_test_client_123"
 	clientSecret       = "claims_test_secret_123"
 	appName            = "ClaimsParameterTestApp"
 	redirectURI        = "https://localhost:3000"
 	claimsTestResource = "https://claims-test.example.com"
 )
+
+var testServerURL = testutils.TestServerURL
 
 var (
 	testUserType = testutils.UserType{
@@ -137,16 +138,16 @@ func (ts *ClaimsParameterTestSuite) TearDownSuite() {
 		testutils.DeleteUser(ts.userID)
 	}
 
-	// Clean up organization unit
-	if ts.ouID != "" {
-		testutils.DeleteOrganizationUnit(ts.ouID)
-	}
-
 	// Clean up user type
 	if ts.entityTypeID != "" {
 		if err := testutils.DeleteUserType(ts.entityTypeID); err != nil {
 			ts.T().Logf("Failed to delete user type during teardown: %v", err)
 		}
+	}
+
+	// Clean up organization unit
+	if ts.ouID != "" {
+		testutils.DeleteOrganizationUnit(ts.ouID)
 	}
 }
 

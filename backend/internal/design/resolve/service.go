@@ -87,7 +87,7 @@ func (drs *designResolveService) ResolveDesign(
 		// which application IDs exist.
 		if svcErr.Code == application.ErrorApplicationNotFound.Code {
 			drs.logger.Debug(ctx, "No design resolved; application does not exist",
-				log.String("applicationId", id))
+				log.String("applicationID", id))
 			return nil, &common.ErrorApplicationHasNoDesign
 		}
 		return nil, svcErr
@@ -113,8 +113,8 @@ func (drs *designResolveService) ResolveDesign(
 				// The referenced theme has been deleted; fall back to the system default by leaving
 				// the theme unset in the response.
 				drs.logger.Warn(ctx, "Application references a deleted theme; falling back to default",
-					log.String("applicationId", id),
-					log.String("themeId", app.ThemeID))
+					log.String("applicationID", id),
+					log.String("themeID", app.ThemeID))
 			} else {
 				return nil, svcErr
 			}
@@ -136,8 +136,8 @@ func (drs *designResolveService) ResolveDesign(
 				// The referenced layout has been deleted; fall back to the system default by leaving
 				// the layout unset in the response.
 				drs.logger.Warn(ctx, "Application references a deleted layout; falling back to default",
-					log.String("applicationId", id),
-					log.String("layoutId", app.LayoutID))
+					log.String("applicationID", id),
+					log.String("layoutID", app.LayoutID))
 			} else {
 				return nil, svcErr
 			}
@@ -149,8 +149,8 @@ func (drs *designResolveService) ResolveDesign(
 	drs.logger.Debug(ctx, "Successfully resolved design configuration",
 		log.String("type", string(resolveType)),
 		log.String("id", id),
-		log.String("themeId", app.ThemeID),
-		log.String("layoutId", app.LayoutID))
+		log.String("themeID", app.ThemeID),
+		log.String("layoutID", app.LayoutID))
 
 	return designResponse, nil
 }
@@ -159,9 +159,8 @@ func (drs *designResolveService) ResolveDesign(
 // from the theme's color scheme. Unknown placeholders are left as-is; content with no placeholder is
 // returned unchanged without loading the theme.
 //
-// As shallow defense in depth, a value with angle brackets or control characters is left unresolved
-// (see substituteDesignTokens) and logged. Values are NOT encoded — the caller MUST encode the result
-// for its output context to avoid injection.
+// Each resolved value is HTML-escaped (see substituteDesignTokens) so it is safe inside the HTML the
+// email body places it in.
 func (drs *designResolveService) ResolveDesignContent(
 	ctx context.Context, themeID, colorScheme, content string,
 ) (string, *tidcommon.ServiceError) {
@@ -174,12 +173,7 @@ func (drs *designResolveService) ResolveDesignContent(
 		return "", svcErr
 	}
 
-	resolved, dropped := substituteDesignTokens(content, tokens)
-	for _, token := range dropped {
-		drs.logger.Warn(ctx, "Dropped design token with unsafe value; left its placeholder unresolved",
-			log.String("themeId", themeID), log.String("token", token))
-	}
-	return resolved, nil
+	return substituteDesignTokens(content, tokens), nil
 }
 
 // resolveDesignTokens resolves a theme into a dot-path token map (e.g. "palette.primary.main" ->
@@ -207,7 +201,7 @@ func (drs *designResolveService) resolveDesignTokens(
 	applicableTheme, err := resolveApplicableTheme(theme.Theme, colorScheme)
 	if err != nil {
 		drs.logger.Error(ctx, "Failed to resolve applicable theme for design tokens",
-			log.String("themeId", themeID), log.Error(err))
+			log.String("themeID", themeID), log.Error(err))
 		return nil, &tidcommon.InternalServerError
 	}
 

@@ -16,15 +16,19 @@ import (
 // version, and it never changes once captured: applying one to a gateway is a deliberate choice and an
 // earlier one stays available to apply again.
 type Version struct {
-	// Seq orders a deployment's versions. It is kept for ordering, retention and what a gateway holds,
-	// and is not shown: a version is named by its hash.
-	Seq int `json:"-"`
+	// Seq orders a deployment's versions, from 1, and is kept for retention and what a gateway holds. It
+	// is shown as the version's number, which stays the same as older versions are removed; a version
+	// is named by its hash.
+	Seq int `json:"number"`
 	// Hash is the SHA-256 of the captured configuration, in hex. A shorter prefix also names it.
 	Hash string `json:"version"`
 	// Name is what the version is called; Note says more about it.
 	Name      string    `json:"name,omitempty"`
 	Note      string    `json:"note,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
+	// CreatedBy is the user the version was captured for: who captured it, or whose change a capture
+	// after a change followed. A current version replaced in place names the latest change's user.
+	CreatedBy *Actor `json:"createdBy,omitempty"`
 	// Resources is the exported configuration, one document per resource. A listing leaves it out.
 	Resources string `json:"resources,omitempty"`
 	// Skipped names the resources the export could not write, each with why, as an export reports
@@ -36,6 +40,10 @@ type Version struct {
 	// References lists each place the version refers to a variable or a secret. Only a read of one
 	// version carries it.
 	References []ValueReference `json:"references,omitempty"`
+	// Current marks the newest version when it was captured as the current one: a capture asked to
+	// keep the configuration current replaces it until a gateway holds it. A listing sets it on the
+	// newest version alone.
+	Current bool `json:"current,omitempty"`
 	// variables are the values the export carried beside the documents, sealed as one secret. A
 	// reference-style export carries none. They are never returned by a read.
 	variables string
@@ -64,10 +72,21 @@ type ValueReference struct {
 	List bool `json:"list,omitempty"`
 }
 
+// key is the key of the resource the reference is in, as a diff reports it.
+func (r ValueReference) key() string {
+	return resourceKey(r.ResourceType, r.ResourceID, r.ResourceName)
+}
+
 // CaptureRequest is the body of a capture.
 type CaptureRequest struct {
 	Name string `json:"name,omitempty"`
 	Note string `json:"note,omitempty"`
+	// Current keeps the configuration as the current version rather than adding one: the newest
+	// version is replaced when it was captured as current and no gateway holds it or could be
+	// reverted to it. Once a gateway holds it, it stays, and the next such capture adds a new current
+	// version. A console that captures on its own sets this, so it keeps one version up to date
+	// rather than one for every change.
+	Current bool `json:"current,omitempty"`
 }
 
 // AppliedVersion is what a gateway holds: the version last applied to it, and the one before, which
@@ -81,23 +100,70 @@ type AppliedVersion struct {
 	Applied         string     `json:"appliedVersion,omitempty"`
 	Previous        string     `json:"previousVersion,omitempty"`
 	AppliedAt       *time.Time `json:"appliedAt,omitempty"`
+	// AppliedBy is the user who applied the version, or reverted the gateway to it.
+	AppliedBy *Actor `json:"appliedBy,omitempty"`
+	// Complete is false while the gateway holds the version only in part: the apply that recorded it
+	// left changes out or had some refused, and the diff still offers the rest. ResourcesHeld of
+	// ResourcesTotal count the version's resources the gateway's master holds as the version has them.
+	// A later apply that brings the master level with the version records it complete. All three are
+	// always given, so a version the gateway holds none of reads as 0 of its total.
+	Complete       bool `json:"complete"`
+	ResourcesHeld  int  `json:"resourcesHeld"`
+	ResourcesTotal int  `json:"resourcesTotal"`
+	// Master is the hash of the master the apply left; MasterSeq is its number, and PreviousMasterSeq
+	// the number of the master a revert returns the gateway to, 0 for none.
+	Master            string `json:"master,omitempty"`
+	MasterSeq         int    `json:"-"`
+	PreviousMasterSeq int    `json:"-"`
+	// heldValues is when each value the version refers to was last set, as the gateway's store said
+	// when it was applied, for the next apply to tell which were set again since.
+	heldValues string
+}
+
+// appliedState is how far an apply took a gateway towards the version it records.
+type appliedState struct {
+	complete                     bool
+	masterSeq, previousMasterSeq int
+	master                       string
+	held, total                  int
 }
 
 // ApplyRequest is the body of an apply. Version is a version's hash, a prefix of at least seven of its
 // characters, or "latest", and defaults to "latest".
 //
-// Selection names, by key, the changes to apply. Every other change the diff reports is left alone,
-// and the gateway goes on leaving it alone in later applies until one selects it again. Without a
-// selection, the gateway's standing choices apply; an empty one leaves every change alone.
+// Selection names, by key, the changes to send in this apply; the rest are neither written nor
+// removed, and stay on offer for the next apply. Without a selection every change the diff reports
+// is sent; an empty one sends nothing. Nothing about a selection is kept.
 type ApplyRequest struct {
 	Version   string    `json:"version,omitempty"`
 	DryRun    bool      `json:"dryRun,omitempty"`
 	Selection *[]string `json:"selection,omitempty"`
+	// LeaveOut names changes to leave out of this apply and the applies after it, until one selects
+	// them. Without a selection, an apply sends every change except those left out.
+	LeaveOut []string `json:"leaveOut,omitempty"`
+	// ConfirmRemovals lets the apply go ahead when it would remove more resources than the
+	// deployment's threshold; without it such an apply is refused, so a rollback that would empty
+	// a gateway is seen before it is sent.
+	ConfirmRemovals bool `json:"confirmRemovals,omitempty"`
+	// Origin is a label for where the version came from, recorded as given on each resource the
+	// apply writes to the gateway's master. A caller promoting another environment's configuration
+	// names that environment here.
+	Origin string `json:"origin,omitempty"`
+}
+
+// PromoteRequest asks for the version one gateway runs to be applied to another, as a console promotes
+// one stage to the next.
+type PromoteRequest struct {
+	SourceGatewayID string
+	TargetGatewayID string
+	DryRun          bool
+	ConfirmRemovals bool
 }
 
 // RevertRequest is the body of a revert.
 type RevertRequest struct {
-	DryRun bool `json:"dryRun,omitempty"`
+	DryRun          bool `json:"dryRun,omitempty"`
+	ConfirmRemovals bool `json:"confirmRemovals,omitempty"`
 }
 
 // ChangeKind says how a resource differs between what a gateway holds and what is applied to it.
@@ -114,15 +180,23 @@ const (
 	ChangeUnchanged ChangeKind = "unchanged"
 )
 
-// Change is one resource's difference. Key names the resource for a selection. Excluded marks a
-// change the gateway is set to leave alone, which an apply neither writes nor removes.
+// Change is one resource's difference between what the gateway's master records and the version.
+// Key names the resource for a selection. Failed marks a resource the gateway refused on its last
+// apply, which is offered again. Selected marks, on an apply's answer, a change the apply sent.
 type Change struct {
 	Key          string     `json:"key"`
 	ResourceType string     `json:"resourceType"`
 	ID           string     `json:"id,omitempty"`
 	Name         string     `json:"name,omitempty"`
 	Change       ChangeKind `json:"change"`
-	Excluded     bool       `json:"excluded,omitempty"`
+	Failed       bool       `json:"failed,omitempty"`
+	Selected     bool       `json:"selected,omitempty"`
+	// ValueChanged marks a resource offered as updated because a value it refers to was set on the
+	// gateway again since the last apply, although its document did not change.
+	ValueChanged bool `json:"valueChanged,omitempty"`
+	// HeldBack marks a change an earlier apply left out for the applies after it. An apply without a
+	// selection leaves it out again; one that selects it sends it and stops holding it back.
+	HeldBack bool `json:"heldBack,omitempty"`
 	// Lines is the resource's document diffed line by line, from what the gateway holds to what is
 	// applied. An unchanged resource has none.
 	Lines []LineOp `json:"lines,omitempty"`
@@ -135,7 +209,7 @@ type LineOp struct {
 	Text string `json:"text"`
 }
 
-// DiffSummary counts the changes by kind, leaving out those the gateway is set to leave alone.
+// DiffSummary counts the changes by kind.
 type DiffSummary struct {
 	Added     int `json:"added"`
 	Updated   int `json:"updated"`
@@ -143,13 +217,16 @@ type DiffSummary struct {
 	Unchanged int `json:"unchanged"`
 }
 
-// Diff is how a version differs from what a gateway holds.
+// Diff is how a version differs from what a gateway holds, as its master records it.
 type Diff struct {
-	// FromVersion and ToVersion are the hashes of what the gateway holds and of what is applied.
-	FromVersion string      `json:"fromVersion,omitempty"`
-	ToVersion   string      `json:"toVersion"`
-	Summary     DiffSummary `json:"summary"`
-	Changes     []Change    `json:"changes"`
+	// FromMaster is the hash of the gateway's master, and ToVersion the hash of the version.
+	FromMaster string      `json:"fromMaster,omitempty"`
+	ToVersion  string      `json:"toVersion"`
+	Summary    DiffSummary `json:"summary"`
+	Changes    []Change    `json:"changes"`
+	// MisplacedSecrets are the places the version refers to a secret from a field that holds no
+	// credential. A gateway refuses such a resource on import, so they are reported here first.
+	MisplacedSecrets []ValueReference `json:"misplacedSecrets,omitempty"`
 }
 
 // ApplyResult is what an apply or a revert reports.
@@ -162,9 +239,38 @@ type ApplyResult struct {
 	// Recorded reports whether the gateway's applied version moved, which every completed apply does
 	// and a dry run never does. Import says which resources, if any, the gateway refused.
 	Recorded bool `json:"recorded"`
+	// Complete reports whether the gateway holds the recorded version whole after the apply; a
+	// selection that left changes out, or a refusal, records it as partly applied. A dry run, which
+	// records nothing, reports false.
+	Complete bool `json:"complete"`
+	// Master is the hash of the master the gateway holds after the apply, which records each resource
+	// as the gateway accepted or refused it. A dry run writes none.
+	Master string `json:"master,omitempty"`
 	// Missing lists the values the version refers to that the gateway does not hold. Only a dry run
 	// reports them: an apply that would leave one unset is refused instead.
 	Missing *MissingValues `json:"missing,omitempty"`
+	// Changed lists the values the version refers to that were set on the gateway after the version
+	// it holds was applied, so a value that changed outside any version is seen before it takes
+	// effect. Names only, never values.
+	Changed *ChangedValues `json:"changed,omitempty"`
+	// Queued reports that the latest version was not applied now, because another apply to the
+	// gateway runs, and will be applied once that finishes. QueuedVersion is the version it will be.
+	Queued        bool   `json:"queued,omitempty"`
+	QueuedVersion string `json:"queuedVersion,omitempty"`
+}
+
+// ChangedValues are the variables and secrets a version refers to whose values were set on a gateway
+// after the version it holds was applied.
+type ChangedValues struct {
+	Variables []string `json:"variables,omitempty"`
+	Secrets   []string `json:"secrets,omitempty"`
+	// References says where the version refers to each changed value.
+	References []ValueReference `json:"references,omitempty"`
+}
+
+// empty reports whether nothing changed.
+func (c ChangedValues) empty() bool {
+	return len(c.Variables) == 0 && len(c.Secrets) == 0
 }
 
 // MissingValues are the variables and secrets a version refers to that a gateway does not hold.

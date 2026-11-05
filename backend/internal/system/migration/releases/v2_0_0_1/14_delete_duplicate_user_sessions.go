@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	deleteDuplicateUserSessionsOperationID engine.OperationID = "2.0.0-m1-pidp.1/runtime_persistent/" +
+	deleteDuplicateUserSessionsOperationID engine.OperationID = "2.0.0-m1-pidp/runtime_persistent/" +
 		"14_delete_duplicate_user_sessions"
 
 	// deleteDuplicateUserSessionsBatchSize is the number of originals whose duplicates' runtime state is

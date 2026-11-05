@@ -44,7 +44,7 @@ vi.mock('@wso2/oxygen-ui', async (importOriginal) => {
         rows: Record<string, unknown>[];
         columns: {
           field: string;
-          renderCell?: (params: {row: Record<string, unknown>}) => React.ReactElement;
+          renderCell?: (params: {row: Record<string, unknown>; tabIndex: number}) => React.ReactElement;
           valueGetter?: (value: unknown, row: Record<string, unknown>) => string;
         }[];
         onRowClick?: (params: {row: Record<string, unknown>}) => void;
@@ -62,11 +62,12 @@ vi.mock('@wso2/oxygen-ui', async (importOriginal) => {
               {columns.map(
                 (col: {
                   field: string;
-                  renderCell?: (params: {row: Record<string, unknown>}) => React.ReactElement;
+                  renderCell?: (params: {row: Record<string, unknown>; tabIndex: number}) => React.ReactElement;
                   valueGetter?: (value: unknown, row: Record<string, unknown>) => string;
                 }) => {
                   if (col.renderCell) {
-                    return <div key={col.field}>{col.renderCell({row})}</div>;
+                    // The real grid hands an unfocused cell tabIndex -1.
+                    return <div key={col.field}>{col.renderCell({row, tabIndex: -1})}</div>;
                   }
                   if (col.valueGetter) {
                     return <div key={col.field}>{col.valueGetter(null, row)}</div>;
@@ -234,6 +235,92 @@ describe('AgentsList', () => {
     expect(screen.getByText('Test Agent 2')).toBeInTheDocument();
     expect(screen.getByText('First test agent')).toBeInTheDocument();
     expect(screen.getByText('Second test agent')).toBeInTheDocument();
+  });
+
+  it("should show each agent's access status, treating an absent status as active", () => {
+    vi.mocked(useGetAgents).mockReturnValue({
+      data: {
+        ...mockAgentsData,
+        agents: [{...mockAgentsData.agents[0], status: {value: 'SUSPENDED'}}, mockAgentsData.agents[1]],
+      },
+      isLoading: false,
+      error: null,
+    } as ReturnType<typeof useGetAgents>);
+
+    renderComponent();
+
+    expect(screen.getByText('Suspended')).toBeInTheDocument();
+    expect(screen.getByText('Active')).toBeInTheDocument();
+  });
+
+  it('should say when an agent expires, and how long ago one expired, on hovering its status', async () => {
+    const day = 24 * 3600 * 1000;
+    vi.mocked(useGetAgents).mockReturnValue({
+      data: {
+        ...mockAgentsData,
+        agents: [
+          {
+            ...mockAgentsData.agents[0],
+            validUntil: new Date(Date.now() + 90 * day).toISOString(),
+            lifespan: {phase: 'ACTIVE'},
+          },
+          {
+            ...mockAgentsData.agents[1],
+            validUntil: new Date(Date.now() - 13 * day).toISOString(),
+            lifespan: {phase: 'EXPIRED'},
+            status: {value: 'EXPIRED', details: {reason: 'LIFESPAN_ENDED'}},
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    } as ReturnType<typeof useGetAgents>);
+    const user = userEvent.setup();
+
+    renderComponent();
+
+    await user.hover(screen.getByRole('img', {name: 'Active'}));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Expires in 3 months');
+    await user.unhover(screen.getByRole('img', {name: 'Active'}));
+
+    await user.hover(screen.getByRole('img', {name: 'Expired'}));
+    await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent('Expired 13 days ago'));
+  });
+
+  it('should say an agent has no expiry date when its lifespan has no end', async () => {
+    const user = userEvent.setup();
+    vi.mocked(useGetAgents).mockReturnValue({
+      data: {...mockAgentsData, agents: [{...mockAgentsData.agents[0], lifespan: {phase: 'UNBOUNDED'}}]},
+      isLoading: false,
+      error: null,
+    } as ReturnType<typeof useGetAgents>);
+
+    renderComponent();
+
+    await user.hover(screen.getByRole('img', {name: 'Active'}));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('No expiry date');
+  });
+
+  it('should keep the plain status text when the read reports no lifespan', async () => {
+    const user = userEvent.setup();
+    vi.mocked(useGetAgents).mockReturnValue({
+      data: {...mockAgentsData, agents: [mockAgentsData.agents[0]]},
+      isLoading: false,
+      error: null,
+    } as ReturnType<typeof useGetAgents>);
+
+    renderComponent();
+
+    await user.hover(screen.getByRole('img', {name: 'Active'}));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('This agent can authenticate normally.');
+  });
+
+  it("should keep the status indicators in the grid's roving focus rather than the page tab order", () => {
+    renderComponent();
+
+    const indicators = screen.getAllByRole('img', {name: 'Active'});
+    expect(indicators.length).toBeGreaterThan(0);
+    indicators.forEach((indicator) => expect(indicator).toHaveAttribute('tabindex', '-1'));
   });
 
   it('should fall back to the agent id when an agent has no display value', () => {

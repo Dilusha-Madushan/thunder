@@ -78,7 +78,7 @@ export default function GroupsList(): JSX.Element {
       },
       {
         field: 'ouHandle',
-        headerName: t('groups:listing.columns.organizationUnit', 'Organization Unit'),
+        headerName: t('groups:listing.columns.organizationUnit', 'Organization unit'),
         flex: 1,
         minWidth: 200,
         renderCell: (params: DataGrid.GridRenderCellParams<GroupBasic>) => (
@@ -99,15 +99,21 @@ export default function GroupsList(): JSX.Element {
         renderCell: (params: DataGrid.GridRenderCellParams<GroupBasic>): JSX.Element => (
           <ListingTable.RowActions>
             {params.row.isReadOnly ? (
-              <Tooltip title={t('common:status.readOnly', 'Read Only')}>
-                <IconButton size="small" disableRipple sx={{cursor: 'default'}}>
+              <Tooltip title={t('common:status.readOnly', 'Read only')}>
+                <IconButton
+                  aria-label={t('common:status.readOnly', 'Read only')}
+                  size="small"
+                  disableRipple
+                  sx={{cursor: 'default'}}
+                >
                   <Eye size={16} />
                 </IconButton>
               </Tooltip>
             ) : (
               <>
-                <Tooltip title={t('common:actions.edit')}>
+                <Tooltip title={t('common:actions.edit', 'Edit')}>
                   <IconButton
+                    aria-label={t('common:actions.edit', 'Edit')}
                     size="small"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -117,8 +123,9 @@ export default function GroupsList(): JSX.Element {
                     <Pencil size={16} />
                   </IconButton>
                 </Tooltip>
-                <Tooltip title={t('common:actions.delete')}>
+                <Tooltip title={t('common:actions.delete', 'Delete')}>
                   <IconButton
+                    aria-label={t('common:actions.delete', 'Delete')}
                     size="small"
                     color="error"
                     onClick={(e) => {

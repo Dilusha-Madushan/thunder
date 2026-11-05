@@ -38,6 +38,8 @@ export interface UseFlowSaveProps {
   flowHandle: string;
   /** Flow type. */
   flowType: string;
+  /** ID of the organization unit that owns the flow. It cannot change, so an update must send the flow's own. */
+  ouId?: string;
   /** Callback to show error notification. */
   showError: (message: string) => void;
   /** Callback to show success notification. */
@@ -51,6 +53,8 @@ export interface UseFlowSaveProps {
    * graph at success time.
    */
   onSaved?: (savedCanvas: CanvasData) => void;
+  /** Called after a new flow is created, with its persisted ID. */
+  onCreated?: (flowId: string) => void;
 }
 
 /**
@@ -77,10 +81,12 @@ const useFlowSave = (props: UseFlowSaveProps): UseFlowSaveReturn => {
     flowName,
     flowHandle,
     flowType,
+    ouId,
     showError,
     showSuccess,
     setOpenValidationPanel,
     onSaved,
+    onCreated,
   } = props;
 
   const {t} = useTranslation();
@@ -117,11 +123,17 @@ const useFlowSave = (props: UseFlowSaveProps): UseFlowSaveReturn => {
 
       // Send to backend API - use update if editing existing flow, create if new
       if (isEditingExistingFlow && flowId) {
+        // The owner cannot change, so an update has to carry the flow's own organization unit
+        if (!ouId) {
+          showError(t('flows:core.loginFlowBuilder.errors.saveFailed'));
+          return;
+        }
+
         // Update existing flow
         updateFlow.mutate(
           {
             flowId,
-            flowData: flowConfig as UpdateFlowRequest,
+            flowData: {...(flowConfig as Omit<UpdateFlowRequest, 'ouId'>), ouId},
           },
           {
             onSuccess: () => {
@@ -142,10 +154,11 @@ const useFlowSave = (props: UseFlowSaveProps): UseFlowSaveReturn => {
         );
       } else {
         // Create new flow
-        createFlow.mutate(flowConfig as CreateFlowRequest, {
-          onSuccess: () => {
+        createFlow.mutate({...flowConfig, ...(ouId ? {ouId} : {})} as CreateFlowRequest, {
+          onSuccess: (createdFlow) => {
             showSuccess(t('flows:core.loginFlowBuilder.success.flowCreated'));
             onSaved?.(canvasData);
+            onCreated?.(createdFlow.id);
           },
           onError: (err: Error) => {
             showError(
@@ -167,10 +180,12 @@ const useFlowSave = (props: UseFlowSaveProps): UseFlowSaveReturn => {
       flowName,
       flowHandle,
       flowType,
+      ouId,
       showError,
       showSuccess,
       setOpenValidationPanel,
       onSaved,
+      onCreated,
       t,
       tForErrors,
       createFlow,

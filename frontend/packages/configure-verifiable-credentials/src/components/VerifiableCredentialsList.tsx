@@ -94,8 +94,9 @@ export default function VerifiableCredentialsList(): JSX.Element {
         hideable: false,
         renderCell: (params: DataGrid.GridRenderCellParams<VerifiableCredentialSummary>): JSX.Element => (
           <ListingTable.RowActions>
-            <Tooltip title={t('verifiable-credentials:listing.offer')}>
+            <Tooltip title={t('verifiable-credentials:listing.offer', 'Generate offer')}>
               <IconButton
+                aria-label={t('verifiable-credentials:listing.offer', 'Generate offer')}
                 size="small"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -105,8 +106,9 @@ export default function VerifiableCredentialsList(): JSX.Element {
                 <QrCodeIcon size={16} />
               </IconButton>
             </Tooltip>
-            <Tooltip title={t('common:actions.edit')}>
+            <Tooltip title={t('common:actions.edit', 'Edit')}>
               <IconButton
+                aria-label={t('common:actions.edit', 'Edit')}
                 size="small"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -116,8 +118,9 @@ export default function VerifiableCredentialsList(): JSX.Element {
                 <Pencil size={16} />
               </IconButton>
             </Tooltip>
-            <Tooltip title={t('common:actions.delete')}>
+            <Tooltip title={t('common:actions.delete', 'Delete')}>
               <IconButton
+                aria-label={t('common:actions.delete', 'Delete')}
                 size="small"
                 color="error"
                 onClick={(e) => {

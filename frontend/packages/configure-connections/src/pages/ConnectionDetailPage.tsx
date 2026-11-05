@@ -1,10 +1,23 @@
 // Copyright 2025 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import {QueryErrorNotice, SettingsCard, UnsavedChangesBar} from '@thunderid/components';
+import {DocumentTitle, QueryErrorNotice, SettingsCard, UnsavedChangesBar} from '@thunderid/components';
 import {useConfig} from '@thunderid/contexts';
 import {getErrorMessage} from '@thunderid/utils';
-import {Alert, Box, Button, ListingTable, PageContent, Skeleton, Stack, Tab, Tabs, Typography} from '@wso2/oxygen-ui';
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  ListingTable,
+  PageContent,
+  Skeleton,
+  Stack,
+  Tab,
+  Tabs,
+  Tooltip,
+  Typography,
+} from '@wso2/oxygen-ui';
 import {AlertCircle, ChevronLeft, Trash2} from '@wso2/oxygen-ui-icons-react';
 import {type JSX, type ReactNode, type SyntheticEvent, useEffect, useMemo, useState} from 'react';
 import {useTranslation} from 'react-i18next';
@@ -13,6 +26,8 @@ import useConnection from '../api/useConnection';
 import useConnectionInstances from '../api/useConnectionInstances';
 import useConnectionMeta from '../api/useConnectionMeta';
 import useDeleteConnection from '../api/useDeleteConnection';
+import useEmailProviders from '../api/useEmailProviders';
+import useGetNotificationConfig from '../api/useGetNotificationConfig';
 import useUpdateConnection from '../api/useUpdateConnection';
 import AccountLinkingSection from '../components/AccountLinkingSection';
 import AttributeMappingSection from '../components/AttributeMappingSection';
@@ -20,8 +35,11 @@ import AuthenticationSection from '../components/AuthenticationSection';
 import AuthorizationMappingSection from '../components/AuthorizationMappingSection';
 import ConnectionDeleteDialog from '../components/ConnectionDeleteDialog';
 import ConnectionForm from '../components/ConnectionForm';
+import ConnectionUsagesSection from '../components/ConnectionUsagesSection';
+import OrganizationUnitSection from '../components/OrganizationUnitSection';
 import ReadOnlyCopyField from '../components/ReadOnlyCopyField';
 import ServiceAuthenticationMethods from '../components/ServiceAuthenticationMethods';
+import SetDefaultEmailSenderDialog from '../components/SetDefaultEmailSenderDialog';
 import SubjectMappingSection from '../components/SubjectMappingSection';
 import {CONNECTION_FORM_FIELDS} from '../config/connectionFormFields';
 import {VENDOR_META_BY_TYPE} from '../config/connectionVendorMeta';
@@ -38,22 +56,28 @@ import type {
   AuthorizationRuleMapping,
   ConnectionRequest,
   ConnectionType,
+  OutboundAuthField,
   OutboundAuthMethod,
   SubjectMappingValues,
 } from '../models/connection';
 import {ConnectionTypes} from '../models/connection';
 import {
+  AUTH_ADDITIONAL_PROPERTIES_FIELD,
   AUTH_TYPE_FIELD,
   AUTH_TYPE_NONE,
+  authenticationAdditionalPropertiesError,
+  authPropertyField,
   type ConnectionFormValues,
   formValuesToRequest,
+  HTTPS_REQUIRED_WITH_AUTHENTICATION_ERROR,
   MASKED_SECRET,
   outboundAuthenticationFromFormValues,
   responseToFormValues,
+  urlOriginChanged,
   validateConnectionForm,
 } from '../utils/connectionFormMapping';
 import isConflictError from '../utils/isConflictError';
-import {parseKeyValuePairs} from '../utils/keyValuePairs';
+import {decodeKeyValuePairs, parseKeyValuePairs} from '../utils/keyValuePairs';
 import {hasDuplicateSubjectAttributes, normalizeSubjectAttributeMappings} from '../utils/subjectMapping';
 
 interface TabPanelProps {
@@ -94,7 +118,8 @@ export default function ConnectionDetailPage(): JSX.Element | null {
   const {t} = useTranslation('connections');
   const navigate = useNavigate();
   const routes = useConnectionRoutes();
-  const {getGateCallbackUrl} = useConfig();
+  const {config: appConfig, getGateCallbackUrl} = useConfig();
+  const productName: string = appConfig.brand.product_name;
   const {type, id} = useParams<{type: string; id?: string}>();
 
   const connectionType = type as ConnectionType;
@@ -105,6 +130,7 @@ export default function ConnectionDetailPage(): JSX.Element | null {
   const supportsAuthentication: boolean = meta?.supportsAuthentication ?? false;
   const hasGenericAuthenticationSection = !supportsAuthentication && connectionType !== ConnectionTypes.SMS_GATEWAY;
   const generalSettingsCardCopy = meta?.generalSettingsCardCopy ?? 'credentials';
+  const isEmailSender: boolean = meta?.categories.includes('email') ?? false;
 
   // Branded vendors are singletons and route without an id — resolve the single instance.
   const instancesQuery = useConnectionInstances(connectionType, {enabled: Boolean(meta) && !id});
@@ -129,11 +155,33 @@ export default function ConnectionDetailPage(): JSX.Element | null {
   const [nameError, setNameError] = useState<string | null>(null);
   const [generalError, setGeneralError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [defaultDialogOpen, setDefaultDialogOpen] = useState(false);
 
   const updateMutation = useUpdateConnection(connectionType, resolvedId ?? '');
   const deleteMutation = useDeleteConnection(connectionType);
+  const {
+    data: notificationConfig,
+    isLoading: isNotificationConfigLoading,
+    error: notificationConfigError,
+    refetch: refetchNotificationConfig,
+  } = useGetNotificationConfig({enabled: isEmailSender});
+  const {data: emailProviders} = useEmailProviders({enabled: isEmailSender});
+
+  // Only trust the default once the section has resolved, so the action does not flash for the
+  // current default. A declarative (read-only) default is locked: the backend rejects any write.
+  const isDefaultReady = isEmailSender && !isNotificationConfigLoading && !notificationConfigError;
+  const isDefault =
+    isDefaultReady && Boolean(resolvedId) && resolvedId === notificationConfig?.merged?.defaultEmailSenderId;
+  const isDefaultLocked = isDefaultReady && Boolean(notificationConfig?.readOnly?.defaultEmailSenderId);
+  // The section keeps a deleted sender's ID, so only an existing sender counts as a default to replace.
+  const currentDefaultId = notificationConfig?.merged?.defaultEmailSenderId;
+  const replacesDefault =
+    Boolean(currentDefaultId) && (emailProviders?.some((p) => p.id === currentDefaultId) ?? false);
   const {data: connectionMeta, isError: isConnectionMetaError} = useConnectionMeta(connectionType);
-  const authenticationMethods: OutboundAuthMethod[] = connectionMeta?.authentication.methods ?? [];
+  const authenticationMethods: OutboundAuthMethod[] = useMemo(
+    () => connectionMeta?.authentication.methods ?? [],
+    [connectionMeta],
+  );
 
   useEffect(() => {
     if (!meta) {
@@ -146,8 +194,8 @@ export default function ConnectionDetailPage(): JSX.Element | null {
   const data = connectionQuery.data;
 
   const baseline = useMemo<ConnectionFormValues>(
-    () => (data ? responseToFormValues(data, fields, redirectUri) : {}),
-    [data, fields, redirectUri],
+    () => (data ? responseToFormValues(data, fields, redirectUri, authenticationMethods) : {}),
+    [data, fields, redirectUri, authenticationMethods],
   );
   const baselineAttr: AttributeConfiguration | undefined = data?.attributeConfiguration;
   const baselineAuthzMappings: AuthorizationRuleMapping[] | undefined =
@@ -234,6 +282,39 @@ export default function ConnectionDetailPage(): JSX.Element | null {
   const hasStoredOutboundCredential: boolean =
     (values[AUTH_TYPE_FIELD] || AUTH_TYPE_NONE) === data?.authentication?.type &&
     Object.values(data?.authentication?.properties ?? {}).includes(MASKED_SECRET);
+  const reentersCredentialsOnOriginChange: boolean = meta?.reentersCredentialsOnOriginChange ?? false;
+  // The stored credentials must not follow the URL to another origin, so they are entered again.
+  const credentialsMustBeReentered: boolean =
+    reentersCredentialsOnOriginChange &&
+    hasStoredOutboundCredential &&
+    urlOriginChanged(baseline['url'] ?? '', values['url'] ?? '');
+  const selectedOutboundMethod: OutboundAuthMethod | undefined = authenticationMethods.find(
+    (method) => method.type === (values[AUTH_TYPE_FIELD] || AUTH_TYPE_NONE),
+  );
+  const selectedOutboundFields: OutboundAuthField[] = selectedOutboundMethod?.fields ?? [];
+  const outboundAdditionalProperties = decodeKeyValuePairs(values[AUTH_ADDITIONAL_PROPERTIES_FIELD] ?? '', 'pairs');
+  const outboundFieldValue = (field: OutboundAuthField): string => (values[authPropertyField(field.key)] ?? '').trim();
+  // A credential typed while the origin gate was engaged stays visible if the URL is changed back.
+  const outboundSecretReplacing: boolean =
+    secretReplacing ||
+    (reentersCredentialsOnOriginChange &&
+      (credentialsMustBeReentered ||
+        selectedOutboundFields.some((field) => field.credential && outboundFieldValue(field) !== '')));
+  // A stored additional property still holds the mask, which the server cannot carry to a new origin.
+  const outboundAuthenticationIncomplete: boolean =
+    reentersCredentialsOnOriginChange &&
+    (selectedOutboundFields.some(
+      (field) =>
+        field.required &&
+        outboundFieldValue(field) === '' &&
+        (!field.credential || credentialsMustBeReentered || !hasStoredOutboundCredential),
+    ) ||
+      (Boolean(selectedOutboundMethod?.additionalProperties?.required) && outboundAdditionalProperties.length === 0) ||
+      (credentialsMustBeReentered && outboundAdditionalProperties.some(({value}) => value === MASKED_SECRET)));
+  const outboundAdditionalPropertiesError: string | undefined = authenticationAdditionalPropertiesError(
+    values,
+    authenticationMethods,
+  );
   const hasStoredHTTPHeaders =
     selectedAuthenticationScheme === AuthenticationMethods.API_KEY &&
     selectedAuthenticationScheme === persistedAuthenticationScheme &&
@@ -279,8 +360,11 @@ export default function ConnectionDetailPage(): JSX.Element | null {
         : selectedAuthenticationScheme === AuthenticationMethods.API_KEY
           ? (values['httpHeaders'] ?? '').trim() !== ''
           : false;
+  const fieldErrors: Record<string, string> = validateConnectionForm(values, fields, 'edit');
   const valid: boolean =
-    Object.keys(validateConnectionForm(values, fields, 'edit')).length === 0 &&
+    Object.keys(fieldErrors).length === 0 &&
+    !outboundAuthenticationIncomplete &&
+    !outboundAdditionalPropertiesError &&
     attrValid &&
     authzMappingsValid &&
     directMappingsValid &&
@@ -357,6 +441,7 @@ export default function ConnectionDetailPage(): JSX.Element | null {
         mode: 'edit',
         secretReplaced: secretReplacing,
         excludeGenericAuthentication: supportsAuthentication,
+        authenticationMethods,
       }),
       ...(supportsAuthentication && authenticationChanged
         ? {authentication: outboundAuthenticationFromFormValues(values)}
@@ -394,6 +479,7 @@ export default function ConnectionDetailPage(): JSX.Element | null {
 
   return (
     <PageContent>
+      <DocumentTitle title={data?.name ?? t('navigation:pages.connections', 'Connections')} />
       <Button
         variant="text"
         startIcon={<ChevronLeft size={16} />}
@@ -445,9 +531,48 @@ export default function ConnectionDetailPage(): JSX.Element | null {
               {meta.logo}
             </Box>
             <Stack direction="column" spacing={0.5}>
-              <Typography variant="h5" fontWeight={700}>
-                {data?.name ?? meta.displayName}
-              </Typography>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Typography variant="h5" fontWeight={700}>
+                  {data?.name ?? meta.displayName}
+                </Typography>
+                {isDefault && (
+                  <Tooltip
+                    title={isDefaultLocked ? t('detail.defaultBadgeManaged', 'Managed by server configuration.') : ''}
+                  >
+                    <Chip
+                      label={t('card.default', 'Default')}
+                      size="small"
+                      color="primary"
+                      variant="outlined"
+                      data-testid="connection-default-chip"
+                    />
+                  </Tooltip>
+                )}
+                {isDefaultReady && !isDefault && (
+                  <Tooltip
+                    title={
+                      isDefaultLocked
+                        ? t(
+                            'setDefault.lockedReason',
+                            'The default email sender is fixed by the deployment configuration.',
+                          )
+                        : ''
+                    }
+                  >
+                    <span>
+                      <Button
+                        variant="contained"
+                        size="small"
+                        disabled={isDefaultLocked}
+                        data-testid="connection-set-default-button"
+                        onClick={() => setDefaultDialogOpen(true)}
+                      >
+                        {t('setDefault.action', 'Set as default')}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                )}
+              </Stack>
               <Stack direction="row" spacing={0.75} alignItems="center">
                 <Box sx={{width: 8, height: 8, borderRadius: '50%', bgcolor: 'success.main'}} />
                 <Typography variant="body2" color="text.secondary">
@@ -456,6 +581,19 @@ export default function ConnectionDetailPage(): JSX.Element | null {
               </Stack>
             </Stack>
           </Stack>
+
+          {isEmailSender && notificationConfigError && (
+            <Box sx={{mb: 3}}>
+              <QueryErrorNotice
+                error={notificationConfigError}
+                t={t}
+                variant="inline"
+                fallbackKey="defaultSender.loadError"
+                fallbackDefaultValue="Failed to load the default email sender."
+                onRetry={() => void refetchNotificationConfig()}
+              />
+            </Box>
+          )}
 
           {generalError && (
             <Alert severity="error" onClose={clearSaveError} sx={{mb: 3}}>
@@ -503,7 +641,7 @@ export default function ConnectionDetailPage(): JSX.Element | null {
             )}
             {supportsSubjectMapping && (
               <Tab
-                label={t('detail.tabs.subjectMapping', 'Attribute Configuration')}
+                label={t('detail.tabs.subjectMapping', 'Attribute configuration')}
                 sx={{textTransform: 'none'}}
                 data-testid="connection-tab-subject-mapping"
               />
@@ -526,17 +664,20 @@ export default function ConnectionDetailPage(): JSX.Element | null {
                 />
               </SettingsCard>
 
+              {data?.ouId && <OrganizationUnitSection ouId={data.ouId} />}
+
               <SettingsCard
                 title={
                   generalSettingsCardCopy === 'configuration'
-                    ? t('detail.configuration.title', 'Connection Configuration')
+                    ? t('detail.configuration.title', 'Connection configuration')
                     : t('detail.credentials.title', 'Credentials')
                 }
                 description={
                   generalSettingsCardCopy === 'configuration'
                     ? t(
                         'detail.configuration.description',
-                        'Provide the details ThunderID needs to connect to this service.',
+                        'Provide the details {{productName}} needs to connect to this service.',
+                        {productName},
                       )
                     : t(
                         'detail.credentials.description',
@@ -558,6 +699,14 @@ export default function ConnectionDetailPage(): JSX.Element | null {
                   onFieldChange={handleFieldChange}
                   onSecretReplacingChange={setSecretReplacing}
                 />
+                {credentialsMustBeReentered && (
+                  <Alert severity="warning" sx={{mt: 2}}>
+                    {t(
+                      'detail.authentication.originChanged',
+                      'The URL origin changed. Enter the credentials again under Authentication before saving.',
+                    )}
+                  </Alert>
+                )}
               </SettingsCard>
 
               {hasGenericAuthenticationSection && isConnectionMetaError && (
@@ -568,19 +717,31 @@ export default function ConnectionDetailPage(): JSX.Element | null {
               {hasGenericAuthenticationSection && !isConnectionMetaError && authenticationMethods.length > 0 && (
                 <SettingsCard
                   title={t('detail.authentication.title')}
-                  description={t('detail.outboundAuthentication.description')}
+                  description={t('detail.outboundAuthentication.description', {productName})}
                 >
                   <AuthenticationSection
                     methods={authenticationMethods}
                     values={values}
                     mode="edit"
-                    secretReplacing={secretReplacing}
-                    hasStoredSecret={hasStoredOutboundCredential}
+                    secretReplacing={outboundSecretReplacing}
+                    hasStoredSecret={hasStoredOutboundCredential && !credentialsMustBeReentered}
                     showHeading={false}
                     onFieldChange={handleFieldChange}
                     onSecretReplacingChange={setSecretReplacing}
                   />
+                  {fieldErrors['url'] === HTTPS_REQUIRED_WITH_AUTHENTICATION_ERROR && (
+                    <Alert severity="error" sx={{mt: 2}}>
+                      {t(
+                        HTTPS_REQUIRED_WITH_AUTHENTICATION_ERROR,
+                        'Use an https URL when an authentication method is set, or set the method to None.',
+                      )}
+                    </Alert>
+                  )}
                 </SettingsCard>
+              )}
+
+              {meta.showsUsages && resolvedId && (
+                <ConnectionUsagesSection connectionType={connectionType} connectionId={resolvedId} />
               )}
             </Stack>
           </TabPanel>
@@ -593,11 +754,13 @@ export default function ConnectionDetailPage(): JSX.Element | null {
                   connectionType === ConnectionTypes.SMS_GATEWAY
                     ? t(
                         'detail.authentication.gatewayDescription',
-                        'Configure how ThunderID authenticates requests sent to this SMS gateway.',
+                        'Configure how {{productName}} authenticates requests sent to this SMS gateway.',
+                        {productName},
                       )
                     : t(
                         'detail.authentication.description',
-                        'Configure how ThunderID authenticates requests sent to this policy decision point.',
+                        'Configure how {{productName}} authenticates requests sent to this policy decision point.',
+                        {productName},
                       )
                 }
               >
@@ -685,7 +848,7 @@ export default function ConnectionDetailPage(): JSX.Element | null {
                   {t('detail.dangerZone.delete.title')}
                 </Typography>
                 <Typography variant="body2" color="text.secondary" sx={{mb: 3}}>
-                  {t('detail.dangerZone.delete.description')}
+                  {t(meta.deleteDescriptionKey ?? 'detail.dangerZone.delete.description')}
                 </Typography>
                 <Button
                   variant="contained"
@@ -721,6 +884,7 @@ export default function ConnectionDetailPage(): JSX.Element | null {
             connectionType={connectionType}
             connectionId={resolvedId ?? ''}
             connectionName={data?.name ?? ''}
+            isDefaultEmailSender={isDefault}
             isPending={deleteMutation.isPending}
             error={deleteError}
             onConfirm={handleDelete}
@@ -729,6 +893,16 @@ export default function ConnectionDetailPage(): JSX.Element | null {
               setDeleteError(null);
             }}
           />
+
+          {isEmailSender && resolvedId && (
+            <SetDefaultEmailSenderDialog
+              open={defaultDialogOpen}
+              senderId={resolvedId}
+              senderName={data?.name ?? ''}
+              replacesDefault={replacesDefault}
+              onClose={() => setDefaultDialogOpen(false)}
+            />
+          )}
         </>
       )}
     </PageContent>

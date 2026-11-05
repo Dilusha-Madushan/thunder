@@ -1,6 +1,7 @@
 // Copyright 2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import {DocumentTitle} from '@thunderid/components';
 import {useToast, useConfig} from '@thunderid/contexts';
 import {useLogger} from '@thunderid/logger/react';
 import {getErrorMessage} from '@thunderid/utils';
@@ -20,6 +21,7 @@ import {
 } from '@wso2/oxygen-ui';
 import {
   Bot,
+  BoxIcon,
   Building,
   Group,
   IdCard,
@@ -261,6 +263,20 @@ const RESOURCE_VIEWS: ResourceView[] = [
     getKey: (item, idx) => item.handle ?? item.name ?? `layout-${idx}`,
     getName: (item, t) => item.name ?? item.handle ?? t('configureExport.fallback.unnamedLayout'),
     renderDetails: (item) => (item.description ? detailLine(item.description) : null),
+  },
+  {
+    type: 'project',
+    id: 'projects',
+    icon: BoxIcon,
+    getLabel: (t) => t('configureExport.labels.projects'),
+    getKey: (item, idx) => item.handle ?? item.displayName ?? `project-${idx}`,
+    getName: (item, t) => item.displayName ?? item.handle ?? t('configureExport.fallback.unnamedProject'),
+    renderDetails: (item) => (
+      <>
+        {item.description && detailLine(item.description)}
+        {item.handle && item.displayName !== item.handle && detailLine(item.handle, true)}
+      </>
+    ),
   },
   {
     type: 'organization_unit',
@@ -746,6 +762,7 @@ export default function ImportConfigurationSummaryPage(): JSX.Element {
 
   return (
     <Box sx={{minHeight: '100vh', display: 'flex', flexDirection: 'column'}}>
+      <DocumentTitle title={t('summary.title', 'Configuration summary')} />
       <LinearProgress variant="determinate" value={100} sx={{height: 6}} />
 
       <Box

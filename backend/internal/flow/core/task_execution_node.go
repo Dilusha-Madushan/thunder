@@ -81,9 +81,13 @@ func (n *taskExecutionNode) Execute(ctx *providers.NodeContext) (*common.NodeRes
 		return nil, &tidcommon.InternalServerError
 	}
 
-	// Set node properties in context
+	// Set node properties in context, with any variable placeholders resolved. A resolved set of properties is a
+	// copy: the node belongs to a graph every execution shares.
 	if len(n.GetProperties()) > 0 {
 		ctx.NodeProperties = n.GetProperties()
+		if resolved, ok := resolveVariables(ctx.NodeProperties, ctx).(map[string]interface{}); ok {
+			ctx.NodeProperties = resolved
+		}
 	} else {
 		ctx.NodeProperties = make(map[string]interface{})
 	}
@@ -92,6 +96,9 @@ func (n *taskExecutionNode) Execute(ctx *providers.NodeContext) (*common.NodeRes
 	ctx.ExecutorMode = n.mode
 
 	n.enrichRuntimeData(ctx)
+	if svcErr := n.resolveInputValues(ctx, logger); svcErr != nil {
+		return nil, svcErr
+	}
 
 	execResp, svcErr := n.triggerExecutor(ctx, logger)
 	if svcErr != nil {
@@ -170,6 +177,28 @@ func (n *taskExecutionNode) enrichRuntimeData(ctx *providers.NodeContext) {
 	if senderID, ok := ctx.NodeProperties["senderId"].(string); ok && senderID != "" {
 		ctx.RuntimeData["senderId"] = senderID
 	}
+}
+
+// resolveInputValues writes the configured default and constant input values to UserInputs so the
+// executor sees them. A constant replaces any existing value and a default only fills a missing one.
+// An empty default is never written. A constant without a default value is a configuration error.
+func (n *taskExecutionNode) resolveInputValues(ctx *providers.NodeContext,
+	logger *log.Logger) *tidcommon.ServiceError {
+	for _, input := range n.inputs {
+		if input.DefaultValue == "" {
+			if input.Constant {
+				logger.Error(ctx.Context, "Constant input has no default value",
+					log.String(log.LoggerKeyNodeID, n.GetID()), log.String("identifier", input.Identifier))
+				return &tidcommon.InternalServerError
+			}
+			continue
+		}
+		if !input.Constant && hasUsableInputValue(ctx, input) {
+			continue
+		}
+		writeInputDefault(ctx, input)
+	}
+	return nil
 }
 
 // triggerExecutor triggers the executor configured for the node.

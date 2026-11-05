@@ -5,6 +5,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -44,6 +45,7 @@ type authAssertExecutor struct {
 	attributeCacheSvc   attributecache.AttributeCacheServiceInterface
 	roleService         role.RoleServiceInterface
 	entityTypeService   entitytype.EntityTypeServiceInterface
+	accessGuard         *accessGuard
 	logger              *log.Logger
 }
 
@@ -60,6 +62,7 @@ func newAuthAssertExecutor(
 	attributeCacheSvc attributecache.AttributeCacheServiceInterface,
 	roleService role.RoleServiceInterface,
 	entityTypeService entitytype.EntityTypeServiceInterface,
+	accessGuard *accessGuard,
 ) *authAssertExecutor {
 	logger := log.GetLogger().With(log.String(log.LoggerKeyComponentName, authAssertLoggerComponentName),
 		log.String(log.LoggerKeyExecutorName, ExecutorNameAuthAssert))
@@ -81,6 +84,7 @@ func newAuthAssertExecutor(
 		attributeCacheSvc:   attributeCacheSvc,
 		roleService:         roleService,
 		entityTypeService:   entityTypeService,
+		accessGuard:         accessGuard,
 		logger:              logger,
 	}
 }
@@ -106,7 +110,21 @@ func (a *authAssertExecutor) Execute(ctx *providers.NodeContext) (*providers.Exe
 			return execResp, nil
 		}
 
-		token, err := a.generateAuthAssertion(ctx, execResp, logger)
+		// Resolved once, so the hold check and the assertion act on the same entity.
+		entityRef, svcErr, fault := a.resolveEntityReference(ctx, execResp)
+		if fault == nil && svcErr == nil {
+			svcErr, fault = a.accessGuard.refuseSignInIfHeld(ctx.Context, entityRef.EntityID, logger)
+		}
+		if fault != nil {
+			return nil, fault
+		}
+		if svcErr != nil {
+			execResp.Status = providers.ExecFailure
+			execResp.Error = svcErr
+			return execResp, nil
+		}
+
+		token, err := a.generateAuthAssertion(ctx, execResp, entityRef, logger)
 		// A client failure is recorded on the response; a returned error is a server fault.
 		if execResp.Status == providers.ExecFailure {
 			return execResp, nil
@@ -116,6 +134,8 @@ func (a *authAssertExecutor) Execute(ctx *providers.NodeContext) (*providers.Exe
 		}
 
 		logger.Debug(ctx.Context, "Generated JWT token for authentication assertion")
+
+		a.accessGuard.recordLogin(ctx.Context, entityRef.EntityID)
 
 		execResp.Status = providers.ExecComplete
 		execResp.Assertion = token
@@ -128,6 +148,24 @@ func (a *authAssertExecutor) Execute(ctx *providers.NodeContext) (*providers.Exe
 		log.String("status", string(execResp.Status)))
 
 	return execResp, nil
+}
+
+// resolveEntityReference resolves the authenticated user's entity reference and keeps the resolved
+// AuthUser on the response. A client error means the user names no local entity.
+func (a *authAssertExecutor) resolveEntityReference(ctx *providers.NodeContext,
+	execResp *providers.ExecutorResponse) (*providers.EntityReference, *tidcommon.ServiceError, error) {
+	authUser, entityRef, svcErr := a.authnProvider.GetEntityReference(ctx.Context, execResp.AuthUser)
+	execResp.AuthUser = authUser
+	if svcErr != nil {
+		if svcErr.Type == tidcommon.ServerErrorType {
+			return nil, nil, errors.New("something went wrong while fetching entity references")
+		}
+		return nil, errForEntityCategory(ErrFailedToIdentifyEntity, categoryUnscoped), nil
+	}
+	if entityRef == nil {
+		return nil, nil, errors.New("entity reference resolved to nothing")
+	}
+	return entityRef, nil, nil
 }
 
 // checkAssurance verifies that the assurance accumulated in this execution satisfies the
@@ -191,10 +229,11 @@ func addCorrelationClaim(jwtClaims map[string]interface{}, executionID string) {
 // replaced value would reach the authorization code and be reported as the event's subject, which is
 // the mapped-attribute disclosure these claims exist to avoid.
 var reservedAssertionClaims = map[string]bool{
-	oauth2const.ClaimSubjectID:     true,
-	oauth2const.ClaimSubjectType:   true,
-	oauth2const.ClaimCorrelationID: true,
-	oauth2const.ClaimSessionID:     true,
+	oauth2const.ClaimSubjectID:                   true,
+	oauth2const.ClaimSubjectType:                 true,
+	oauth2const.ClaimCorrelationID:               true,
+	oauth2const.ClaimSessionID:                   true,
+	oauth2const.ClaimGrantedAuthorizationDetails: true,
 }
 
 // addSubjectIdentityClaims carries the authenticated entity's resource ID and category onto the
@@ -264,9 +303,9 @@ func (a *authAssertExecutor) recordResolvedAttributes(
 	return nil
 }
 
-// generateAuthAssertion generates the authentication assertion token.
-func (a *authAssertExecutor) generateAuthAssertion(
-	ctx *providers.NodeContext, execResp *providers.ExecutorResponse, logger *log.Logger,
+// generateAuthAssertion generates the authentication assertion token for the resolved subject.
+func (a *authAssertExecutor) generateAuthAssertion(ctx *providers.NodeContext,
+	execResp *providers.ExecutorResponse, entityRef *providers.EntityReference, logger *log.Logger,
 ) (string, error) {
 	tokenSub := ""
 
@@ -310,8 +349,13 @@ func (a *authAssertExecutor) generateAuthAssertion(
 
 	// Bind the assertion to the originating auth request so the corresponding callback can verify this assertion
 	// authorizes the specific request it accompanies.
-	if authReqID, exists := ctx.RuntimeData[common.RuntimeKeyAuthorizationRequestID]; exists && authReqID != "" {
+	if authReqID := common.RuntimeDataOrShared(ctx.RuntimeData, ctx.SharedRuntimeData,
+		common.RuntimeKeyAuthorizationRequestID); authReqID != "" {
 		jwtClaims[oauth2const.ClaimAuthorizationRequestID] = authReqID
+	}
+
+	if granted, ok := ctx.RuntimeData[common.RuntimeKeyConsentedAuthorizationDetails]; ok && granted != "" {
+		jwtClaims[oauth2const.ClaimGrantedAuthorizationDetails] = json.RawMessage(granted)
 	}
 
 	addCorrelationClaim(jwtClaims, ctx.ExecutionID)
@@ -338,18 +382,6 @@ func (a *authAssertExecutor) generateAuthAssertion(
 	}
 	for _, attrName := range requiredAttributes {
 		reqAttrs.Attributes[attrName] = nil
-	}
-
-	authUser, entityRef, svcErr := a.authnProvider.GetEntityReference(ctx.Context, execResp.AuthUser)
-	execResp.AuthUser = authUser
-	if svcErr != nil {
-		if svcErr.Type == tidcommon.ServerErrorType {
-			return "", errors.New("something went wrong while fetching entity references")
-		}
-		// A client error here means the identity names no local user.
-		execResp.Status = providers.ExecFailure
-		execResp.Error = errForEntityCategory(ErrFailedToIdentifyEntity, categoryUnscoped)
-		return "", nil
 	}
 
 	// Ensure the configured subject attribute for this user type is fetched
@@ -492,6 +524,9 @@ func (a *authAssertExecutor) getRequiredUserAttributes(ctx *providers.NodeContex
 	// If present, we should apply attribute filtering based on these attributes
 	_, essentialExists := ctx.RuntimeData[common.RuntimeKeyRequiredEssentialAttributes]
 	_, optionalExists := ctx.RuntimeData[common.RuntimeKeyRequiredOptionalAttributes]
+	if !optionalExists {
+		_, optionalExists = ctx.SharedRuntimeData[common.RuntimeKeyRequiredOptionalAttributes]
+	}
 
 	if essentialExists || optionalExists {
 		userAttributes = []string{}
@@ -505,8 +540,8 @@ func (a *authAssertExecutor) getRequiredUserAttributes(ctx *providers.NodeContex
 		}
 		if optionalExists {
 			logger.Debug(ctx.Context, "Adding required optional attributes to user attributes list")
-			userAttributes = append(userAttributes,
-				strings.Fields(ctx.RuntimeData[common.RuntimeKeyRequiredOptionalAttributes])...)
+			userAttributes = append(userAttributes, strings.Fields(common.RuntimeDataOrShared(ctx.RuntimeData,
+				ctx.SharedRuntimeData, common.RuntimeKeyRequiredOptionalAttributes))...)
 		}
 
 		return userAttributes
@@ -731,7 +766,7 @@ func (a *authAssertExecutor) fetchAllUserGroups(
 		return nil, nil
 	}
 
-	groups, err := a.entityProvider.GetTransitiveEntityGroups(userID)
+	groups, err := a.entityProvider.GetTransitiveEntityGroups(ctx, userID)
 	if err != nil {
 		a.logger.Error(ctx, "Failed to fetch transitive user groups",
 			log.MaskedString(log.LoggerKeyUserID, userID), log.Any("error", err))
@@ -764,7 +799,7 @@ func (a *authAssertExecutor) appendRolesToClaims(
 		groupIDs = append(groupIDs, g.ID)
 	}
 
-	roles, svcErr := a.roleService.GetUserRoles(ctx.Context, userID, groupIDs)
+	roles, svcErr := a.roleService.GetUserRoles(ctx.Context, userID, groupIDs, "")
 	if svcErr != nil {
 		logger.Error(ctx.Context, "Failed to fetch user roles",
 			log.MaskedString(log.LoggerKeyUserID, userID),

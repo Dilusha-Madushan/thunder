@@ -1,7 +1,8 @@
-// Copyright 2025 The ThunderID Authors
+// Copyright 2025-2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import {FullScreenCreationWizardLayout} from '@thunderid/components';
+import {DocumentTitle, FullScreenCreationWizardLayout} from '@thunderid/components';
+import {useHasMultipleOUs} from '@thunderid/configure-organization-units';
 import {useLogger} from '@thunderid/logger/react';
 import {getErrorMessage} from '@thunderid/utils';
 import {Alert, Box, Button, CircularProgress} from '@wso2/oxygen-ui';
@@ -10,15 +11,18 @@ import {useCallback, useMemo, useState} from 'react';
 import {useTranslation} from 'react-i18next';
 import {useNavigate} from 'react-router';
 import useCreateFlow from '../api/useCreateFlow';
+import useGetFlowsMeta from '../api/useGetFlowsMeta';
 import ConfigureFlowName from '../components/create-flow/ConfigureFlowName';
 import type {ConfigureFlowNameValue} from '../components/create-flow/ConfigureFlowName';
+import FlowOrganizationUnitStep from '../components/create-flow/FlowOrganizationUnitStep';
 import SelectFlowTemplate from '../components/create-flow/SelectFlowTemplate';
 import SelectFlowType from '../components/create-flow/SelectFlowType';
 import useFlowRoutes from '../hooks/useFlowRoutes';
-import type {FlowType} from '../models/flows';
+import {FlowType} from '../models/flows';
 import type {FlowTemplate} from '../models/templates';
 
 const FlowCreateStep = {
+  ORGANIZATION_UNIT: 'ORGANIZATION_UNIT',
   TYPE: 'TYPE',
   TEMPLATE: 'TEMPLATE',
   CONFIGURE: 'CONFIGURE',
@@ -26,28 +30,50 @@ const FlowCreateStep = {
 
 type FlowCreateStep = (typeof FlowCreateStep)[keyof typeof FlowCreateStep];
 
-const ALL_STEPS = [FlowCreateStep.TYPE, FlowCreateStep.TEMPLATE, FlowCreateStep.CONFIGURE];
-
 export default function FlowCreatePage(): JSX.Element {
   const {t} = useTranslation();
   const navigate = useNavigate();
   const flowRoutes = useFlowRoutes();
   const logger = useLogger('FlowCreatePage');
   const createFlow = useCreateFlow();
+  const {data: deviceGrantMeta} = useGetFlowsMeta({flowType: FlowType.DEVICE_GRANT});
+  const deviceGrantTemplate = deviceGrantMeta.templates.find((template) => template.type === 'DEVICE_GRANT') ?? null;
 
-  const [currentStep, setCurrentStep] = useState<FlowCreateStep>(FlowCreateStep.TYPE);
+  const [requestedStep, setCurrentStep] = useState<FlowCreateStep>(FlowCreateStep.ORGANIZATION_UNIT);
   const [selectedType, setSelectedType] = useState<FlowType | null>(null);
   const [selectedTemplate, setSelectedTemplate] = useState<FlowTemplate | null>(null);
   const [typeReady, setTypeReady] = useState(false);
   const [nameValue, setNameValue] = useState<ConfigureFlowNameValue>({name: '', handle: ''});
   const [nameReady, setNameReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedOuId, setSelectedOuId] = useState('');
 
-  const steps: Record<FlowCreateStep, {label: string; order: number}> = useMemo(
+  // The organization unit is the wizard's first step whenever there is a choice to make. A single-unit deployment
+  // uses its one unit, so once that is known the step is skipped.
+  const {hasMultipleOUs, isLoading: isOuLoading, ouList} = useHasMultipleOUs();
+  const ouId: string = hasMultipleOUs ? selectedOuId : (ouList[0]?.id ?? '');
+
+  const currentStep: FlowCreateStep =
+    requestedStep === FlowCreateStep.ORGANIZATION_UNIT && !isOuLoading && !hasMultipleOUs
+      ? FlowCreateStep.TYPE
+      : requestedStep;
+
+  const activeSteps: FlowCreateStep[] = useMemo(
+    () => [
+      ...(hasMultipleOUs ? [FlowCreateStep.ORGANIZATION_UNIT] : []),
+      FlowCreateStep.TYPE,
+      ...(selectedType === FlowType.DEVICE_GRANT ? [] : [FlowCreateStep.TEMPLATE]),
+      FlowCreateStep.CONFIGURE,
+    ],
+    [hasMultipleOUs, selectedType],
+  );
+
+  const steps: Record<FlowCreateStep, {label: string}> = useMemo(
     () => ({
-      [FlowCreateStep.TYPE]: {label: t('flows:create.steps.type', 'Flow Type'), order: 1},
-      [FlowCreateStep.TEMPLATE]: {label: t('flows:create.steps.template', 'Template'), order: 2},
-      [FlowCreateStep.CONFIGURE]: {label: t('flows:create.steps.configure', 'Details'), order: 3},
+      [FlowCreateStep.ORGANIZATION_UNIT]: {label: t('flows:create.steps.organizationUnit', 'Organization unit')},
+      [FlowCreateStep.TYPE]: {label: t('flows:create.steps.type', 'Flow type')},
+      [FlowCreateStep.TEMPLATE]: {label: t('flows:create.steps.template', 'Template')},
+      [FlowCreateStep.CONFIGURE]: {label: t('flows:create.steps.configure', 'Details')},
     }),
     [t],
   );
@@ -77,7 +103,17 @@ export default function FlowCreatePage(): JSX.Element {
   }, [createFlow]);
 
   const handleNextStep = (): void => {
+    if (currentStep === FlowCreateStep.ORGANIZATION_UNIT) {
+      setCurrentStep(FlowCreateStep.TYPE);
+      return;
+    }
     if (currentStep === FlowCreateStep.TYPE) {
+      if (selectedType === FlowType.DEVICE_GRANT) {
+        if (!deviceGrantTemplate) return;
+        setSelectedTemplate(deviceGrantTemplate);
+        setCurrentStep(FlowCreateStep.CONFIGURE);
+        return;
+      }
       setCurrentStep(FlowCreateStep.TEMPLATE);
       return;
     }
@@ -87,13 +123,22 @@ export default function FlowCreatePage(): JSX.Element {
     }
     if (currentStep === FlowCreateStep.CONFIGURE) {
       if (!selectedType || !selectedTemplate) return;
+      if (!ouId) {
+        setError(t('flows:create.organizationUnit.required', 'Organization unit is required'));
+        return;
+      }
       const flowRequest = {
         name: nameValue.name,
         handle: nameValue.handle,
         flowType: selectedType,
+        ouId,
         nodes: selectedTemplate.config.nodes,
       };
       setError(null);
+      if (selectedType === FlowType.DEVICE_GRANT) {
+        void navigate(flowRoutes.flows.detail('new'), {state: {draftFlow: flowRequest}});
+        return;
+      }
       createFlow.mutate(flowRequest, {
         onSuccess: (savedFlow) => {
           (async () => {
@@ -112,14 +157,17 @@ export default function FlowCreatePage(): JSX.Element {
   };
 
   const handlePrevStep = (): void => {
+    if (currentStep === FlowCreateStep.TYPE && hasMultipleOUs) setCurrentStep(FlowCreateStep.ORGANIZATION_UNIT);
     if (currentStep === FlowCreateStep.TEMPLATE) setCurrentStep(FlowCreateStep.TYPE);
-    if (currentStep === FlowCreateStep.CONFIGURE) setCurrentStep(FlowCreateStep.TEMPLATE);
+    if (currentStep === FlowCreateStep.CONFIGURE) {
+      setCurrentStep(selectedType === FlowType.DEVICE_GRANT ? FlowCreateStep.TYPE : FlowCreateStep.TEMPLATE);
+    }
   };
 
   const handleTypeChange = (type: FlowType): void => {
     clearCreateError();
     setSelectedType(type);
-    setSelectedTemplate(null);
+    setSelectedTemplate(type === FlowType.DEVICE_GRANT ? deviceGrantTemplate : null);
   };
 
   const handleTemplateChange = (template: FlowTemplate): void => {
@@ -133,12 +181,12 @@ export default function FlowCreatePage(): JSX.Element {
   };
 
   const getStepProgress = (): number => {
-    return ((ALL_STEPS.indexOf(currentStep) + 1) / ALL_STEPS.length) * 100;
+    return ((activeSteps.indexOf(currentStep) + 1) / activeSteps.length) * 100;
   };
 
   const getBreadcrumbSteps = (): FlowCreateStep[] => {
-    const currentIndex = ALL_STEPS.indexOf(currentStep);
-    return ALL_STEPS.slice(0, currentIndex + 1);
+    const currentIndex = activeSteps.indexOf(currentStep);
+    return activeSteps.slice(0, currentIndex + 1);
   };
 
   const isContinueDisabled = (): boolean => {
@@ -173,6 +221,21 @@ export default function FlowCreatePage(): JSX.Element {
     return null;
   };
 
+  if (currentStep === FlowCreateStep.ORGANIZATION_UNIT) {
+    return (
+      <FlowOrganizationUnitStep
+        isLoading={isOuLoading || !hasMultipleOUs}
+        value={selectedOuId}
+        onChange={(value) => {
+          clearCreateError();
+          setSelectedOuId(value);
+        }}
+        onBack={handleClose}
+        onContinue={handleNextStep}
+      />
+    );
+  }
+
   return (
     <FullScreenCreationWizardLayout
       onClose={handleClose}
@@ -187,11 +250,11 @@ export default function FlowCreatePage(): JSX.Element {
         <Box
           sx={{
             display: 'flex',
-            justifyContent: currentStep === FlowCreateStep.TYPE ? 'flex-end' : 'space-between',
+            justifyContent: activeSteps.indexOf(currentStep) > 0 ? 'space-between' : 'flex-end',
             gap: 2,
           }}
         >
-          {currentStep !== FlowCreateStep.TYPE && (
+          {activeSteps.indexOf(currentStep) > 0 && (
             <Button variant="outlined" onClick={handlePrevStep} sx={{minWidth: 100}} disabled={createFlow.isPending}>
               {t('common:actions.back', 'Back')}
             </Button>
@@ -207,6 +270,7 @@ export default function FlowCreatePage(): JSX.Element {
         </Box>
       }
     >
+      <DocumentTitle title={t('flows:listing.addFlow', 'Create new flow')} />
       {error && (
         <Alert severity="error" sx={{mb: 3}} onClose={clearCreateError}>
           {error}

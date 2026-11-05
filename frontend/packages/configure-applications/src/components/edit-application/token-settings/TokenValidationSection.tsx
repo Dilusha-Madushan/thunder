@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {SettingsCard} from '@thunderid/components';
-import {Box, FormControl, FormLabel, Stack, Tab, Tabs, TextField} from '@wso2/oxygen-ui';
+import {Box, Stack, Tab, Tabs, TextField} from '@wso2/oxygen-ui';
 import {useState} from 'react';
 import {Controller} from 'react-hook-form';
 import type {Control, FieldErrors} from 'react-hook-form';
@@ -40,6 +40,12 @@ interface TokenValidationSectionProps {
    * Whether inputs should be disabled (e.g. read-only resource).
    */
   disabled?: boolean;
+  /**
+   * In OAuth mode, whether only the access token validity applies, for an entity whose grants
+   * issue an access token alone (token exchange, JWT bearer). It is then shown on its own, without
+   * the ID token and refresh token tabs. Defaults to false.
+   */
+  accessTokenOnly?: boolean;
 }
 
 /**
@@ -48,7 +54,8 @@ interface TokenValidationSectionProps {
  * - `tokenType="shared"`: renders a single validity period input for native apps.
  * - `tokenType="oauth"`: renders token tabs (Access Token / ID Token / Refresh Token), each with its
  *   own validity period input. The tab state is managed internally and is independent
- *   of any other tab state in the page.
+ *   of any other tab state in the page. With `accessTokenOnly`, only the access token input is
+ *   shown, without tabs.
  *
  * @param props - Component props
  * @returns Token validity configuration UI within a SettingsCard
@@ -58,42 +65,56 @@ export default function TokenValidationSection({
   errors,
   tokenType,
   disabled = false,
+  accessTokenOnly = false,
 }: TokenValidationSectionProps) {
   const {t} = useTranslation();
   const [activeValidationTab, setActiveValidationTab] = useState<'access' | 'id' | 'refresh'>('access');
 
-  const title = t('applications:edit.token.token_validation.title', 'Token Validity');
+  const title = t('applications:edit.token.token_validation.title', 'Token validity');
   const description = t(
     'applications:edit.token.token_validation.description',
     'Configure how long tokens remain valid before expiration',
   );
-  const label = t('applications:edit.token.labels.token_validity', 'Token Validity');
+  const label = t('applications:edit.token.labels.token_validity', 'Token validity');
   const hint = t('applications:edit.token.validity.hint', 'Token validity period in seconds (e.g., 3600 for 1 hour)');
 
   const renderField = (
     fieldName: 'validityPeriod' | 'accessTokenValidity' | 'idTokenValidity' | 'refreshTokenValidity',
+    fieldLabel: string = label,
   ) => (
-    <FormControl fullWidth required>
-      <FormLabel htmlFor={`${fieldName}-input`}>{label}</FormLabel>
-      <Controller
-        name={fieldName}
-        control={control}
-        render={({field}) => (
-          <TextField
-            id={`${fieldName}-input`}
-            {...field}
-            fullWidth
-            type="number"
-            onChange={(e) => field.onChange(parseInt(e.target.value, 10))}
-            error={!!errors[fieldName]}
-            helperText={errors[fieldName]?.message ?? hint}
-            inputProps={{min: 1}}
-            disabled={disabled}
-          />
-        )}
-      />
-    </FormControl>
+    <Controller
+      name={fieldName}
+      control={control}
+      render={({field}) => (
+        <TextField
+          labelPlacement="top"
+          label={fieldLabel}
+          required
+          id={`${fieldName}-input`}
+          {...field}
+          fullWidth
+          type="number"
+          onChange={(e) => field.onChange(parseInt(e.target.value, 10))}
+          error={!!errors[fieldName]}
+          helperText={errors[fieldName]?.message ?? hint}
+          inputProps={{min: 1}}
+          disabled={disabled}
+        />
+      )}
+    />
   );
+
+  // With no tabs to say which token the field is for, its label names the access token.
+  if (tokenType === 'oauth' && accessTokenOnly) {
+    return (
+      <SettingsCard title={title} description={description}>
+        {renderField(
+          'accessTokenValidity',
+          t('applications:edit.token.labels.access_token_validity', 'Access token validity'),
+        )}
+      </SettingsCard>
+    );
+  }
 
   if (tokenType === 'oauth') {
     return (
@@ -107,9 +128,9 @@ export default function TokenValidationSection({
             }}
             sx={{borderBottom: 1, borderColor: 'divider'}}
           >
-            <Tab label={t('applications:edit.token.tabs.access_token', 'Access Token')} />
-            <Tab label={t('applications:edit.token.tabs.id_token', 'ID Token')} />
-            <Tab label={t('applications:edit.token.tabs.refresh_token', 'Refresh Token')} />
+            <Tab label={t('applications:edit.token.tabs.access_token', 'Access token')} />
+            <Tab label={t('applications:edit.token.tabs.id_token', 'ID token')} />
+            <Tab label={t('applications:edit.token.tabs.refresh_token', 'Refresh token')} />
           </Tabs>
           <Box sx={{p: 3}}>
             {activeValidationTab === 'access' && renderField('accessTokenValidity')}

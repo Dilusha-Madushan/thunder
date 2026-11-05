@@ -60,6 +60,10 @@ const (
 	RequestParamBindingMessage      string = "binding_message"
 	RequestParamRequestedExpiry     string = "requested_expiry"
 	RequestParamAuthReqID           string = "auth_req_id"
+
+	// RequestParamAuthorizationDetails is the RFC 9396 authorization request parameter.
+	RequestParamAuthorizationDetails string = systemconst.AuthorizationDetailsParamName
+	RequestParamDeviceCode           string = "device_code"
 )
 
 // OAuth2 HTTP headers.
@@ -115,17 +119,19 @@ const (
 
 // OAuth2 endpoints.
 const (
-	OAuth2TokenEndpoint                   string = "/oauth2/token" // #nosec G101
-	OAuth2AuthorizationEndpoint           string = "/oauth2/authorize"
-	OAuth2IntrospectionEndpoint           string = "/oauth2/introspect"
-	OAuth2RevokeEndpoint                  string = "/oauth2/revoke"
-	OAuth2UserInfoEndpoint                string = "/oauth2/userinfo"
-	OAuth2JWKSEndpoint                    string = "/oauth2/jwks"
-	OAuth2LogoutEndpoint                  string = "/oauth2/logout"
-	OAuth2DCREndpoint                     string = "/oauth2/dcr/register"
-	OAuth2PAREndpoint                     string = "/oauth2/par"
-	OAuth2BackchannelAuthEndpoint         string = "/oauth2/bc-authorize"
-	OAuth2BackchannelAuthCallbackEndpoint string = "/oauth2/bc-authorize/callback"
+	OAuth2TokenEndpoint                     string = "/oauth2/token" // #nosec G101
+	OAuth2AuthorizationEndpoint             string = "/oauth2/authorize"
+	OAuth2IntrospectionEndpoint             string = "/oauth2/introspect"
+	OAuth2RevokeEndpoint                    string = "/oauth2/revoke"
+	OAuth2UserInfoEndpoint                  string = "/oauth2/userinfo"
+	OAuth2JWKSEndpoint                      string = "/oauth2/jwks"
+	OAuth2LogoutEndpoint                    string = "/oauth2/logout"
+	OAuth2DCREndpoint                       string = "/oauth2/dcr/register"
+	OAuth2PAREndpoint                       string = "/oauth2/par"
+	OAuth2BackchannelAuthEndpoint           string = "/oauth2/bc-authorize"
+	OAuth2BackchannelAuthCallbackEndpoint   string = "/oauth2/bc-authorize/callback"
+	OAuth2AuthorizationDetailsTypesEndpoint string = "/oauth2/authorization-details-types"
+	OAuth2DeviceAuthorizationEndpoint       string = "/oauth2/device-authorize"
 )
 
 // OAuth2 token types.
@@ -191,6 +197,7 @@ const (
 	ErrorLoginRequired            string = "login_required"
 	ErrorConsentRequired          string = "consent_required"
 	ErrorAccountSelectionRequired string = "account_selection_required"
+	ErrorInteractionRequired      string = "interaction_required"
 	ErrorInvalidDPoPProof         string = "invalid_dpop_proof"
 	ErrorAuthorizationPending     string = "authorization_pending"
 	ErrorSlowDown                 string = "slow_down"
@@ -199,6 +206,9 @@ const (
 	ErrorInvalidBindingMessage    string = "invalid_binding_message"
 	ErrorRequestNotSupported      string = "request_not_supported"
 	ErrorRequestURINotSupported   string = "request_uri_not_supported"
+
+	// ErrorInvalidAuthorizationDetails is the RFC 9396 error for an unacceptable authorization_details.
+	ErrorInvalidAuthorizationDetails string = "invalid_authorization_details"
 )
 
 // UnSupportedGrantTypeError is returned when an unsupported grant type is requested.
@@ -240,6 +250,10 @@ var StandardOIDCScopes = map[string]model.OIDCScope{
 		Description: "Requests access to user's assigned roles",
 		Claims:      []string{"roles"},
 	},
+	ScopeDeviceSSO: {
+		Name:        ScopeDeviceSSO,
+		Description: "Requests the device secret, which signs the user in to other applications without a redirect",
+	},
 }
 
 // Standard JWT claim names.
@@ -257,7 +271,18 @@ const (
 	ClaimCHash    string = "c_hash"
 	ClaimAuthTime string = "auth_time"
 	ClaimACR      string = "acr"
+	ClaimAMR      string = "amr"
 	ClaimScope    string = "scope"
+	ClaimAct      string = "act"
+	ClaimCnf      string = "cnf"
+)
+
+// ID-JAG claim names (draft-ietf-oauth-identity-assertion-authz-grant Section 3.1) not defined above.
+const (
+	ClaimResource  string = "resource"
+	ClaimTenant    string = "tenant"
+	ClaimAudTenant string = "aud_tenant"
+	ClaimAudSub    string = "aud_sub"
 )
 
 // Custom JWT claim names.
@@ -272,7 +297,11 @@ const (
 	ClaimOUName         string = "ouName"
 	ClaimOUHandle       string = "ouHandle"
 	// ClaimOwner carries an agent's system-attribute owner on its client token.
-	ClaimOwner                  string = "owner"
+	ClaimOwner string = "owner"
+	// ClaimSubValidUntil carries when the subject agent's lifespan ends, its validUntil, on the agent's
+	// client token, in Unix seconds like the other time claims. It is omitted for an agent whose
+	// lifespan does not end.
+	ClaimSubValidUntil          string = "sub_valid_until"
 	ClaimClaimsRequest          string = "claims_req"
 	ClaimClaimsLocales          string = "claims_locales"
 	ClaimCompletedAuthClass     string = "completed_auth_class"
@@ -283,6 +312,16 @@ const (
 	ClaimAccessTokenSubject     string = "access_token_sub"
 	// ClaimAccessTokenAudience carries the audience of a refresh token's access tokens.
 	ClaimAccessTokenAudience string = "access_token_aud"
+
+	// ClaimAuthorizationDetails carries the granted RFC 9396 authorization details on an access token.
+	ClaimAuthorizationDetails string = "authorization_details"
+	// ClaimGrantedAuthorizationDetails carries the authorization details consent granted on a flow assertion.
+	ClaimGrantedAuthorizationDetails string = "granted_authorization_details"
+	// ClaimRefreshAuthorizationDetails carries the granted authorization details on a refresh token.
+	ClaimRefreshAuthorizationDetails string = "access_token_authorization_details"
+	// ClaimRefreshAuthorizationDetailVersions carries the granted type versions on a refresh token.
+	ClaimRefreshAuthorizationDetailVersions string = "access_token_authorization_detail_versions"
+
 	// ClaimIDP identifies the source identity provider (by issuer) that authenticated the subject of a
 	// jwt-bearer-grant (ID-JAG) access token, so downstream consumers can distinguish a federated
 	// principal from a local one.
@@ -308,9 +347,9 @@ const (
 	// ClaimSubjectType its entity category. The assertion's own sub claim holds the token subject,
 	// which the application may map to an attribute such as an email address; these two carry the
 	// opaque identity alongside it so token issuance can report the subject without resolving it
-	// again and without reporting a mapped attribute. Observability-only: both ride the internal flow
-	// assertion, neither is emitted on a client-facing token, and no authorization decision reads
-	// either claim.
+	// again and without reporting a mapped attribute. Both ride the internal flow assertion. sub_id
+	// is also the device secret's sub, and the device secret token exchange compares it to tell the
+	// user apart from another; no other token carries it and no other decision reads it.
 	ClaimSubjectID   string = "sub_id"
 	ClaimSubjectType string = "sub_type"
 )
@@ -326,7 +365,8 @@ const (
 // SurfaceableClientSystemClaims is the fixed set of entity system-attribute keys that may be
 // surfaced as client-token claims.
 var SurfaceableClientSystemClaims = map[string]bool{
-	ClaimOwner: true,
+	ClaimOwner:         true,
+	ClaimSubValidUntil: true,
 }
 
 // OIDC subject types.
@@ -355,6 +395,9 @@ const (
 // Standard OIDC scope names.
 const (
 	ScopeOpenID = "openid"
+	// ScopeDeviceSSO asks for the device secret, the SSO session the code was issued from, in the code
+	// exchange response (OpenID Connect Native SSO for Mobile Apps).
+	ScopeDeviceSSO = "device_sso"
 )
 
 const (
@@ -375,6 +418,15 @@ const (
 	CIBADefaultIntervalSeconds = 5
 	// CIBAMaxExpiresInSeconds is the maximum lifetime in seconds a client may request via requested_expiry.
 	CIBAMaxExpiresInSeconds = 600
+	// DeviceAuthorizationDefaultExpiresInSeconds is the default lifetime for a device request.
+	DeviceAuthorizationDefaultExpiresInSeconds = 600
+	// DeviceAuthorizationDefaultIntervalSeconds is the minimum interval between token polls.
+	DeviceAuthorizationDefaultIntervalSeconds = 5
+	// DeviceAuthorizationSlowDownIncrementSeconds is added after each early token poll.
+	DeviceAuthorizationSlowDownIncrementSeconds = 5
+	// DeviceAuthorizationExpiredRecordRetentionSeconds keeps an expired request available long enough
+	// for the token endpoint to return expired_token instead of treating the device code as unknown.
+	DeviceAuthorizationExpiredRecordRetentionSeconds = 60
 )
 
 const (

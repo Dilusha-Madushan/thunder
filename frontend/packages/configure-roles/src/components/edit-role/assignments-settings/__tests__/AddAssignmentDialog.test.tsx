@@ -13,6 +13,7 @@ vi.mock('@thunderid/configure-applications', async (importOriginal) => ({
   useGetApplications: vi.fn(),
 }));
 vi.mock('../../../../api/useGetRoleAssignments');
+vi.mock('../../../../internal/useGetAgents');
 vi.mock('@thunderid/hooks', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@thunderid/hooks')>();
   return {
@@ -80,6 +81,7 @@ const {useGetGroups} = await import('@thunderid/configure-groups');
 const {useGetApplications} = await import('@thunderid/configure-applications');
 const {default: useGetRoleAssignments} = await import('../../../../api/useGetRoleAssignments');
 const {useDataGridLocaleText} = await import('@thunderid/hooks');
+const {default: useGetAgents} = await import('../../../../internal/useGetAgents');
 
 describe('AddAssignmentDialog', () => {
   const mockOnClose = vi.fn();
@@ -133,6 +135,12 @@ describe('AddAssignmentDialog', () => {
       {id: 'app-2', name: 'Billing API', description: 'Billing backend service'},
     ],
   };
+  const mockAgentsData = {
+    totalResults: 1,
+    startIndex: 0,
+    count: 1,
+    agents: [{id: 'agent-1', ouId: 'ou-1', type: 'agent', display: 'Automation Agent'}],
+  };
   const mockExistingAppAssignments = {
     totalResults: 1,
     startIndex: 0,
@@ -170,6 +178,11 @@ describe('AddAssignmentDialog', () => {
       isLoading: false,
       error: null,
     } as unknown as ReturnType<typeof useGetApplications>);
+    vi.mocked(useGetAgents).mockReturnValue({
+      data: mockAgentsData,
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof useGetAgents>);
 
     vi.mocked(useGetRoleAssignments).mockImplementation(
       (params: {type?: string}) =>
@@ -195,7 +208,7 @@ describe('AddAssignmentDialog', () => {
       renderComponent();
 
       expect(screen.getByRole('dialog')).toBeInTheDocument();
-      expect(screen.getByText('Add Assignment')).toBeInTheDocument();
+      expect(screen.getByText('Add assignment')).toBeInTheDocument();
     });
 
     it('should not render dialog when open is false', () => {
@@ -242,6 +255,26 @@ describe('AddAssignmentDialog', () => {
       renderComponent({initialTab: 1});
 
       expect(screen.getByText('Admins')).toBeInTheDocument();
+    });
+  });
+
+  describe('Organization Unit Scope', () => {
+    it("should list only the role's organization unit candidates when ouId is given", () => {
+      renderComponent({ouId: 'ou-1'});
+
+      expect(useGetUsers).toHaveBeenCalledWith(expect.objectContaining({filter: 'ouId eq "ou-1"'}));
+      expect(useGetGroups).toHaveBeenCalledWith(expect.objectContaining({filter: 'ouId eq "ou-1"'}));
+      expect(useGetApplications).toHaveBeenCalledWith(expect.objectContaining({filter: 'ouId eq "ou-1"'}));
+      expect(useGetAgents).toHaveBeenCalledWith(expect.objectContaining({filter: 'ouId eq "ou-1"'}));
+    });
+
+    it('should not filter the candidates when ouId is not given', () => {
+      renderComponent();
+
+      expect(useGetUsers).toHaveBeenCalledWith(expect.objectContaining({filter: undefined}));
+      expect(useGetGroups).toHaveBeenCalledWith(expect.objectContaining({filter: undefined}));
+      expect(useGetApplications).toHaveBeenCalledWith(expect.objectContaining({filter: undefined}));
+      expect(useGetAgents).toHaveBeenCalledWith(expect.objectContaining({filter: undefined}));
     });
   });
 

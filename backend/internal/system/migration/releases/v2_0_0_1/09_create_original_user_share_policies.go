@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	createOriginalUserSharePoliciesOperationID engine.OperationID = "2.0.0-m1-pidp.1/configdb/" +
+	createOriginalUserSharePoliciesOperationID engine.OperationID = "2.0.0-m1-pidp/configdb/" +
 		"09_create_original_user_share_policies"
-	createOriginalUserSharePoliciesRollbackID engine.OperationID = "2.0.0-m1-pidp.1/configdb/" +
+	createOriginalUserSharePoliciesRollbackID engine.OperationID = "2.0.0-m1-pidp/configdb/" +
 		"09_create_original_user_share_policies_rollback"
 
 	// createOriginalUserSharePoliciesBatchSize is the number of originals shared per batch.

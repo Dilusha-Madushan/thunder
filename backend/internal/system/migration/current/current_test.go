@@ -14,23 +14,23 @@ func TestDefinitionSelectsUserShareRelease(t *testing.T) {
 	definition, err := Definition()
 
 	require.NoError(t, err)
-	assert.Equal(t, "2.0.0-m1-pidp.1", definition.Manifest.ReleaseVersion)
-	assert.Equal(t, "2.0.0-m1-pidp.1", definition.Plan.TargetVersion)
+	assert.Equal(t, "2.0.0-m1-pidp", definition.Manifest.ReleaseVersion)
+	assert.Equal(t, "2.0.0-m1-pidp", definition.Plan.TargetVersion)
 }
 
 func TestDefinitionForwardsDependenciesToCurrentRelease(t *testing.T) {
 	definition, err := DefinitionWithDependencies(Dependencies{})
 
 	require.NoError(t, err)
-	assert.Equal(t, "2.0.0-m1-pidp.1", definition.Manifest.ReleaseVersion)
-	assert.Equal(t, "2.0.0-m1-pidp.1", definition.Plan.TargetVersion)
+	assert.Equal(t, "2.0.0-m1-pidp", definition.Manifest.ReleaseVersion)
+	assert.Equal(t, "2.0.0-m1-pidp", definition.Plan.TargetVersion)
 }
 
-func TestCatalogListsPreviousReleaseBeforeCurrentRelease(t *testing.T) {
+func TestCatalogContainsOnlyTheCurrentRelease(t *testing.T) {
 	catalog, err := Catalog()
 
 	require.NoError(t, err)
-	require.Len(t, catalog, 2)
+	require.Len(t, catalog, 1)
 	assert.Equal(t, "2.0.0-m1-pidp", catalog[0].ReleaseVersion)
-	assert.Equal(t, "2.0.0-m1-pidp.1", catalog[1].ReleaseVersion)
+	assert.Equal(t, "1.0.0", catalog[0].Stores[0].AcceptedSourceLevel)
 }

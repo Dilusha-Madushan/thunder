@@ -72,6 +72,26 @@ encrypted, and a client ID is stored as the identifier it is looked up by.
 Because the value is put in when the resource is written, changing a variable or a secret later does
 not change resources already written. Import the configuration again to apply a changed value.
 
+## Where a Secret May Stand
+
+A `sec:` reference is accepted only in a field that holds a credential: an application's or agent's
+`clientSecret`, a connection's secret such as `clientSecret`, `authToken`, `apiSecret` or an outbound
+authentication password, and a user's `credentials`. These are the fields an export writes a `sec:`
+placeholder into, and the fields whose stored value is never returned. A user's stored credential is
+a hash, so an export of it carries no value: an import that updates a user and resolves such a
+credential to nothing leaves the stored one as it is, while a user it creates is refused without one.
+
+A document that refers to a secret from any other field, such as a name, a description, a redirect
+URI or a user attribute, is refused with `IMP-1007` before the secret is read. Resolved there, the
+secret would be stored as an ordinary value that the field's API returns, or that the resource sends
+to another system. A `sec:` reference under a YAML anchor is refused for the same reason. A `var:`
+reference may stand in any field.
+
+A control plane applies the same rule when it captures a
+[configuration version](./configuration-versions.mdx#capture-a-version): a configuration with a secret
+reference outside a credential field is refused with `GTW-1026` before a version is kept, and a diff of
+an earlier version that still holds one lists it under `misplacedSecrets`.
+
 ## When a Value Is Not Held
 
 A resource that refers to a name the store does not hold is refused, and the import's result for it
@@ -126,10 +146,15 @@ Capture follows these rules:
   default gateway, nothing is captured. Set a value on any other gateway yourself.
 - **HTTPS only.** The control plane sends a value, and the gateway's management key, only to a
   gateway whose `baseUrl` starts with `https://`. A gateway on plain HTTP receives nothing.
-- **Never blocks the write.** A capture that fails is logged by name, never by value, and the write
-  that triggered it still succeeds. A capture waits at most 10 seconds for the gateway. A value that
-  did not arrive is reported as missing when you try to apply a version that needs it, and you can
-  set it on the gateway then.
+- **Never blocks the write.** The values are worked out as the resource is written, and sent to the
+  gateway in the background, so a slow or unreachable gateway does not slow the write. A send that
+  fails is tried again, waiting longer each time up to a minute, ten times in all, and each failure
+  is logged by name, never by value. A newer value for the same name replaces one still on its way.
+  A value that never arrived is reported as missing when you try to apply a version that needs it,
+  and you can set it on the gateway then. A version applied right after a write may find the value
+  not there yet; the apply reports it missing, and the next one finds it. A value still on its way is
+  held in the memory of the node that worked it out, so a restart of that node drops it; it is then
+  reported as missing in the same way.
 - **Replaces what is there.** A value is set whether or not the gateway already holds that name, so
   writing a resource again replaces the value the gateway held under its name.
 - **Values, never references.** A value that is itself a reference, or a list holding one among its

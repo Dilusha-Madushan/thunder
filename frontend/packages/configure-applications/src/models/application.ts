@@ -1,6 +1,7 @@
 // Copyright 2025-2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import type {AccessStatusReport} from '@thunderid/types';
 import type {InboundAuthConfig} from './inbound-auth';
 import type {AttestationConfig} from './oauth';
 import type {AssertionConfig} from './token';
@@ -63,6 +64,7 @@ export type BasicApplication = Pick<
   | 'type'
   | 'template'
   | 'isReadOnly'
+  | 'status'
 > & {
   /**
    * OAuth2 client identifier
@@ -196,6 +198,9 @@ export interface Application {
    * @example 'edc013d0-e893-4dc0-990c-3e1d203e005b'
    */
   authFlowId?: string;
+
+  /** Device Grant flow used when this application accepts the OAuth Device Code grant. */
+  deviceGrantFlowId?: string;
 
   /**
    * Registration flow ID
@@ -342,4 +347,10 @@ export interface Application {
    * Whether this application is read-only (declarative/immutable)
    */
   isReadOnly?: boolean;
+
+  /**
+   * Effective access status, derived by the server at read time. Read-only; never LOCKED, and never
+   * EXPIRED, as applications have no lifespan.
+   */
+  status?: {value: Exclude<AccessStatusReport['value'], 'LOCKED' | 'EXPIRED'>};
 }

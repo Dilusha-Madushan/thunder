@@ -5,7 +5,7 @@ package v2_0_0_1
 
 import "github.com/thunder-id/thunderid/internal/system/migration/engine"
 
-const createSessionParticipantOperationID engine.OperationID = "2.0.0-m1-pidp.1/runtime_persistent/" +
+const createSessionParticipantOperationID engine.OperationID = "2.0.0-m1-pidp/runtime_persistent/" +
 	"06_create_session_participant"
 
 // sessionParticipantTable replaces SSO_SESSION_PARTICIPANT. OU_ID, the organization unit the application signed

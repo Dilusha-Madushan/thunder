@@ -84,25 +84,27 @@ func (th *tokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Reques
 
 	// Build the token request domain model from the HTTP form values.
 	tokenRequest := &model.TokenRequest{
-		GrantType:          r.FormValue(constants.RequestParamGrantType),
-		ClientID:           clientInfo.ClientID,
-		ClientSecret:       clientInfo.ClientSecret,
-		Scope:              r.FormValue("scope"),
-		Username:           r.FormValue("username"),
-		Password:           r.FormValue("password"),
-		RefreshToken:       r.FormValue("refresh_token"),
-		CodeVerifier:       r.FormValue("code_verifier"),
-		Code:               r.FormValue("code"),
-		RedirectURI:        r.FormValue("redirect_uri"),
-		Resources:          r.Form[constants.RequestParamResource],
-		SubjectToken:       r.FormValue(constants.RequestParamSubjectToken),
-		SubjectTokenType:   r.FormValue(constants.RequestParamSubjectTokenType),
-		ActorToken:         r.FormValue(constants.RequestParamActorToken),
-		ActorTokenType:     r.FormValue(constants.RequestParamActorTokenType),
-		RequestedTokenType: r.FormValue(constants.RequestParamRequestedTokenType),
-		Audiences:          r.Form[constants.RequestParamAudience],
-		AuthReqID:          r.FormValue(constants.RequestParamAuthReqID),
-		Assertion:          r.FormValue(constants.RequestParamAssertion),
+		GrantType:            r.FormValue(constants.RequestParamGrantType),
+		ClientID:             clientInfo.ClientID,
+		ClientSecret:         clientInfo.ClientSecret,
+		Scope:                r.FormValue("scope"),
+		Username:             r.FormValue("username"),
+		Password:             r.FormValue("password"),
+		RefreshToken:         r.FormValue("refresh_token"),
+		CodeVerifier:         r.FormValue("code_verifier"),
+		Code:                 r.FormValue("code"),
+		RedirectURI:          r.FormValue("redirect_uri"),
+		Resources:            r.Form[constants.RequestParamResource],
+		SubjectToken:         r.FormValue(constants.RequestParamSubjectToken),
+		SubjectTokenType:     r.FormValue(constants.RequestParamSubjectTokenType),
+		ActorToken:           r.FormValue(constants.RequestParamActorToken),
+		ActorTokenType:       r.FormValue(constants.RequestParamActorTokenType),
+		RequestedTokenType:   r.FormValue(constants.RequestParamRequestedTokenType),
+		Audiences:            r.Form[constants.RequestParamAudience],
+		AuthReqID:            r.FormValue(constants.RequestParamAuthReqID),
+		DeviceCode:           r.FormValue(constants.RequestParamDeviceCode),
+		Assertion:            r.FormValue(constants.RequestParamAssertion),
+		AuthorizationDetails: r.FormValue(constants.RequestParamAuthorizationDetails),
 	}
 
 	// Only client_credentials acts for an organization unit.
@@ -139,7 +141,7 @@ func (th *tokenHandler) HandleTokenRequest(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	logger.Debug(ctx, "Token response sending", log.String("client_id", clientInfo.ClientID))
+	logger.Debug(ctx, "Token response sending", log.String("clientID", clientInfo.ClientID))
 
 	// Must include the following headers when sensitive data is returned.
 	w.Header().Set(sysconst.CacheControlHeaderName, sysconst.CacheControlNoStore)

@@ -56,7 +56,7 @@ func (h *FlowConfigHandler) Decode(raw json.RawMessage) (any, error) {
 
 // Validate checks structural constraints on the incoming FlowSectionConfig. When a validator is present,
 // it additionally verifies that every non-empty handle references an existing flow of the correct type.
-func (h *FlowConfigHandler) Validate(incoming, _, _ any) error {
+func (h *FlowConfigHandler) Validate(ctx context.Context, incoming, _, _ any) error {
 	cfg, ok := incoming.(flowconfig.FlowSectionConfig)
 	if !ok {
 		return fmt.Errorf("flow: unexpected config type %T", incoming)
@@ -83,8 +83,15 @@ func (h *FlowConfigHandler) Validate(incoming, _, _ any) error {
 		{cfg.GroupDeletionFlow, providers.FlowTypeAdministration, "groupDeletionFlow"},
 		{cfg.GroupMembershipRemovalFlow, providers.FlowTypeAdministration, "groupMembershipRemovalFlow"},
 		{cfg.ActionDeletionFlow, providers.FlowTypeAdministration, "actionDeletionFlow"},
+		{cfg.UserUnlockFlow, providers.FlowTypeAdministration, "userUnlockFlow"},
+		{cfg.UserSuspendFlow, providers.FlowTypeAdministration, "userSuspendFlow"},
+		{cfg.UserUnsuspendFlow, providers.FlowTypeAdministration, "userUnsuspendFlow"},
+		{cfg.AgentUnlockFlow, providers.FlowTypeAdministration, "agentUnlockFlow"},
+		{cfg.AgentSuspendFlow, providers.FlowTypeAdministration, "agentSuspendFlow"},
+		{cfg.AgentUnsuspendFlow, providers.FlowTypeAdministration, "agentUnsuspendFlow"},
+		{cfg.ApplicationSuspendFlow, providers.FlowTypeAdministration, "applicationSuspendFlow"},
+		{cfg.ApplicationUnsuspendFlow, providers.FlowTypeAdministration, "applicationUnsuspendFlow"},
 	}
-	ctx := context.Background()
 
 	for _, e := range entries {
 		if e.tc.ExpirySeconds < 0 {
@@ -131,6 +138,16 @@ func (h *FlowConfigHandler) Merge(readOnly, writable any) any {
 			ro.GroupMembershipRemovalFlow, wr.GroupMembershipRemovalFlow),
 		ActionDeletionFlow: mergeFlowTypeConfig(
 			ro.ActionDeletionFlow, wr.ActionDeletionFlow),
+
+		UserUnlockFlow:         mergeFlowTypeConfig(ro.UserUnlockFlow, wr.UserUnlockFlow),
+		UserSuspendFlow:        mergeFlowTypeConfig(ro.UserSuspendFlow, wr.UserSuspendFlow),
+		UserUnsuspendFlow:      mergeFlowTypeConfig(ro.UserUnsuspendFlow, wr.UserUnsuspendFlow),
+		AgentUnlockFlow:        mergeFlowTypeConfig(ro.AgentUnlockFlow, wr.AgentUnlockFlow),
+		AgentSuspendFlow:       mergeFlowTypeConfig(ro.AgentSuspendFlow, wr.AgentSuspendFlow),
+		AgentUnsuspendFlow:     mergeFlowTypeConfig(ro.AgentUnsuspendFlow, wr.AgentUnsuspendFlow),
+		ApplicationSuspendFlow: mergeFlowTypeConfig(ro.ApplicationSuspendFlow, wr.ApplicationSuspendFlow),
+		ApplicationUnsuspendFlow: mergeFlowTypeConfig(ro.ApplicationUnsuspendFlow,
+			wr.ApplicationUnsuspendFlow),
 	}
 }
 

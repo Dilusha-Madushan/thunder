@@ -25,8 +25,10 @@ const selfManagementKey = "integration-management-api-key"
 
 type version struct {
 	Version   string `json:"version"`
+	Number    int    `json:"number"`
 	Name      string `json:"name"`
 	Unchanged bool   `json:"unchanged"`
+	Current   bool   `json:"current"`
 	Note      string `json:"note"`
 	Resources string `json:"resources"`
 }
@@ -37,13 +39,16 @@ type appliedVersion struct {
 }
 
 type change struct {
+	Key          string `json:"key"`
 	ResourceType string `json:"resourceType"`
 	ID           string `json:"id"`
 	Change       string `json:"change"`
+	Failed       bool   `json:"failed"`
+	Selected     bool   `json:"selected"`
 }
 
 type diffResult struct {
-	FromVersion string   `json:"fromVersion"`
+	FromMaster  string   `json:"fromMaster"`
 	ToVersion   string   `json:"toVersion"`
 	Changes     []change `json:"changes"`
 }
@@ -51,6 +56,7 @@ type diffResult struct {
 type applyResult struct {
 	DryRun   bool            `json:"dryRun"`
 	Recorded bool            `json:"recorded"`
+	Master   string          `json:"master"`
 	Diff     diffResult      `json:"diff"`
 	Import   json.RawMessage `json:"import"`
 }
@@ -112,25 +118,55 @@ func (ts *GatewayVersionsTestSuite) TestApplyAddsAndRemovesWhatTheVersionsDiffer
 	// The later version no longer has the unit, so applying it removes it.
 	second := ts.apply(withoutUnit.Version, false)
 	ts.True(second.Recorded, "the apply was not recorded: %s", second.Import)
-	ts.Equal(withUnit.Version, second.Diff.FromVersion)
-	ts.Contains(second.Diff.Changes, change{ResourceType: "organization_unit", ID: ouID, Change: "deleted"})
+	ts.Equal(first.Master, second.Diff.FromMaster)
+	if removed := ts.changeIn(second.Diff, "organization_unit/"+ouID); ts.NotNil(removed, "the diff does not report the unit") {
+		ts.Equal("deleted", removed.Change)
+	}
 	ts.Equal(http.StatusNotFound, ts.unitStatus(ouID), "the unit the version dropped was not removed")
 	ts.Equal(appliedVersion{AppliedVersion: withoutUnit.Version, PreviousVersion: withUnit.Version},
 		ts.applied())
 
-	// A revert returns to the version held before, and keeps the one reverted from to return to.
+	// A revert returns to the version held before, one step only: a second revert is refused.
 	var reverted applyResult
 	ts.Require().Equal(http.StatusOK, ts.call(http.MethodPost, "/gateways/"+ts.gatewayID+"/revert",
 		map[string]any{}, &reverted))
 	ts.True(reverted.Recorded, "the revert was not recorded: %s", reverted.Import)
 	ts.Equal(http.StatusOK, ts.unitStatus(ouID), "the revert did not bring the unit back")
-	ts.Equal(appliedVersion{AppliedVersion: withUnit.Version, PreviousVersion: withoutUnit.Version},
-		ts.applied())
+	ts.Equal(appliedVersion{AppliedVersion: withUnit.Version}, ts.applied())
+	ts.Equal(http.StatusBadRequest, ts.call(http.MethodPost, "/gateways/"+ts.gatewayID+"/revert",
+		map[string]any{}, nil), "a revert was reverted")
+	ts.Equal(http.StatusOK, ts.unitStatus(ouID), "a refused revert changed the gateway")
 }
 
-// A change left out of an apply is left alone on the gateway, and stays left alone in later applies
-// until one selects it again.
-func (ts *GatewayVersionsTestSuite) TestAChangeLeftOutIsLeftAloneUntilSelected() {
+// Without a user lookup at a trusted issuer, a version names no one and neither does the gateway that
+// holds it: the caller's id alone is not given out, though it is recorded.
+func (ts *GatewayVersionsTestSuite) TestWithoutALookupNoUserIsNamed() {
+	id, err := testutils.CreateOrganizationUnit(testutils.OrganizationUnit{
+		Handle: fmt.Sprintf("actor-%d", time.Now().UnixNano()), Name: "actor",
+	})
+	ts.Require().NoError(err)
+	defer func() { _ = testutils.DeleteOrganizationUnit(id) }()
+
+	var captured struct {
+		Version   string          `json:"version"`
+		CreatedBy json.RawMessage `json:"createdBy"`
+	}
+	ts.Require().Contains([]int{http.StatusCreated, http.StatusOK},
+		ts.call(http.MethodPost, "/configuration-versions", map[string]any{"note": "who"}, &captured))
+	ts.Nil(captured.CreatedBy, "the version gave out a user with no name to show")
+
+	ts.True(ts.apply(captured.Version, false).Recorded)
+	var held struct {
+		AppliedBy json.RawMessage `json:"appliedBy"`
+	}
+	ts.Require().Equal(http.StatusOK,
+		ts.call(http.MethodGet, "/gateways/"+ts.gatewayID+"/applied-version", nil, &held))
+	ts.Nil(held.AppliedBy, "the gateway gave out a user with no name to show")
+}
+
+// A selection deploys the changes named and nothing is kept: the unit left out stays on offer, and
+// the next apply without a selection deploys it.
+func (ts *GatewayVersionsTestSuite) TestASelectionDeploysOnlyTheChangesNamed() {
 	units := map[string]string{}
 	for _, name := range []string{"taken", "left"} {
 		id, err := testutils.CreateOrganizationUnit(testutils.OrganizationUnit{
@@ -144,38 +180,85 @@ func (ts *GatewayVersionsTestSuite) TestAChangeLeftOutIsLeftAloneUntilSelected()
 	for _, id := range units {
 		ts.Require().NoError(testutils.DeleteOrganizationUnit(id))
 	}
-	leftKey := "organization_unit/" + units["left"]
+	takenKey, leftKey := "organization_unit/"+units["taken"], "organization_unit/"+units["left"]
 
 	ts.Equal(http.StatusBadRequest, ts.call(http.MethodPost, "/gateways/"+ts.gatewayID+"/apply",
 		map[string]any{"version": captured.Version, "selection": []string{"organization_unit/not-in-the-diff"}},
 		nil), "a key the diff does not report was accepted")
 	ts.Equal(http.StatusNotFound, ts.unitStatus(units["taken"]), "a refused selection was applied")
 
-	ts.applySelecting(captured.Version, func(key string) bool { return key != leftKey })
+	result := ts.applySelecting(captured.Version, func(key string) bool { return key != leftKey })
 	ts.Equal(http.StatusOK, ts.unitStatus(units["taken"]), "the selected unit was not applied")
 	ts.Equal(http.StatusNotFound, ts.unitStatus(units["left"]), "the unit left out was applied")
-
-	var diff struct {
-		Changes []struct {
-			Key      string `json:"key"`
-			Excluded bool   `json:"excluded"`
-		} `json:"changes"`
+	if taken := ts.changeIn(result.Diff, takenKey); ts.NotNil(taken) {
+		ts.True(taken.Selected, "the change sent is not marked as such")
 	}
+	if left := ts.changeIn(result.Diff, leftKey); ts.NotNil(left) {
+		ts.False(left.Selected, "the change left out is marked as sent")
+	}
+
+	offered := ts.changeIn(ts.diff(captured.Version), leftKey)
+	ts.Require().NotNil(offered, "the unit left out is no longer offered")
+	ts.Equal("added", offered.Change)
+
+	ts.True(ts.apply(captured.Version, false).Recorded)
+	ts.Equal(http.StatusOK, ts.unitStatus(units["left"]), "the next apply did not deploy the unit left out")
+	if deployed := ts.changeIn(ts.diff(captured.Version), leftKey); ts.NotNil(deployed) {
+		ts.Equal("unchanged", deployed.Change, "a deployed unit is still offered")
+	}
+}
+
+// diff reads how a version differs from what the gateway holds.
+func (ts *GatewayVersionsTestSuite) diff(version string) diffResult {
+	ts.T().Helper()
+	var diff diffResult
 	ts.Require().Equal(http.StatusOK, ts.call(http.MethodGet,
-		fmt.Sprintf("/gateways/%s/diff?version=%s", ts.gatewayID, captured.Version), nil, &diff))
-	excluded := []string{}
+		fmt.Sprintf("/gateways/%s/diff?version=%s", ts.gatewayID, version), nil, &diff))
+	return diff
+}
+
+// A resource the gateway refuses stays on offer: the diff reports it as failed, and every apply sends
+// it again while the resources the gateway accepted are not sent again.
+func (ts *GatewayVersionsTestSuite) TestARefusedResourceStaysOnOffer() {
+	const declaredFlow = "flow/decl-flow-1"
+	captured := ts.capture("with the declared flow")
+	ts.True(ts.apply(captured.Version, false).Recorded)
+
+	diff := ts.diff(captured.Version)
+	refused := 0
 	for _, c := range diff.Changes {
-		if c.Excluded {
-			excluded = append(excluded, c.Key)
+		if c.Failed {
+			refused++
+			ts.Equal("added", c.Change, "%s was refused, yet it is not offered again", c.Key)
+			continue
+		}
+		ts.Equal("unchanged", c.Change, "%s was accepted, yet it is offered again", c.Key)
+	}
+	flow := ts.changeIn(diff, declaredFlow)
+	ts.Require().NotNil(flow, "the declared flow is not offered")
+	ts.True(flow.Failed, "the declared flow is not reported as refused")
+
+	again := ts.apply(captured.Version, false)
+	ts.True(again.Recorded, "the apply was not recorded: %s", again.Import)
+	var imported struct {
+		Summary struct {
+			TotalDocuments int `json:"totalDocuments"`
+			Failed         int `json:"failed"`
+		} `json:"summary"`
+	}
+	ts.Require().NoError(json.Unmarshal(again.Import, &imported))
+	ts.Equal(refused, imported.Summary.TotalDocuments, "the apply sent more than the refused resources")
+	ts.Equal(refused, imported.Summary.Failed)
+}
+
+// changeIn finds a change in a diff by key.
+func (ts *GatewayVersionsTestSuite) changeIn(diff diffResult, key string) *change {
+	for i := range diff.Changes {
+		if diff.Changes[i].Key == key {
+			return &diff.Changes[i]
 		}
 	}
-	ts.Equal([]string{leftKey}, excluded, "the unit left out is not offered as left alone")
-
-	ts.apply(captured.Version, false)
-	ts.Equal(http.StatusNotFound, ts.unitStatus(units["left"]), "the choice was not kept for the next apply")
-
-	ts.applySelecting(captured.Version, func(string) bool { return true })
-	ts.Equal(http.StatusOK, ts.unitStatus(units["left"]), "selecting the unit again did not apply it")
+	return nil
 }
 
 // A dry run reports what would change and records nothing.
@@ -198,7 +281,7 @@ func (ts *GatewayVersionsTestSuite) TestTheDiffComparesWithWhatTheGatewayHolds()
 		fmt.Sprintf("/gateways/%s/diff?version=%s", ts.gatewayID, captured.Version), nil, &diff))
 
 	ts.Equal(captured.Version, diff.ToVersion)
-	ts.Zero(diff.FromVersion, "the gateway holds nothing yet")
+	ts.Zero(diff.FromMaster, "the gateway holds nothing yet")
 	ts.NotEmpty(diff.Changes)
 	for _, c := range diff.Changes {
 		ts.Equal("added", c.Change, "nothing held, so everything is added")
@@ -279,7 +362,9 @@ func (ts *GatewayVersionsTestSuite) TestWhatCannotBeDoneIsRefused() {
 		map[string]any{}, nil))
 }
 
-// A gateway that cannot be reached is reported as such, and nothing is recorded for it.
+// A gateway that cannot be reached is reported as such, and nothing is recorded for it. That holds
+// from the first call to it: for a version that refers to a value, a dry run asks the gateway which
+// values it holds before anything else.
 func (ts *GatewayVersionsTestSuite) TestAnUnreachableGatewayIsReported() {
 	var unreachable gateway
 	ts.Require().Equal(http.StatusCreated, ts.call(http.MethodPost, "/gateways", map[string]any{
@@ -287,12 +372,18 @@ func (ts *GatewayVersionsTestSuite) TestAnUnreachableGatewayIsReported() {
 		"baseUrl": "https://127.0.0.1:1",
 	}, &unreachable))
 	defer ts.call(http.MethodDelete, "/gateways/"+unreachable.ID, nil, nil)
+	ts.referringUnit()
 	captured := ts.capture("")
 
+	ts.Equal(http.StatusBadGateway, ts.call(http.MethodPost, "/gateways/"+unreachable.ID+"/apply",
+		map[string]any{"version": captured.Version, "dryRun": true}, nil),
+		"a dry run that could not read the gateway's values was not reported as unreachable")
 	status := ts.call(http.MethodPost, "/gateways/"+unreachable.ID+"/apply",
 		map[string]any{"version": fmt.Sprint(captured.Version)}, nil)
 
 	ts.Equal(http.StatusBadGateway, status)
+	ts.Equal(http.StatusBadGateway, ts.call(http.MethodGet, "/gateways/"+unreachable.ID+"/variables", nil, nil),
+		"a store read through an unreachable gateway was not reported as such")
 }
 
 // A gateway's variables are managed through this plane, which presents the gateway's key: what is
@@ -388,7 +479,7 @@ func (ts *GatewayVersionsTestSuite) applySelecting(version string, keep func(key
 		fmt.Sprintf("/gateways/%s/diff?version=%s", ts.gatewayID, version), nil, &diff))
 	selection := []string{}
 	for _, c := range diff.Changes {
-		if (c.Change != "unchanged" || c.Excluded) && keep(c.Key) {
+		if c.Change != "unchanged" && keep(c.Key) {
 			selection = append(selection, c.Key)
 		}
 	}
@@ -434,4 +525,65 @@ func (ts *GatewayVersionsTestSuite) call(method, path string, body any, out any)
 		ts.Require().NoError(json.NewDecoder(resp.Body).Decode(out))
 	}
 	return resp.StatusCode
+}
+
+// An apply settles the version it sends, so a capture meanwhile adds a version rather than rewriting
+// one under the apply. When no gateway received it, the version is current again, and the next
+// capture after a change replaces it in place; a version a gateway did receive stays as it is.
+func (ts *GatewayVersionsTestSuite) TestAnApplyThatReachedNoGatewayLeavesTheVersionCurrent() {
+	var unreachable gateway
+	ts.Require().Equal(http.StatusCreated, ts.call(http.MethodPost, "/gateways", map[string]any{
+		"name":    fmt.Sprintf("unreachable-%d", time.Now().UnixNano()),
+		"baseUrl": "https://127.0.0.1:1",
+	}, &unreachable))
+	defer ts.call(http.MethodDelete, "/gateways/"+unreachable.ID, nil, nil)
+	ts.unit("Settled")
+	current := ts.captureCurrent()
+
+	status := ts.call(http.MethodPost, "/gateways/"+unreachable.ID+"/apply",
+		map[string]any{"version": current.Version}, nil)
+	ts.Require().Equal(http.StatusBadGateway, status)
+
+	listed := ts.listVersions()
+	ts.Require().NotEmpty(listed)
+	ts.Equal(listedVersion{Version: current.Version, Current: true}, listed[0],
+		"the version an apply never delivered is no longer current")
+	ts.unit("Settled again")
+	replaced := ts.captureCurrent()
+	ts.Equal(current.Number, replaced.Number, "a change after the failed apply added a version instead of replacing")
+	ts.NotEqual(current.Version, replaced.Version)
+
+	// Delivered to a gateway, the version is kept as it is from then on, whatever a later apply does.
+	ts.apply(replaced.Version, false)
+	status = ts.call(http.MethodPost, "/gateways/"+unreachable.ID+"/apply",
+		map[string]any{"version": replaced.Version}, nil)
+	ts.Require().Equal(http.StatusBadGateway, status)
+	ts.unit("Settled once more")
+	added := ts.captureCurrent()
+	ts.Equal(replaced.Number+1, added.Number, "a version a gateway runs was replaced in place")
+}
+
+// A capture is refused while a resource refers to a secret from a field that holds no credential:
+// every gateway would refuse to import it, so the configuration is refused here, naming the place.
+func (ts *GatewayVersionsTestSuite) TestACaptureRefusesASecretOutsideACredentialField() {
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	id, err := testutils.CreateOrganizationUnit(testutils.OrganizationUnit{
+		Handle: "misplaced-" + suffix, Name: "Misplaced " + suffix, Description: "sec:MISPLACED_" + suffix,
+	})
+	ts.Require().NoError(err)
+	defer func() { _ = testutils.DeleteOrganizationUnit(id) }()
+
+	encoded, err := json.Marshal(map[string]any{"note": "misplaced"})
+	ts.Require().NoError(err)
+	req, err := http.NewRequest(http.MethodPost, testServerURL+"/configuration-versions", bytes.NewReader(encoded))
+	ts.Require().NoError(err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := testutils.GetHTTPClient().Do(req)
+	ts.Require().NoError(err)
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	ts.Require().NoError(err)
+	ts.Equal(http.StatusBadRequest, resp.StatusCode, string(body))
+	ts.Contains(string(body), "GTW-1026")
+	ts.Contains(string(body), "organization_unit/"+id+" description", "the refusal does not say where the secret stands")
 }

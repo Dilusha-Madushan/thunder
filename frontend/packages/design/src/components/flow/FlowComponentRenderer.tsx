@@ -1,7 +1,12 @@
 // Copyright 2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import {EmbeddedFlowComponentType, EmbeddedFlowEventType, type ConsentPurpose} from '@thunderid/react';
+import {
+  EmbeddedFlowComponentType,
+  EmbeddedFlowEventType,
+  isConsentApprovalBlocked,
+  type ConsentPurpose,
+} from '@thunderid/react';
 import type {JSX} from 'react';
 import BlockAdapter, {ResendButtonAdapter} from './adapters/BlockAdapter';
 import ConsentAdapter from './adapters/ConsentAdapter';
@@ -17,6 +22,20 @@ import StandaloneTriggerAdapter from './adapters/StandaloneTriggerAdapter';
 import TextAdapter from './adapters/TextAdapter';
 import TimerAdapter from './adapters/TimerAdapter';
 import type {FlowComponent, FlowComponentRendererProps} from '../../models/flow';
+
+type ConsentData = string | ConsentPurpose[] | {purposes: ConsentPurpose[]};
+
+function parseConsentPurposes(consentData: ConsentData): ConsentPurpose[] {
+  try {
+    const parsed = (typeof consentData === 'string' ? JSON.parse(consentData) : consentData) as
+      | ConsentPurpose[]
+      | {purposes?: ConsentPurpose[]}
+      | null;
+    return (Array.isArray(parsed) ? parsed : parsed?.purposes) ?? [];
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Factory component that maps an embedded flow component to the appropriate adapter.
@@ -51,6 +70,9 @@ export default function FlowComponentRenderer({
   onValidate,
   maxImageSize,
   additionalData,
+  renderField,
+  isSubmitDisabled,
+  rendersInputsWithoutSubmit,
 }: FlowComponentRendererProps): JSX.Element | null {
   const comp = component as FlowComponent;
 
@@ -88,6 +110,9 @@ export default function FlowComponentRenderer({
         onBlur={onBlur}
         onSubmit={onSubmit}
         onValidate={onValidate}
+        renderField={renderField}
+        isSubmitDisabled={isSubmitDisabled}
+        rendersInputsWithoutSubmit={rendersInputsWithoutSubmit}
       />
     );
   }
@@ -118,14 +143,18 @@ export default function FlowComponentRenderer({
     const isExpiredOnMount = hasTimer && expiresIn <= 0;
 
     if (hasConsent) {
+      const consentData = additionalData?.['consentPrompt'] as ConsentData;
+      // While an approved authorization detail shows a value that cannot be granted, the approving action
+      // is disabled; denying stays available.
       return (
         <>
           <ConsentAdapter
-            consentData={
-              additionalData?.['consentPrompt'] as string | ConsentPurpose[] | {purposes: ConsentPurpose[]} | undefined
-            }
+            consentData={consentData}
             formValues={values}
             onInputChange={onInputChange}
+            clientIdHost={additionalData?.['clientIdHost'] as string | undefined}
+            redirectUriHost={additionalData?.['redirectUriHost'] as string | undefined}
+            redirectUriLoopback={additionalData?.['redirectUriLoopback'] === 'true'}
           />
           <BlockAdapter
             component={component}
@@ -140,6 +169,10 @@ export default function FlowComponentRenderer({
             onSubmit={onSubmit}
             onValidate={onValidate}
             additionalData={additionalData}
+            approvalBlocked={isConsentApprovalBlocked(parseConsentPurposes(consentData), values)}
+            renderField={renderField}
+            isSubmitDisabled={isSubmitDisabled}
+            rendersInputsWithoutSubmit={rendersInputsWithoutSubmit}
           />
         </>
       );
@@ -159,6 +192,9 @@ export default function FlowComponentRenderer({
         onSubmit={onSubmit}
         onValidate={onValidate}
         additionalData={additionalData}
+        renderField={renderField}
+        isSubmitDisabled={isSubmitDisabled}
+        rendersInputsWithoutSubmit={rendersInputsWithoutSubmit}
       />
     );
   }

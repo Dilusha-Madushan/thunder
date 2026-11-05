@@ -126,16 +126,16 @@ function ButtonExtendedProperties({resource, onChange}: ButtonExtendedProperties
           size="small"
         >
           <MenuItem value={ACTION_OPTIONS.Submit}>
-            {t('flows:core.buttonExtendedProperties.action.submit', 'Submit Form')}
+            {t('flows:core.buttonExtendedProperties.action.submit', 'Submit form')}
           </MenuItem>
           <MenuItem value={ACTION_OPTIONS.Trigger}>
-            {t('flows:core.buttonExtendedProperties.action.trigger', 'Trigger Action')}
+            {t('flows:core.buttonExtendedProperties.action.trigger', 'Trigger action')}
           </MenuItem>
           <MenuItem value={ACTION_OPTIONS.Confirm}>
-            {t('flows:core.buttonExtendedProperties.action.confirm', 'Confirm Action')}
+            {t('flows:core.buttonExtendedProperties.action.confirm', 'Confirm action')}
           </MenuItem>
           <MenuItem value={ACTION_OPTIONS.Reject}>
-            {t('flows:core.buttonExtendedProperties.action.reject', 'Reject Action')}
+            {t('flows:core.buttonExtendedProperties.action.reject', 'Reject action')}
           </MenuItem>
         </Select>
         <FormHelperText>
@@ -143,31 +143,29 @@ function ButtonExtendedProperties({resource, onChange}: ButtonExtendedProperties
         </FormHelperText>
       </div>
 
-      <div>
-        <FormLabel htmlFor="start-icon-input">{t('flows:core.buttonExtendedProperties.startIcon.label')}</FormLabel>
-        <TextField
-          id="start-icon-input"
-          value={startIconValue}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => handleStartIconChange(e.target.value)}
-          placeholder={t('flows:core.buttonExtendedProperties.startIcon.placeholder')}
-          fullWidth
-          size="small"
-        />
-        <FormHelperText>{t('flows:core.buttonExtendedProperties.startIcon.hint')}</FormHelperText>
-      </div>
+      <TextField
+        labelPlacement="top"
+        label={t('flows:core.buttonExtendedProperties.startIcon.label')}
+        helperText={t('flows:core.buttonExtendedProperties.startIcon.hint')}
+        id="start-icon-input"
+        value={startIconValue}
+        onChange={(e: ChangeEvent<HTMLInputElement>) => handleStartIconChange(e.target.value)}
+        placeholder={t('flows:core.buttonExtendedProperties.startIcon.placeholder')}
+        fullWidth
+        size="small"
+      />
 
-      <div>
-        <FormLabel htmlFor="end-icon-input">{t('flows:core.buttonExtendedProperties.endIcon.label')}</FormLabel>
-        <TextField
-          id="end-icon-input"
-          value={endIconValue}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => handleEndIconChange(e.target.value)}
-          placeholder={t('flows:core.buttonExtendedProperties.endIcon.placeholder')}
-          fullWidth
-          size="small"
-        />
-        <FormHelperText>{t('flows:core.buttonExtendedProperties.endIcon.hint')}</FormHelperText>
-      </div>
+      <TextField
+        labelPlacement="top"
+        label={t('flows:core.buttonExtendedProperties.endIcon.label')}
+        helperText={t('flows:core.buttonExtendedProperties.endIcon.hint')}
+        id="end-icon-input"
+        value={endIconValue}
+        onChange={(e: ChangeEvent<HTMLInputElement>) => handleEndIconChange(e.target.value)}
+        placeholder={t('flows:core.buttonExtendedProperties.endIcon.placeholder')}
+        fullWidth
+        size="small"
+      />
 
       <Divider sx={{marginY: 2}} />
     </Stack>

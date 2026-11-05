@@ -5,31 +5,36 @@ package v2_0_0_1
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
 )
 
-// addColumnSpec describes one column an operation adds to an existing table.
+// addColumnSpec describes the columns, and the indexes on them, that an operation adds to an existing table.
 type addColumnSpec struct {
 	id          engine.OperationID
 	description string
 	storeID     engine.StoreID
 	table       string
-	// column is the column as INFORMATION_SCHEMA reports it once added. Its position in the table is not
-	// compared, because ALTER TABLE appends the column.
-	column columnSpec
-	// statements are the ordered statements that add it.
+	// columns are the added columns as INFORMATION_SCHEMA reports them. Their position in the table is not
+	// compared, because ALTER TABLE appends a column.
+	columns []columnSpec
+	// indexes are the explicit indexes the operation creates. They may name columns the table already has.
+	indexes []indexSpec
+	// statements are the ordered statements that add them.
 	statements []engine.SQLStatement
 }
 
-// newAddColumnOperation returns an atomic operation that adds one column to a table. The column is at source
-// while absent and at target when it has exactly the expected type, nullability and default; any other
-// column of that name, or a table that is not an ordinary table, is invalid.
+// newAddColumnOperation returns an atomic operation that adds columns, and optionally indexes, to a table. The
+// change is at source while every added column and index is absent and at target when each has exactly the
+// expected definition. A definition that differs, a partly applied change, a name taken by another relation or a
+// table that is not an ordinary table is invalid.
 func newAddColumnOperation(spec addColumnSpec) (engine.Operation, error) {
 	verify := func(ctx context.Context, access engine.ReadAccess, _ engine.ExecutionTarget) (
 		engine.VerificationResult, error) {
-		return verifyAddedColumn(ctx, access, spec)
+		return verifyAddedColumns(ctx, access, spec)
 	}
 	return engine.NewSQLOperation(engine.SQLOperationConfig{
 		Definition: engine.OperationDefinition{
@@ -40,7 +45,7 @@ func newAddColumnOperation(spec addColumnSpec) (engine.Operation, error) {
 			engine.ReadinessResult, error) {
 			return readinessFromVerification(ctx, access,
 				func(ctx context.Context, access engine.ReadAccess, _ string) (engine.VerificationResult, error) {
-					return verifyAddedColumn(ctx, access, spec)
+					return verifyAddedColumns(ctx, access, spec)
 				})
 		},
 		PreVerifier: verify,
@@ -51,7 +56,7 @@ func newAddColumnOperation(spec addColumnSpec) (engine.Operation, error) {
 	})
 }
 
-func verifyAddedColumn(ctx context.Context, access engine.ReadAccess, spec addColumnSpec) (
+func verifyAddedColumns(ctx context.Context, access engine.ReadAccess, spec addColumnSpec) (
 	engine.VerificationResult, error) {
 	relations, err := access.Query(ctx, spec.storeID, queryTableRelation, spec.table)
 	if err != nil {
@@ -70,26 +75,108 @@ func verifyAddedColumn(ctx context.Context, access engine.ReadAccess, spec addCo
 			"Relation name %s is not an ordinary table", spec.table)), nil
 	}
 
-	rows, err := access.Query(ctx, spec.storeID, queryTableColumns, spec.table)
+	present := 0
+	columnRows, err := access.Query(ctx, spec.storeID, queryTableColumns, spec.table)
 	if err != nil {
 		return engine.VerificationResult{}, fmt.Errorf("inspect %s columns: %w", spec.table, err)
 	}
-	for _, row := range rows {
+	actualColumns := make(map[string]columnSpec, len(columnRows))
+	for _, row := range columnRows {
 		actual, err := readColumn(row)
 		if err != nil {
 			return engine.VerificationResult{}, err
 		}
-		if actual.name != spec.column.name {
+		actualColumns[actual.name] = actual
+	}
+	for _, expected := range spec.columns {
+		actual, exists := actualColumns[expected.name]
+		if !exists {
 			continue
 		}
-		if actual != spec.column {
+		if actual != expected {
 			return invalidVerification("unexpected_column_definition", fmt.Sprintf(
 				"Unexpected %s.%s definition: nullable=%q, type=%q, length=%q, default=%q", spec.table,
-				spec.column.name, actual.nullable, actual.dataType, actual.maximumLength, actual.defaultValue)), nil
+				expected.name, actual.nullable, actual.dataType, actual.maximumLength, actual.defaultValue)), nil
 		}
-		return engine.VerificationResult{State: engine.VerificationTarget,
-			Summary: fmt.Sprintf("The %s.%s column is present", spec.table, spec.column.name)}, nil
+		present++
 	}
-	return engine.VerificationResult{State: engine.VerificationSource,
-		Summary: fmt.Sprintf("The %s.%s column is absent", spec.table, spec.column.name)}, nil
+
+	if len(spec.indexes) > 0 {
+		indexPresent, invalid, err := countAddedIndexes(ctx, access, spec)
+		if err != nil {
+			return engine.VerificationResult{}, err
+		}
+		if invalid != "" {
+			return invalidVerification("unexpected_index_definition", invalid), nil
+		}
+		present += indexPresent
+	}
+
+	changes, verb := describeAddedColumns(spec)
+	switch present {
+	case 0:
+		return engine.VerificationResult{State: engine.VerificationSource,
+			Summary: changes + " " + verb + " absent"}, nil
+	case len(spec.columns) + len(spec.indexes):
+		return engine.VerificationResult{State: engine.VerificationTarget,
+			Summary: changes + " " + verb + " present"}, nil
+	default:
+		return invalidVerification("partially_applied_schema_change", fmt.Sprintf(
+			"%s are partly present: %d of %d", changes, present, len(spec.columns)+len(spec.indexes))), nil
+	}
+}
+
+// countAddedIndexes counts the expected indexes already on the table. It returns a description when one has a
+// different definition, or when its name belongs to another relation.
+func countAddedIndexes(ctx context.Context, access engine.ReadAccess, spec addColumnSpec) (int, string, error) {
+	rows, err := access.Query(ctx, spec.storeID, queryTableIndexes, spec.table)
+	if err != nil {
+		return 0, "", fmt.Errorf("inspect %s indexes: %w", spec.table, err)
+	}
+	actual := make(map[string]indexSpec, len(rows))
+	for _, row := range rows {
+		name, nameErr := row.String("index_name")
+		unique, uniqueErr := row.String("is_unique")
+		columns, columnsErr := row.String("column_names")
+		if err := errors.Join(nameErr, uniqueErr, columnsErr); err != nil {
+			return 0, "", fmt.Errorf("read %s index: %w", spec.table, err)
+		}
+		actual[name] = indexSpec{name: name, unique: unique, columns: columns}
+	}
+	count := 0
+	for _, expected := range spec.indexes {
+		found, exists := actual[expected.name]
+		if exists {
+			if found != expected {
+				return 0, fmt.Sprintf("Index %s on %s has unexpected uniqueness or columns", expected.name,
+					spec.table), nil
+			}
+			count++
+			continue
+		}
+		taken, err := access.Query(ctx, spec.storeID, queryTableRelation, expected.name)
+		if err != nil {
+			return 0, "", fmt.Errorf("inspect relation name %s: %w", expected.name, err)
+		}
+		if len(taken) != 0 {
+			return 0, fmt.Sprintf("Relation name %s is already in use and is not an index of %s", expected.name,
+				spec.table), nil
+		}
+	}
+	return count, "", nil
+}
+
+// describeAddedColumns names what the operation adds, with the form of "to be" that agrees with it.
+func describeAddedColumns(spec addColumnSpec) (string, string) {
+	names := make([]string, 0, len(spec.columns)+len(spec.indexes))
+	for _, column := range spec.columns {
+		names = append(names, spec.table+"."+column.name)
+	}
+	for _, index := range spec.indexes {
+		names = append(names, "index "+index.name)
+	}
+	if len(names) == 1 {
+		return names[0], "is"
+	}
+	return strings.Join(names, ", "), "are"
 }

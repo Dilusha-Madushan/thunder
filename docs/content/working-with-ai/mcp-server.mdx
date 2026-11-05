@@ -179,7 +179,7 @@ Run `/mcp` to inspect the connected server and its tools. Ask Codex:
 
 > "Use the thunderid-mcp server to list the applications registered in <ProductName />."
 
-Codex calls `thunderid_list_applications` and returns your registered applications. You can then ask it to integrate authentication into your project using the [example prompts](#what-you-can-do) below.
+Codex calls `list_applications` and returns your registered applications. You can then ask it to integrate authentication into your project using the [example prompts](#what-you-can-do) below.
 
 To delete the local server configuration later, run `codex mcp remove thunderid-mcp`.
 
@@ -214,6 +214,7 @@ After connecting, ask your agent to use the <ProductName /> MCP server for tasks
 | `organization_units` | List organization units |
 | `user_types` | List user types and self-registration settings |
 | `react_sdk` | Get tailored integration code for the <ProductName /> React SDK |
+| `deployments` | List gateways and configuration versions, capture a version, compare it with what a gateway runs, deploy, promote, or roll back a gateway, list, set, and remove a gateway's variables and secrets, and export and import declarative configuration |
 
 **Example prompts:**
 
@@ -222,6 +223,8 @@ After connecting, ask your agent to use the <ProductName /> MCP server for tasks
 - "Add a second factor step to the default login flow"
 - "What colors and typography does the default theme use?"
 - "Integrate authentication with <ProductName /> for this application"
+- "Capture the configuration and show me what deploying it to the staging gateway would change"
+- "Promote what staging runs to production"
 
 ## Use Cases
 
@@ -247,6 +250,38 @@ After integrating login, add a registration page:
 
 The assistant enables self-registration on your <ProductName /> application and generates a signup page wired to the registration flow. New users can register directly from your application and appear in the <ProductName /> Console under **User Management**.
 
+### Deploy Configuration to Gateways
+
+The `deployments` tools move configuration from <ProductName /> to the gateways it administers, as the Console's **Deploy** page does. Each tool answers with the same data as the REST endpoint it names, so what an agent sees matches the [API Reference](../../apis), except that a list comes as an object holding it under `gateways` or `versions`, where the REST endpoint answers with the list itself. See [Configuration Versions](../../guides/declarative-configurations/configuration-versions) for how versions, deploys, and rollbacks work.
+
+| Tool | REST equivalent |
+|------|-----------------|
+| `list_gateways` | `GET /gateways` |
+| `get_gateway_applied_version` | `GET /gateways/{id}/applied-version` |
+| `get_gateway_configuration` | `GET /gateways/{id}/applied-configuration` |
+| `list_configuration_versions` | `GET /configuration-versions` |
+| `get_configuration_version` | `GET /configuration-versions/{version}` |
+| `capture_configuration_version` | `POST /configuration-versions` |
+| `diff_version` | `GET /gateways/{id}/diff` |
+| `deploy_version` | `POST /gateways/{id}/apply` |
+| `promote_gateway` | Deploys the version one gateway is recorded as running to another, and records the source as where each resource came from. It follows that version rather than everything the source holds: an addition or update is sent only when the source holds it deployed as the version has it, a resource the version no longer has is removed from the target even if the source still holds it, and changes the target holds back stay out |
+| `rollback_gateway` | `POST /gateways/{id}/revert` |
+| `list_gateway_variables`, `list_gateway_secrets` | `GET /gateways/{id}/variables`, `GET /gateways/{id}/secrets` |
+| `set_gateway_variable`, `set_gateway_secret` | `PUT /gateways/{id}/variables/{name}`, `PUT /gateways/{id}/secrets/{name}` |
+| `delete_gateway_variable`, `delete_gateway_secret` | `DELETE /gateways/{id}/variables/{name}`, `DELETE /gateways/{id}/secrets/{name}` |
+| `export_configuration` | `POST /export` |
+| `import_configuration` | `POST /import` |
+
+The deploy, promote, and rollback tools take `dryRun`. Ask the agent to run a dry run first: it reports what would be added, updated, and removed, and any variables or secrets the gateway is missing, without changing the gateway. A deploy that would remove more resources than the deployment's threshold is refused unless `confirmRemovals` is set. The server cannot tell whether you reviewed the removals: `confirmRemovals` is only what the client sends, and the agent is told to set it after you have seen them, so keep your MCP client asking before it runs these tools. A threshold of `0` turns the check off, and then a deploy removes resources without `confirmRemovals`. See `gateway.removal_confirmation_threshold` in [Configuration](../../deployment/configuration).
+
+A dry run compares the version with the gateway's master, what the gateway accepted resource by resource, so a resource it refused before is offered again as a change.
+
+A completed deploy's `import` lists the resources the gateway refused, such as an agent whose owner the gateway does not hold, among the changes that deploy sent. A deploy with a `selection`, or one that leaves out changes held back from an earlier deploy, sends only part of the version, so an `import` with no refusals does not mean the gateway holds the whole version: `complete` in the answer says whether it does, and `diff_version` shows what is still owed. Fix the cause of a refusal, then deploy the same version again to retry it.
+
+:::warning
+Setting a secret through an agent passes its value through the agent's conversation, and an export from a deployment that is not a control plane returns the values its placeholders refer to, secrets included. Configure your MCP client to ask before it runs these tools.
+:::
+
 ## Test and Debug with MCP Inspector
 
 Use MCP Inspector to list tools, call them manually, and inspect responses when testing the <ProductName /> MCP server or diagnosing a connection problem. To use these tools through an AI agent, follow [Setup](#setup).
@@ -259,8 +294,8 @@ Install Node.js and npm before running MCP Inspector.
 
 In the <ProductName /> Console, register an application for MCP Inspector.
 
-1. In the Console, navigate to **Applications**. Click **Add Application**.
-2. Select **MCP Client**.
+1. In the Console, navigate to **Applications**. Click **Add application**.
+2. Select **MCP client**.
 3. Enter a name (for example, `MCP Inspector`).
 4. If prompted, select an organization unit.
 5. On the **Client type** step, select **On behalf of a user**. This configures the Authorization Code flow with PKCE as a public client.
@@ -303,10 +338,10 @@ The Inspector UI opens at `http://localhost:6274`.
 
 ### Connect to the MCP Server
 
-1. Set **Transport Type** to **Streamable HTTP**.
+1. Set **Transport type** to **Streamable HTTP**.
 2. Set **URL** to `https://localhost:8090/mcp`.
 3. Expand the **Authentication** section and select **OAuth**.
-4. Enter the **Client ID** you copied earlier. Leave **Client Secret** empty.
+4. Enter the **Client ID** you copied earlier. Leave **Client secret** empty.
 5. Set **Scope** to `system`.
 6. Click **Connect**.
 7. A browser tab opens with the <ProductName /> sign-in page. Sign in with your administrator account.
@@ -316,7 +351,7 @@ The Inspector UI opens at `http://localhost:6274`.
 ### Verify the Connection
 
 1. In MCP Inspector, open the **Tools** tab and click **List Tools**.
-2. Select a tool such as `thunderid_list_applications`. Run it.
+2. Select a tool such as `list_applications`. Run it.
 3. The response lists the applications registered in <ProductName />, including the MCP Inspector application you just created.
 
 If the connection fails, see the [Troubleshooting](#troubleshooting) section below.

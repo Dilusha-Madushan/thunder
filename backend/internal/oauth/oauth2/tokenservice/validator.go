@@ -5,6 +5,7 @@ package tokenservice
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -53,8 +54,12 @@ type TokenValidatorInterface interface {
 	// refresh token into an ID-JAG.
 	ValidateIDJAGSubjectToken(ctx context.Context, token string, oauthApp *providers.OAuthClient) (
 		*SubjectTokenClaims, error)
-	// ValidateIDJAGAssertion validates an ID-JAG assertion presented on the jwt-bearer grant.
-	ValidateIDJAGAssertion(ctx context.Context, assertion string) (*IDJAGAssertionClaims, error)
+	// ValidateIDJAGAssertion validates an ID-JAG assertion presented on the jwt-bearer grant,
+	// binding it to the authenticated client via its client_id claim.
+	ValidateIDJAGAssertion(ctx context.Context, assertion, clientID string) (*IDJAGAssertionClaims, error)
+	// ValidateDeviceSecret validates a device secret presented back to this server: its
+	// signature, its sso-session+jwt type, this server as issuer and audience, and its expiry.
+	ValidateDeviceSecret(ctx context.Context, token string) (*DeviceSecretClaims, error)
 }
 
 // TokenValidator implements TokenValidatorInterface.
@@ -198,6 +203,11 @@ func (tv *tokenValidator) ValidateRefreshToken(
 	// Extract claims_locales if present
 	claimsLocales, _ := extractStringClaim(claims, "access_token_claims_locales")
 
+	authorizationDetails, err := refreshTokenAuthorizationDetails(token)
+	if err != nil {
+		return nil, err
+	}
+
 	var dpopJkt string
 	if _, exists := claims["dpop_jkt"]; exists {
 		s, err := extractStringClaim(claims, "dpop_jkt")
@@ -213,23 +223,63 @@ func (tv *tokenValidator) ValidateRefreshToken(
 
 	// Extract user type and organizational unit details if present
 	return &RefreshTokenClaims{
-		Sub:              sub,
-		ClientID:         clientID,
-		Claims:           claims,
-		Audiences:        audiences,
-		GrantType:        grantType,
-		Scopes:           scopes,
-		AttributeCacheID: attributeCacheID,
-		Iat:              iat,
-		ClaimsRequest:    claimsRequest,
-		ClaimsLocales:    claimsLocales,
-		DPoPJkt:          dpopJkt,
-		ActorSub:         actorSub,
-		JTI:              jti,
-		Exp:              exp,
-		TokenFamilyID:    tokenFamilyID,
-		SessionID:        sessionID,
+		Sub:                  sub,
+		ClientID:             clientID,
+		Claims:               claims,
+		Audiences:            audiences,
+		GrantType:            grantType,
+		Scopes:               scopes,
+		AttributeCacheID:     attributeCacheID,
+		Iat:                  iat,
+		ClaimsRequest:        claimsRequest,
+		ClaimsLocales:        claimsLocales,
+		DPoPJkt:              dpopJkt,
+		ActorSub:             actorSub,
+		JTI:                  jti,
+		Exp:                  exp,
+		TokenFamilyID:        tokenFamilyID,
+		SessionID:            sessionID,
+		AuthorizationDetails: authorizationDetails,
 	}, nil
+}
+
+// refreshTokenAuthorizationDetails rebuilds the granted authorization details from a refresh token's
+// values and type versions claims.
+func refreshTokenAuthorizationDetails(token string) ([]providers.AuthorizationDetail, error) {
+	// Read from the claim's JSON text so numbers are kept exactly.
+	valuesClaim, exists, err := jwt.DecodeJWTClaim(token, constants.ClaimRefreshAuthorizationDetails)
+	var values []json.RawMessage
+	if err == nil && exists {
+		err = json.Unmarshal(valuesClaim, &values)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("invalid authorization details claim in refresh token: %w", err)
+	}
+	var versions map[string]grantedTypeVersion
+	versionsClaim, exists, err := jwt.DecodeJWTClaim(token, constants.ClaimRefreshAuthorizationDetailVersions)
+	if err == nil && exists {
+		err = json.Unmarshal(versionsClaim, &versions)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("invalid authorization detail versions claim in refresh token: %w", err)
+	}
+	if len(values) == 0 {
+		return nil, nil
+	}
+	details := make([]providers.AuthorizationDetail, 0, len(values))
+	for _, value := range values {
+		var typed struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(value, &typed); err != nil {
+			return nil, fmt.Errorf("invalid authorization details claim in refresh token: %w", err)
+		}
+		version := versions[typed.Type]
+		details = append(details, providers.AuthorizationDetail{
+			Type: typed.Type, TypeID: version.TypeID, TypeVersion: version.Version, Value: value, Admitted: true,
+		})
+	}
+	return details, nil
 }
 
 // ValidateSubjectToken validates the subject token of a token exchange — the credential being
@@ -410,14 +460,56 @@ func (tv *tokenValidator) ValidateIDJAGSubjectToken(
 	return subjectClaims, nil
 }
 
+// ValidateDeviceSecret validates a device secret presented back to this server.
+func (tv *tokenValidator) ValidateDeviceSecret(ctx context.Context, token string) (
+	*DeviceSecretClaims, error) {
+	header, err := jwt.DecodeJWTHeader(token)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode device secret header: %w", err)
+	}
+	if typ, _ := header["typ"].(string); typ != jwt.TokenTypeDeviceSecret {
+		return nil, fmt.Errorf("not a device secret: expected typ %q", jwt.TokenTypeDeviceSecret)
+	}
+	if svcErr := tv.jwtService.VerifyJWT(ctx, token, tv.cfg.JWT.Issuer, tv.cfg.JWT.Issuer); svcErr != nil {
+		return nil, fmt.Errorf("invalid device secret: %s", svcErr.Error.DefaultValue)
+	}
+	claims, err := jwt.DecodeJWTPayload(token)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode device secret: %w", err)
+	}
+	subject, _ := claims[constants.ClaimSub].(string)
+	if subject == "" {
+		return nil, fmt.Errorf("device secret is missing its subject")
+	}
+	entries, _ := claims[claimSessionData].([]interface{})
+	sessionData := make([]oauth2model.SessionData, 0, len(entries))
+	for _, raw := range entries {
+		entry, _ := raw.(map[string]interface{})
+		flowIdentifier, _ := entry[claimFlowIdentifier].(string)
+		sessionHandle, _ := entry[claimSessionHandle].(string)
+		if flowIdentifier == "" || sessionHandle == "" {
+			return nil, fmt.Errorf("device secret has a session without its flow identifier or handle")
+		}
+		sessionData = append(sessionData, oauth2model.SessionData{
+			FlowIdentifier: flowIdentifier,
+			SessionHandle:  sessionHandle,
+		})
+	}
+	if len(sessionData) == 0 {
+		return nil, fmt.Errorf("device secret carries no session")
+	}
+	return &DeviceSecretClaims{Subject: subject, SessionData: sessionData}, nil
+}
+
 // ValidateIDJAGAssertion validates an ID-JAG assertion presented on the jwt-bearer grant
 // (draft-ietf-oauth-identity-assertion-authz-grant). It requires the oauth-id-jag+jwt typ header,
 // resolves the assertion's issuer to a trusted external IdP with ID-JAG enabled, verifies the
-// signature against that IdP's JWKS, validates the time claims, and requires the audience to equal
-// this server's issuer.
+// signature against that IdP's JWKS, validates the time claims, requires the audience to equal this
+// server's issuer, and binds the assertion to the authenticated client via the client_id claim.
 func (tv *tokenValidator) ValidateIDJAGAssertion(
 	ctx context.Context,
 	assertion string,
+	clientID string,
 ) (*IDJAGAssertionClaims, error) {
 	header, err := jwt.DecodeJWTHeader(assertion)
 	if err != nil {
@@ -480,8 +572,12 @@ func (tv *tokenValidator) ValidateIDJAGAssertion(
 			ErrAudienceNotAccepted, serverIssuer)
 	}
 
-	if _, err := extractStringClaim(claims, "client_id"); err != nil {
+	assertionClientID, err := extractStringClaim(claims, "client_id")
+	if err != nil {
 		return nil, fmt.Errorf("assertion is missing 'client_id' claim: %w", err)
+	}
+	if assertionClientID != clientID {
+		return nil, fmt.Errorf("assertion 'client_id' does not match the authenticated client")
 	}
 
 	sub, err := extractStringClaim(claims, "sub")
@@ -700,23 +796,25 @@ func (tv *tokenValidator) extractSubjectTokenClaims(
 
 	// Only self-issued tokens participate in deny-list (revocation) enforcement; an external
 	// issuer's jti and token family id have no meaning in this server's deny list.
-	var jti, tokenFamilyID string
+	var jti, tokenFamilyID, attributeCacheID string
 	if tv.isSelfIssuer(iss) {
 		jti, _ = extractStringClaim(claims, "jti")
 		tokenFamilyID, _ = extractStringClaim(claims, constants.ClaimTokenFamilyID)
+		attributeCacheID, _ = extractStringClaim(claims, "aci")
 	}
 
 	return &SubjectTokenClaims{
-		Sub:            sub,
-		Iss:            iss,
-		Aud:            auds,
-		Scopes:         scopes,
-		UserAttributes: userAttributes,
-		NestedAct:      nestedAct,
-		CnfJkt:         cnfJkt,
-		JTI:            jti,
-		TokenFamilyID:  tokenFamilyID,
-		Authorization:  authorization,
+		Sub:              sub,
+		Iss:              iss,
+		Aud:              auds,
+		Scopes:           scopes,
+		UserAttributes:   userAttributes,
+		NestedAct:        nestedAct,
+		CnfJkt:           cnfJkt,
+		JTI:              jti,
+		TokenFamilyID:    tokenFamilyID,
+		Authorization:    authorization,
+		AttributeCacheID: attributeCacheID,
 	}, nil
 }
 

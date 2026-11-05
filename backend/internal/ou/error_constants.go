@@ -80,7 +80,7 @@ var (
 		ErrorDescription: tidcommon.I18nMessage{
 			Key: "error.ouservice.organization_unit_has_children_description",
 			DefaultValue: "Cannot delete an organization unit that has child organization units, users, " +
-				"groups, or sharing policies it issued",
+				"groups, user types, agent types, connections, flows, or sharing policies it issued",
 		},
 	}
 	// ErrorCircularDependency is the error returned when a circular dependency is detected.
@@ -175,76 +175,6 @@ var (
 		ErrorDescription: tidcommon.I18nMessage{
 			Key:          "error.ouservice.invalid_filter_description",
 			DefaultValue: "The filter parameter is invalid. Use format: attribute (eq|gt|lt) \"value\"",
-		},
-	}
-	// ErrorInvalidAuthFlowID is the error returned when authFlowId does not
-	// reference an existing authentication flow.
-	ErrorInvalidAuthFlowID = tidcommon.ServiceError{
-		Type: tidcommon.ClientErrorType,
-		Code: "OU-1015",
-		Error: tidcommon.I18nMessage{
-			Key:          "error.ouservice.invalid_auth_flow_id",
-			DefaultValue: "Invalid default authentication flow ID",
-		},
-		ErrorDescription: tidcommon.I18nMessage{
-			Key:          "error.ouservice.invalid_auth_flow_id_description",
-			DefaultValue: "The authFlowId does not reference an existing authentication flow",
-		},
-	}
-	// ErrorInvalidRegistrationFlowID is the error returned when registrationFlowId does not
-	// reference an existing registration flow.
-	ErrorInvalidRegistrationFlowID = tidcommon.ServiceError{
-		Type: tidcommon.ClientErrorType,
-		Code: "OU-1016",
-		Error: tidcommon.I18nMessage{
-			Key:          "error.ouservice.invalid_registration_flow_id",
-			DefaultValue: "Invalid default registration flow ID",
-		},
-		ErrorDescription: tidcommon.I18nMessage{
-			Key:          "error.ouservice.invalid_registration_flow_id_description",
-			DefaultValue: "The registrationFlowId does not reference an existing registration flow",
-		},
-	}
-	// ErrorInvalidRecoveryFlowID is the error returned when recoveryFlowId does not
-	// reference an existing recovery flow.
-	ErrorInvalidRecoveryFlowID = tidcommon.ServiceError{
-		Type: tidcommon.ClientErrorType,
-		Code: "OU-1017",
-		Error: tidcommon.I18nMessage{
-			Key:          "error.ouservice.invalid_recovery_flow_id",
-			DefaultValue: "Invalid default recovery flow ID",
-		},
-		ErrorDescription: tidcommon.I18nMessage{
-			Key:          "error.ouservice.invalid_recovery_flow_id_description",
-			DefaultValue: "The recoveryFlowId does not reference an existing recovery flow",
-		},
-	}
-	// ErrorInvalidSignOutFlowID is the error returned when signOutFlowId does not
-	// reference an existing sign-out flow.
-	ErrorInvalidSignOutFlowID = tidcommon.ServiceError{
-		Type: tidcommon.ClientErrorType,
-		Code: "OU-1018",
-		Error: tidcommon.I18nMessage{
-			Key:          "error.ouservice.invalid_signout_flow_id",
-			DefaultValue: "Invalid default sign-out flow ID",
-		},
-		ErrorDescription: tidcommon.I18nMessage{
-			Key:          "error.ouservice.invalid_signout_flow_id_description",
-			DefaultValue: "The signOutFlowId does not reference an existing sign-out flow",
-		},
-	}
-	// ErrorInvalidUserOnboardingFlowID is the error returned when userOnboardingFlowId does not
-	// reference an existing user onboarding flow.
-	ErrorInvalidUserOnboardingFlowID = tidcommon.ServiceError{
-		Type: tidcommon.ClientErrorType,
-		Code: "OU-1019",
-		Error: tidcommon.I18nMessage{
-			Key:          "error.ouservice.invalid_user_onboarding_flow_id",
-			DefaultValue: "Invalid default user onboarding flow ID",
-		},
-		ErrorDescription: tidcommon.I18nMessage{
-			Key:          "error.ouservice.invalid_user_onboarding_flow_id_description",
-			DefaultValue: "The userOnboardingFlowId does not reference an existing user onboarding flow",
 		},
 	}
 )

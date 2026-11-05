@@ -1,7 +1,7 @@
 // Copyright 2025-2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import {PageLoadingAnimation, QueryErrorNotice, UnsavedChangesBar} from '@thunderid/components';
+import {DocumentTitle, PageLoadingAnimation, QueryErrorNotice, UnsavedChangesBar} from '@thunderid/components';
 import {useLogger} from '@thunderid/logger/react';
 import {
   getContactTypesMissingRegex,
@@ -409,14 +409,22 @@ export default function ViewUserTypePage(): JSX.Element {
   };
 
   // Loading state
+  const resourceTypeTitle = t('navigation:pages.userTypes', 'User types');
+
   if (isLoading) {
-    return <PageLoadingAnimation />;
+    return (
+      <>
+        <DocumentTitle title={resourceTypeTitle} />
+        <PageLoadingAnimation />
+      </>
+    );
   }
 
   // Error state
   if (fetchError) {
     return (
       <PageContent>
+        <DocumentTitle title={resourceTypeTitle} />
         <QueryErrorNotice
           error={fetchError}
           t={tForErrors}
@@ -432,7 +440,7 @@ export default function ViewUserTypePage(): JSX.Element {
               }}
               startIcon={<ArrowLeft size={16} />}
             >
-              {t('userTypes:edit.back', 'Back to User Types')}
+              {t('userTypes:edit.back', 'Back to user types')}
             </Button>
           }
         />
@@ -444,6 +452,7 @@ export default function ViewUserTypePage(): JSX.Element {
   if (!userType) {
     return (
       <PageContent>
+        <DocumentTitle title={resourceTypeTitle} />
         <Alert severity="warning" sx={{mb: 2}}>
           {t('userTypes:edit.notFound', 'User type not found')}
         </Alert>
@@ -453,7 +462,7 @@ export default function ViewUserTypePage(): JSX.Element {
           }}
           startIcon={<ArrowLeft size={16} />}
         >
-          {t('userTypes:edit.back', 'Back to User Types')}
+          {t('userTypes:edit.back', 'Back to user types')}
         </Button>
       </PageContent>
     );
@@ -461,6 +470,7 @@ export default function ViewUserTypePage(): JSX.Element {
 
   return (
     <PageContent>
+      <DocumentTitle title={userType.displayName} />
       {userType.isReadOnly && (
         <Alert severity="info" sx={{mb: 2}}>
           {t('common:messages.readOnlyResource', 'This resource is read-only and cannot be modified.')}
@@ -469,7 +479,7 @@ export default function ViewUserTypePage(): JSX.Element {
       {/* Header */}
       <PageTitle>
         <PageTitle.BackButton component={<Link to={listUrl} />}>
-          {t('userTypes:edit.back', 'Back to User Types')}
+          {t('userTypes:edit.back', 'Back to user types')}
         </PageTitle.BackButton>
         <PageTitle.Header>
           <Stack direction="row" alignItems="center" spacing={1} mb={1}>

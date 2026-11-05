@@ -187,3 +187,10 @@ func (suite *ValueUtilTestSuite) TestFormatExpiryDuration() {
 		})
 	}
 }
+
+func (suite *ValueUtilTestSuite) TestDerefOr() {
+	value := 5
+	suite.Equal(5, DerefOr(&value, 1))
+	suite.Equal(1, DerefOr(nil, 1))
+	suite.Equal("", DerefOr[string](nil, ""))
+}

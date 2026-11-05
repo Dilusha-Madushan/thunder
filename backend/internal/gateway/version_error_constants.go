@@ -60,20 +60,21 @@ var (
 			DefaultValue: "This gateway holds no earlier version to revert to",
 		},
 	}
-	// ErrorVersionRemoved is returned when the version being applied was removed by a capture before
-	// the apply could record it. The gateway received it, so applying a kept version records the
-	// gateway's state again.
+	// ErrorVersionRemoved is returned when the version being applied was removed, or replaced as the
+	// current version, by a capture. Found before the import, when the version cannot be kept as it
+	// is, nothing was sent to the gateway. Found after it, when the apply records it, the gateway
+	// received it, so applying a kept version records the gateway's state again.
 	ErrorVersionRemoved = tidcommon.ServiceError{
 		Type: tidcommon.ClientErrorType,
 		Code: "GTW-1018",
 		Error: tidcommon.I18nMessage{
 			Key:          "error.gatewayservice.version_removed",
-			DefaultValue: "The version was removed while it was applied",
+			DefaultValue: "The version was removed or replaced while it was applied",
 		},
 		ErrorDescription: tidcommon.I18nMessage{
 			Key: "error.gatewayservice.version_removed.description",
-			DefaultValue: "Only the newest versions are kept, and this one was removed by a capture. " +
-				"Apply a version that is still kept.",
+			DefaultValue: "Only the newest versions are kept, and a capture removed this one or replaced it " +
+				"as the current version. Apply a version that is still kept.",
 		},
 	}
 	// ErrorAppliedChanged is returned when another apply to the same gateway finished between this one
@@ -105,8 +106,66 @@ var (
 				"A dry run lists them.",
 		},
 	}
+	// ErrorMisplacedSecret is returned when the configuration being captured refers to a secret from a
+	// field that holds no credential. A gateway would refuse the resource on import, and resolved
+	// there the secret would be stored as an ordinary value.
+	ErrorMisplacedSecret = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "GTW-1026",
+		Error: tidcommon.I18nMessage{
+			Key:          "error.gatewayservice.misplaced_secret",
+			DefaultValue: "A secret reference stands outside a credential field",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "error.gatewayservice.misplaced_secret.description",
+			DefaultValue: "A secret reference may only stand in a field that holds a credential",
+		},
+	}
+	// ErrorApplyInProgress is returned when another apply or revert to the gateway was still running
+	// after this one had waited as long as an import may take.
+	ErrorApplyInProgress = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "GTW-1029",
+		Error: tidcommon.I18nMessage{
+			Key:          "error.gatewayservice.apply_in_progress",
+			DefaultValue: "Another apply to this gateway is still running",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "error.gatewayservice.apply_in_progress.description",
+			DefaultValue: "Wait for it to finish, then apply again.",
+		},
+	}
+	// ErrorApplyTookTooLong is returned when an apply took longer to prepare than its lease allows for
+	// an import, so it sent nothing rather than risk overlapping an apply that took the lease over.
+	ErrorApplyTookTooLong = tidcommon.ServiceError{
+		Type: tidcommon.ServerErrorType,
+		Code: "GTW-5003",
+		Error: tidcommon.I18nMessage{
+			Key:          "error.gatewayservice.apply_took_too_long",
+			DefaultValue: "The apply took too long to prepare and sent nothing to the gateway",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "error.gatewayservice.apply_took_too_long.description",
+			DefaultValue: "Reading the gateway's values or the version took too long. Apply again.",
+		},
+	}
+	// ErrorRemovalsNeedConfirmation is returned when an apply would remove more resources from the
+	// gateway than the deployment's threshold and was not confirmed.
+	ErrorRemovalsNeedConfirmation = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "GTW-1030",
+		Error: tidcommon.I18nMessage{
+			Key:          "error.gatewayservice.removals_need_confirmation",
+			DefaultValue: "This apply would remove many resources from the gateway",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key: "error.gatewayservice.removals_need_confirmation.description",
+			DefaultValue: "Review the removals with a dry run, then apply again with confirmRemovals set " +
+				"to go ahead.",
+		},
+	}
 	// ErrorInvalidSelection is returned when an apply's selection names a resource the diff does not
-	// report, or would leave out a resource too long to keep.
+	// report.
 	ErrorInvalidSelection = tidcommon.ServiceError{
 		Type: tidcommon.ClientErrorType,
 		Code: "GTW-1025",
@@ -115,10 +174,25 @@ var (
 			DefaultValue: "The selection names a resource this apply does not report",
 		},
 		ErrorDescription: tidcommon.I18nMessage{
-			Key: "error.gatewayservice.invalid_selection.description",
-			DefaultValue: "Select changes by the keys a diff of this version reports for this gateway. " +
-				"A resource whose key is longer than 512 characters, or whose id or name is longer than 255, " +
-				"cannot be left out.",
+			Key:          "error.gatewayservice.invalid_selection.description",
+			DefaultValue: "Select changes by the keys a diff of this version reports for this gateway.",
+		},
+	}
+	// ErrorGatewayPrivateAddress is returned when a call to a gateway was refused before it was made,
+	// because its host resolves to a loopback, link-local or private address and the deployment does
+	// not allow gateways on such addresses.
+	ErrorGatewayPrivateAddress = tidcommon.ServiceError{
+		Type: tidcommon.ServerErrorType,
+		Code: "GTW-5002",
+		Error: tidcommon.I18nMessage{
+			Key:          "error.gatewayservice.gateway_private_address",
+			DefaultValue: "The gateway's address resolves to a private address this deployment does not reach",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key: "error.gatewayservice.gateway_private_address.description",
+			DefaultValue: "The gateway's host resolves to a loopback, link-local or private address. Set " +
+				"gateway.allow_private_addresses to reach gateways on such addresses, or register the gateway " +
+				"on a public one.",
 		},
 	}
 	// ErrorGatewayUnreachable is returned when a gateway could not be called or refused the import.
@@ -158,6 +232,55 @@ var (
 			Key: "error.gatewayservice.resource_not_readable.description",
 			DefaultValue: "A document captured with template placeholders, as a deployment that is not a " +
 				"control plane captures it, is not YAML until its values are filled in.",
+		},
+	}
+	// ErrorPromoteToItself is returned when a promotion names the same gateway as source and target.
+	ErrorPromoteToItself = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "GTW-1036",
+		Error: tidcommon.I18nMessage{
+			Key:          "error.gatewayservice.promote_to_itself",
+			DefaultValue: "The source and target are the same gateway",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "error.gatewayservice.promote_to_itself.description",
+			DefaultValue: "Promote from one gateway to another.",
+		},
+	}
+	// ErrorSourceRunsNothing is returned when a promotion's source gateway runs no version yet.
+	ErrorSourceRunsNothing = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "GTW-1037",
+		Error: tidcommon.I18nMessage{
+			Key:          "error.gatewayservice.source_runs_nothing",
+			DefaultValue: "The source gateway runs no version yet",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "error.gatewayservice.source_runs_nothing.description",
+			DefaultValue: "Deploy a version to the source gateway before promoting it.",
+		},
+	}
+	// ErrorResourceNotDeployed names a resource no master of the gateway records.
+	ErrorResourceNotDeployed = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "GTW-1031",
+		Error: tidcommon.I18nMessage{
+			Key:          "error.gatewayservice.resource_not_deployed",
+			DefaultValue: "No apply to this gateway has recorded the resource",
+		},
+	}
+	// ErrorOriginTooLong is returned when an apply names where its version came from with a label
+	// longer than a master records.
+	ErrorOriginTooLong = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "GTW-1035",
+		Error: tidcommon.I18nMessage{
+			Key:          "error.gatewayservice.origin_too_long",
+			DefaultValue: "The origin is too long",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "error.gatewayservice.origin_too_long.description",
+			DefaultValue: "Name where the version came from in at most 255 characters.",
 		},
 	}
 )

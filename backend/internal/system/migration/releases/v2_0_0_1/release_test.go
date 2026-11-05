@@ -26,20 +26,17 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 	assert.Equal(t, expectedVersion, definition.Plan.TargetVersion)
 }
 
-func TestDefinitionManifestAcceptsVersion2Stores(t *testing.T) {
+func TestDefinitionManifestAcceptsTheBaselineLevel(t *testing.T) {
 	definition, err := Definition()
 	require.NoError(t, err)
 
+	// A store with no migration metadata is initialized at the baseline level, and this release migrates every
+	// store from it, so the release is the only one on the route.
 	require.Len(t, definition.Manifest.Stores, 4)
 	for _, store := range definition.Manifest.Stores {
 		assert.True(t, store.Changed, store.ID)
-		assert.Equal(t, "2.0.0-m1-pidp.1", store.RequiredLevel, store.ID)
-		if store.ID == engine.StoreIDRuntimeTransient {
-			// The previous release left the runtime transient store at its first level.
-			assert.Equal(t, "1.0.0", store.AcceptedSourceLevel, store.ID)
-			continue
-		}
-		assert.Equal(t, "2.0.0-m1-pidp", store.AcceptedSourceLevel, store.ID)
+		assert.Equal(t, "1.0.0", store.AcceptedSourceLevel, store.ID)
+		assert.Equal(t, "2.0.0-m1-pidp", store.RequiredLevel, store.ID)
 	}
 }
 
@@ -63,6 +60,11 @@ func TestDefinitionOrdersOperations(t *testing.T) {
 			snapshotDuplicateUsersOperationID,
 			createOriginalUserSharePoliciesOperationID,
 			addOriginalsToDuplicateGroupsOperationID,
+			createGatewayMasterOperationID,
+			addGatewayAppliedVersionMasterColumnsOperationID,
+			replaceProjectTableOperationID,
+			addEntityProjectIDOperationID,
+			addOrganizationUnitProjectIDOperationID,
 		}},
 		{name: "migrate", operations: definition.Plan.Migrate, expected: []engine.OperationID{
 			clearSSOSessionContextOperationID,
@@ -74,6 +76,7 @@ func TestDefinitionOrdersOperations(t *testing.T) {
 			deleteDuplicateUserAssignmentsOperationID,
 			deleteDuplicateUsersOperationID,
 			dropSSOSessionTablesOperationID,
+			dropProjectLegacyTableOperationID,
 			dropUserShareMigrationTableOperationID,
 		}},
 	}
@@ -100,5 +103,5 @@ func TestDefinitionOrdersOperations(t *testing.T) {
 func TestDefinitionWithDependenciesMatchesDefinition(t *testing.T) {
 	definition, err := DefinitionWithDependencies(Dependencies{})
 	require.NoError(t, err)
-	assert.Equal(t, "2.0.0-m1-pidp.1", definition.Manifest.ReleaseVersion)
+	assert.Equal(t, "2.0.0-m1-pidp", definition.Manifest.ReleaseVersion)
 }

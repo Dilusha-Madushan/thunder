@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	mergeDuplicateLinkedAccountsOperationID engine.OperationID = "2.0.0-m1-pidp.1/entitydb/" +
+	mergeDuplicateLinkedAccountsOperationID engine.OperationID = "2.0.0-m1-pidp/entitydb/" +
 		"13_merge_duplicate_linked_accounts"
-	mergeDuplicateLinkedAccountsRollbackID engine.OperationID = "2.0.0-m1-pidp.1/entitydb/" +
+	mergeDuplicateLinkedAccountsRollbackID engine.OperationID = "2.0.0-m1-pidp/entitydb/" +
 		"13_merge_duplicate_linked_accounts_rollback"
 
 	// mergeDuplicateLinkedAccountsBatchSize is the number of originals whose links are merged per batch.

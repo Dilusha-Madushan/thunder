@@ -43,6 +43,26 @@ shares also names it, and so does `latest`.
 - **A version holds references, not values.** A client secret or a user's password appears as a
   [value reference](./value-references.mdx) such as `sec:APPLICATION_ORDERS_CLIENT_SECRET`. The gateway
   fills it in from its own store when the version is applied.
+- **The current version is kept up to date in place.** A control plane captures the configuration on
+  its own shortly after each change to it: it waits about two seconds after the last of a run of
+  changes, then captures them together, and tries again later if that capture fails. Until that
+  capture has run, `latest` is still the version before the change, so check that `latest` has the
+  hash you expect before applying it. That capture replaces the current version instead of adding one,
+  until it is applied to a gateway. From the moment an apply sends it that version is kept, and it stays the
+  current one until the next change, which starts a new current version. A listing marks the current
+  version `current`. A capture with `"current": true` in the body does the same on request; one without
+  it always adds a version.
+- **A secret may stand only in a credential field.** A configuration that refers to a secret from any
+  other field, such as a description or a redirect URI, is refused with `400` (`GTW-1026`), naming each
+  place the secret stands, because every gateway would refuse that resource on import. See
+  [Where a Secret May Stand](./value-references.mdx#where-a-secret-may-stand).
+- **A version names who it was captured for.** `createdBy` holds the user's `id`, from the token's
+  `sub` claim or the claim `server.security.trusted_issuer.user_id_claim` names, and their `name`, read
+  from the trusted issuer's user API when the version is read and never stored. It is given out only
+  when `server.security.trusted_issuer.user_lookup` is configured and the issuer knows the user: the id
+  alone is an identifier of the issuer's that says nothing to a viewer, so otherwise the field is left
+  out. The id is recorded either way, so a lookup configured later names the versions already captured.
+  A capture after a change names the user who made the last change before it.
 - **Only `gateway.max_versions` versions are kept.** The oldest goes first, except a version some gateway
   holds or can revert to. Those are kept even when that leaves more versions than the number. See
   [Configuration](../../deployment/configuration.mdx).
@@ -85,7 +105,14 @@ resource's document compared line by line. The documents hold references, so a d
 secret value.
 
 `GET /gateways/{id}/applied-version` reports the version the gateway holds and the one a revert returns
-it to.
+it to, with when it was applied and who applied it (`appliedAt`, `appliedBy`, the latter under the same
+rule as `createdBy`). `complete` says whether the gateway holds that version whole; see
+[Partly Applied Versions](#partly-applied-versions).
+
+A version captured before captures refused a misplaced secret may still refer to one from a field that
+holds no credential. The diff lists each such place under `misplacedSecrets`, in the same shape as
+`references`, so the resource can be put right and captured again before the gateway refuses it. A dry
+run reports the same under `diff.misplacedSecrets`.
 
 ## Apply a Version
 
@@ -98,17 +125,57 @@ curl -X POST https://localhost:8090/gateways/<gateway_id>/apply \
   -d '{"version": "latest"}'
 ```
 
-The version is sent whole. Resources the gateway holds that the version no longer has are removed. The
-removals are worked out from the version last applied to that gateway, so the control plane never
-removes something it did not apply.
+Only what differs is sent: the resources the gateway's master says it lacks or holds in another form,
+and the removal of what the master records that the version no longer has. A resource the gateway
+holds as the version has it is not sent again, and the control plane never removes something it did
+not deploy. An apply with nothing to send does not call the gateway.
 
 - **A dry run records nothing.** With `"dryRun": true`, the gateway imports as a dry run and the answer
   shows what would happen.
 - **The gateway's own report is returned.** `import` in the answer lists each resource the gateway
-  wrote or refused. A refused write does not stop the version being recorded, because every later
-  apply sends the version whole again.
-- **A removal the gateway did not complete leaves the version unrecorded.** `recorded` is then `false`,
-  and the next apply works from the version held before and sends the removal again.
+  wrote or refused. A refused write or removal does not stop the version being recorded: the master
+  records the resource as `failed`, the version is recorded as partly applied, the diff offers the
+  resource again, and the next apply sends it again.
+- **Many removals need confirming.** An apply or revert that would remove more resources than
+  `gateway.removal_confirmation_threshold` (five unless configured) is refused with `409` (`GTW-1030`).
+  Run it as a dry run to see the removals, then send it again with `"confirmRemovals": true`.
+- **A value changed since the last apply is reported, and sent.** `changed` names the variables and
+  secrets the version refers to that were set on the gateway again since the version it holds was
+  applied, with where the version refers to each, as `missing` does. Values are never shown. The
+  resources that refer to such a value are sent again, so the gateway reads the new value although no
+  document changed, and the `diff` in the apply's answer marks them `updated` with
+  `"valueChanged": true`. Only an apply reads the gateway's store, so `GET /gateways/{id}/diff` cannot
+  report them: run the apply as a dry run to see them before you build a `selection`. While a
+  `selection` leaves such a resource out, the value stays reported as changed, and the next apply
+  offers the resource again. The time the gateway's
+  store gives for each value is compared with the time it gave at the last apply, so the control
+  plane's clock plays no part. A value the control plane sent itself, such as a secret captured from a
+  resource, is reported too, since it also takes effect outside any version.
+- **One apply at a time per gateway, and the latest version is never lost.** Applies and reverts to the
+  same gateway run one at a time across every control plane node. While one runs, an apply that asks
+  for `latest` with nothing selected and nothing confirmed is not run or refused but queued: the answer
+  is `202` with `queued` and `queuedVersion`, and once the running apply finishes the latest version at
+  that moment is applied, for the user who asked, so a burst of changes costs one more apply. What
+  that later apply would refuse for its removals is refused now instead. The queued apply is best
+  effort: it is not kept if the node running it restarts, and a failure is logged rather than
+  answered, so read the gateway's applied version to see what it holds. An apply of a version named
+  by its hash, a confirmed one, or a revert waits for the running apply, and is refused with `409`
+  (`GTW-1029`) if it is still running after as long as an import may take.
+- **An apply that took too long to prepare sends nothing.** An apply that has not sent its import
+  within the time its lease allows for one sends nothing and is answered with `503` (`GTW-5003`), so
+  its import can never overlap one from an apply that took the lease over. Apply again.
+- **Each apply records the gateway's master.** `master` in the answer is the hash of the master the
+  gateway holds after the apply, which records every resource as the gateway accepted or refused it,
+  described in [Read What a Gateway Holds, Resource by Resource](#read-what-a-gateway-holds-resource-by-resource).
+  An apply that changes nothing the master records, such as one repeated, keeps the master the gateway
+  has rather than adding the same one again.
+  The master and the version recorded as applied are written in one transaction, and only while the
+  apply still holds the gateway's lease. When another node took an apply's lease over, that apply
+  records neither and is answered with `409` (`GTW-1019`).
+  An `origin` given in the request, such as the name of the environment the version came from, is
+  recorded on each resource the apply writes. It is at most 255 characters; a longer one is answered
+  with `400` (`GTW-1035`). A promotion through the MCP `promote_gateway` tool gives the source
+  gateway's ID as the origin.
 
 ### Missing Values
 
@@ -117,18 +184,20 @@ sent, the control plane asks the gateway's store for each name.
 
 - A dry run lists the names the gateway lacks under `missing`, as `variables` and `secrets`.
   `missing.references` says what each one is for: the resource that refers to it and the field it
-  stands in, as described in [Read What Each Value Is For](#read-what-each-value-is-for). A resource
-  you chose to leave alone is not applied, so the values it refers to are not checked.
+  stands in, as described in [Read What Each Value Is For](#read-what-each-value-is-for). Only the
+  resources the apply sends are checked: one the gateway already holds as it is, or one left out of
+  the selection, needs no value yet.
 - An apply is refused with `409` (`GTW-1017`) until the gateway holds them all. Nothing is sent and
   nothing is recorded.
 
 Set the missing values through the control plane, as described in
 [Manage a Gateway's Values](#manage-a-gateways-values), then apply again.
 
-## Apply Only Selected Changes
+## Deploy Only Selected Changes
 
-`selection` lists the keys of the changes to apply. Every other change on offer is left alone: a
-resource left out is neither written nor removed.
+`selection` lists the keys of the changes to send in this apply. Every other change stays on offer: a
+resource left out is neither written nor removed, and the next diff reports it again. This is how one
+resource, or a few together, are deployed without the whole version.
 
 ```json
 {
@@ -137,46 +206,63 @@ resource left out is neither written nor removed.
 }
 ```
 
-- **Omitted**, the gateway's saved choices apply.
-- **Empty** (`[]`), every change on offer is left alone.
-- **With a dry run**, the selection shapes what is checked and sent, and is not saved.
+- **Omitted**, every change the diff reports is sent, except those held back (see below).
+- **Empty** (`[]`), nothing is sent; the version is recorded as partly applied, or as applied when the gateway already holds it whole.
+- **A selection is for this apply alone.** The answer's `diff` marks the changes it sent with
+  `"selected": true`.
 - **A key the diff does not report** is refused with `400` (`GTW-1025`), so a typo or a key from an
-  older diff never leaves out a resource you meant to keep. Naming a resource that did not change is
-  allowed. Leaving out a resource whose key is longer than 512 characters, or whose id or name is
-  longer than 255, is also refused.
+  older diff never leaves out a resource you meant to send. Naming a resource that did not change is
+  allowed; there is nothing to send for it.
+- **Missing values are checked for what is sent.** A resource left on offer needs no value yet.
 
-### How a Choice Is Kept
+### Keep a Change Out of Later Applies
 
-The choice is saved per gateway. Applies and reverts leave a resource you left out alone until a later
-selection includes it again.
+To keep a change out of the applies after this one too, name it in `leaveOut`. The gateway then holds it
+back: later diffs report it with `"heldBack": true`, and an apply without a selection leaves it out
+again. An apply whose selection names it sends it and stops holding it back. Each gateway keeps its own,
+so what one gateway holds back does not affect another.
 
-- **A resource left alone stays on offer.** The diff marks its change `excluded`, whatever later
-  versions say of it.
-- **A removal held back is offered again.** Once no version names the resource, the diff offers it as
-  `deleted`.
-- **A refused apply keeps nothing.** An apply refused for missing values, one that could not connect
-  to the gateway, or one the gateway refused whole with a `4xx`, leaves the saved choice as it was.
-- **An apply that may have reached the gateway keeps its choice.** When the gateway answers with a
-  `5xx`, or the connection times out or drops after the request was sent, the gateway may hold what it
-  was sent, so the choice stays. Apply again to bring the gateway in line.
-- **One apply at a time per gateway.** Applies and reverts to the same gateway wait for each other on a
-  control plane node, so one apply's choice and import never interleave with another's.
-- **Removing a gateway forgets its choices.**
+```json
+{
+  "version": "latest",
+  "selection": ["application/550e8400-e29b-41d4-a716-446655440000"],
+  "leaveOut": ["flow/0190a7c2-6b1e-7f3a-9d42-5c8e1f2b3a4d"]
+}
+```
+
+A key in `leaveOut` that the diff does not report, or that the selection also names, is refused with
+`400` (`GTW-1025`).
+
+### Partly Applied Versions
+
+An apply whose selection leaves changes out, or whose import the gateway refuses in part, records the
+version all the same, as partly applied. No version is made up for the state in between: the gateway's
+master is that state. `GET /gateways/{id}/applied-version` then answers with `"complete": false`, the
+`master` the apply left, and `resourcesHeld` of `resourcesTotal`, how many of the version's resources
+the gateway holds as the version has them. A console shows this as "9f3c4a1 partly applied: 3 of 5
+resources". The diff goes on offering the rest, and the apply that brings the gateway level with the
+version, sending the rest or retrying what was refused, records it with `"complete": true`. An apply's
+own answer says the same in `complete`.
 
 ## Revert a Gateway
 
-`POST /gateways/{id}/revert` applies the version the gateway held before the one it holds now, and
-removes what that version does not have. The version reverted from becomes the new revert target, so a
-revert can itself be undone.
+`POST /gateways/{id}/revert` returns the gateway to the master it held before the version it holds now,
+which is that earlier version as far as the gateway held it: a version that was partly applied is
+returned to in part, and each resource keeps the version that sent it. What that master does not hold
+is removed. A gateway whose earlier master is no longer kept, beyond `gateway.max_versions`, is returned
+to the earlier version whole. A revert goes back one step only: afterwards the gateway has
+no earlier version to revert to, and a second revert is refused with `400` (`GTW-1016`) until a later
+apply. To return to the version reverted from, apply it.
 
-A revert takes `dryRun` and follows the same rules as an apply. It leaves the resources you chose to
-leave alone, and it is refused with `409` while the gateway lacks a value that version refers to. A
-gateway with no earlier version answers `400` (`GTW-1016`).
+A revert takes `dryRun` and follows the same rules as an apply: it sends only what differs between
+the gateway's master and the one it returns to, and it is refused with `409` while the gateway lacks a value a
+resource it sends refers to. A gateway with no earlier version answers `400` (`GTW-1016`).
 
 ## Read What a Gateway Runs
 
-`GET /gateways/{id}/applied-configuration` returns every resource of the version the gateway holds, each
-in the shape the resource's own read returns, such as what `GET /applications/{id}` returns for an
+`GET /gateways/{id}/applied-configuration` returns every resource the gateway's master holds, which is
+what the gateway accepted, each tagged with the `sourceVersion` that sent it and in the shape the
+resource's own read returns, such as what `GET /applications/{id}` returns for an
 application. A console shows the configuration as the gateway runs it from this one read, rather than as
 the control plane holds it now, which may have moved on since the apply.
 
@@ -189,9 +275,10 @@ curl -k https://localhost:8095/gateways/{id}/applied-configuration \
 {
   "gatewayId": "...",
   "version": "9f3c...",
+  "complete": true,
   "appliedAt": "2026-10-09T10:00:00Z",
   "resources": [
-    {"resourceType": "application", "id": "...", "resource": {"name": "Orders", "...": "..."}},
+    {"resourceType": "application", "id": "...", "sourceVersion": "9f3c...", "resource": {"name": "Orders", "...": "..."}},
     {"resourceType": "group", "id": "...", "resource": {"name": "Admins"}, "parts": {"members": {"...": "..."}}}
   ],
   "skipped": []
@@ -207,9 +294,89 @@ curl -k https://localhost:8095/gateways/{id}/applied-configuration \
 - `skipped` lists the version's documents that cannot be shown as their resource: `GTW-1021` when the
   resource type cannot be shown from a version, `GTW-1022` when the document does not read as its resource,
   for instance one captured with a template range whose values are not filled in.
-- A gateway nothing was applied to runs nothing: `resources` is empty and there is no `version`. The version
-  shown is the one recorded as applied, whole, even when the gateway refused some of its resources on the
-  last apply; the apply's own result names what it refused.
+- A gateway nothing was applied to runs nothing: `resources` is empty and there is no `version`. A version
+  that is partly applied is shown as far as the gateway holds it, with `"complete": false`: a resource the
+  gateway never accepted is not listed, and one it still runs from an earlier version carries that
+  version as its `sourceVersion`.
+
+## Read What a Gateway Holds, Resource by Resource
+
+A version is a deployment's whole configuration as designed. What a gateway runs is its **master**: one
+record per gateway of every resource deployed to it, as the gateway last accepted it, with how each one
+got there. Each apply writes a new master from the gateway's own account of the import, one resource at
+a time, and keeps the one before, so a gateway's history is its masters and a resource's history is its
+entry across them. A master is never sent to a gateway as a whole.
+
+`GET /gateways/{id}/master` returns the master the gateway holds now.
+
+```bash
+curl -k https://localhost:8095/gateways/{id}/master \
+  -H "Authorization: Bearer <token>"
+```
+
+```json
+{
+  "gatewayId": "...",
+  "number": 3,
+  "master": "4c5a...",
+  "createdAt": "2026-10-28T09:00:00Z",
+  "createdBy": {"id": "...", "name": "alice"},
+  "resources": "resource_type: application\nid: ...\n---\n...",
+  "summary": {"deployed": 12, "failed": 1, "removed": 1},
+  "entries": [
+    {
+      "key": "application/550e8400-e29b-41d4-a716-446655440000",
+      "resourceType": "application",
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "name": "Orders",
+      "contentHash": "9f3c...",
+      "sourceVersion": "a37b...",
+      "origin": "dev",
+      "state": "deployed",
+      "at": "2026-10-28T09:00:00Z",
+      "by": {"id": "...", "name": "alice"}
+    },
+    {
+      "key": "flow/...",
+      "resourceType": "flow",
+      "id": "...",
+      "state": "failed",
+      "sourceVersion": "a37b...",
+      "failure": {"code": "FLW-1001", "message": "..."},
+      "at": "2026-10-28T09:00:00Z"
+    }
+  ]
+}
+```
+
+- `resources` holds every resource the gateway accepted, one document each, in the same form a version
+  holds them, so a master can be read as a version can. `entries` is the manifest, one entry per
+  resource key, sorted by key.
+- `state` is `deployed` for a resource the gateway accepted; `failed` for one the gateway refused on its
+  last apply, with `failure` as the gateway answered, while `contentHash` names the document the gateway
+  last accepted, if it ever did; `removed` for one removed from the gateway, which has no document and
+  stays listed until something is deployed under its key again.
+- `sourceVersion` is the version the resource was last applied from, and `origin` the label that apply
+  gave. A resource sent again as the gateway already holds it keeps both, so an apply of a whole version
+  does not rewrite where every resource came from.
+- A resource the gateway's answer does not name is taken as written when the gateway refused nothing it
+  did not name, and recorded `failed` otherwise, since it is not known.
+- `master` names the master by what it holds: each resource's content, state, source and origin. Two
+  gateways running the same resources from the same places hold the same master.
+- A gateway nothing was applied to holds the empty master: `number` is 0 and the answer has no
+  `entries` or `resources`, which a client reads as none. A
+  gateway that applied a version before masters were recorded is given its first master from that
+  version, less the resources it was set to leave alone, when its master is first read.
+
+`GET /gateways/{id}/master/history` lists the gateway's masters, newest first, each with its `summary`
+but without `entries` or `resources`. As many masters are kept per gateway as versions are kept per
+deployment (`gateway.max_versions`).
+
+`GET /gateways/{id}/master/resources/{type}/{resource}` returns one resource's entry across the
+gateway's masters, newest first, under `history`, each with the `master` it is from and its `number`.
+`{id}` is the gateway and `{type}/{resource}` the resource's key as the diff names it, such as
+`application/550e8400-...`; a resource no
+master records is answered with `404` (`GTW-1031`).
 
 ## Manage a Gateway's Values
 
@@ -231,6 +398,44 @@ curl -X PUT https://localhost:8090/gateways/<gateway_id>/secrets/APPLICATION_ORD
   -H "Content-Type: application/json" \
   -d '{"value": "<client_secret>"}'
 ```
+
+## Deploy From the Console
+
+The console does all of the above from one full-screen page. The **Deploy** button in the console's
+header opens it: the captured versions on the left, newest first, each marked with the gateways that
+run it, and a card for every registered gateway with the version it runs and when and by whom it was
+deployed. The newest version is marked **Latest**. The control plane keeps it up to date as the
+configuration changes, so nothing has to be captured by hand.
+
+**Deploy** on a version's row opens a dialog for one gateway. It lists the resources the write would
+add, change, or remove, each with a checkbox to leave it out this time, and an input for every value
+the gateway lacks. One button sets the values and applies the version. **Rollback** on a gateway's
+card previews the changes that returning the gateway to its previous version would make, and rolls it
+back only when you confirm.
+
+The dialog also lists the values set on the gateway since its last deploy, with the resources that
+use them, since they take effect with this deploy though no version carries them. When a deploy or a
+rollback would remove more resources than the control plane allows without asking, it is refused
+and the dialog says how many would go. Clicking again, now labelled **Deploy and remove** or **Roll
+back and remove**, confirms it. Changing which resources are ticked drops the confirmation, so it
+always covers the removals that were pointed out. A deploy or rollback to a gateway that is still
+applying an earlier one is refused once it has waited, and the dialog says another deploy is running,
+so you can try again once it finishes.
+
+A value set on a gateway after its version was deployed, such as a client secret you regenerate or a
+secret you update under **Configure**, does not take effect until a version is deployed again, and the
+version itself has not changed. The gateway's card says how many values changed since its deploy, and
+**Redeploy** on the card deploys the version the gateway runs again so they take effect. **Redeploy**
+is disabled while no value has changed.
+
+**Explore** on a gateway's card, or a click on the card itself, opens the gateway's explorer: a map of
+every resource the gateway runs, in lanes by type, with a line for each relationship between them,
+such as an application and the flow it signs users in with. Hovering a line names the relationship.
+Selecting a resource opens a panel with the variables and secrets the gateway holds for it, which can
+be set there; a secret is replaced, never shown. Changes apply to that gateway alone.
+
+**Configure** on a gateway's card opens the variables and secrets the gateway holds, in one tab each,
+and names the values the version it runs refers to but the gateway does not hold.
 
 ## Next Steps
 

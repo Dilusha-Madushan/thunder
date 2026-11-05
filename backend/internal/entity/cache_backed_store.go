@@ -9,6 +9,7 @@ import (
 
 	"github.com/thunder-id/thunderid/internal/system/cache"
 	"github.com/thunder-id/thunderid/internal/system/log"
+	"github.com/thunder-id/thunderid/internal/system/transaction"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 )
 
@@ -215,6 +216,27 @@ func (s *cacheBackedEntityStore) GetEntityListByOUIDs(ctx context.Context,
 	return s.store.GetEntityListByOUIDs(ctx, category, ouIDs, limit, offset, filters)
 }
 
+func (s *cacheBackedEntityStore) GetEntityListCountBySystemAttributes(ctx context.Context,
+	category string, sysQuery SystemAttributeQuery) (int, error) {
+	return s.store.GetEntityListCountBySystemAttributes(ctx, category, sysQuery)
+}
+
+func (s *cacheBackedEntityStore) GetEntityListBySystemAttributes(ctx context.Context,
+	category string, sysQuery SystemAttributeQuery, limit, offset int) ([]providers.Entity, error) {
+	return s.store.GetEntityListBySystemAttributes(ctx, category, sysQuery, limit, offset)
+}
+
+func (s *cacheBackedEntityStore) GetEntityListCountBySystemAttributesAndOUIDs(ctx context.Context,
+	category string, sysQuery SystemAttributeQuery, ouIDs []string) (int, error) {
+	return s.store.GetEntityListCountBySystemAttributesAndOUIDs(ctx, category, sysQuery, ouIDs)
+}
+
+func (s *cacheBackedEntityStore) GetEntityListBySystemAttributesAndOUIDs(ctx context.Context,
+	category string, sysQuery SystemAttributeQuery, ouIDs []string, limit, offset int) (
+	[]providers.Entity, error) {
+	return s.store.GetEntityListBySystemAttributesAndOUIDs(ctx, category, sysQuery, ouIDs, limit, offset)
+}
+
 func (s *cacheBackedEntityStore) ValidateEntityIDs(ctx context.Context,
 	entityIDs []string) ([]string, error) {
 	return s.store.ValidateEntityIDs(ctx, entityIDs)
@@ -274,7 +296,7 @@ func (s *cacheBackedEntityStore) parseEntityAttributes(
 		var attrs map[string]interface{}
 		if err := json.Unmarshal(raw, &attrs); err != nil {
 			s.logger.Warn(ctx, "Failed to unmarshal entity attributes for cache key resolution",
-				log.String("entityID", entity.ID), log.Error(err))
+				log.MaskedString(log.LoggerKeyEntityID, entity.ID), log.Error(err))
 			continue
 		}
 		for k, v := range attrs {
@@ -313,7 +335,7 @@ func (s *cacheBackedEntityStore) invalidateIdentifierCache(ctx context.Context, 
 		fetched, err := s.store.GetEntity(ctx, entityID)
 		if err != nil {
 			s.logger.Error(ctx, "Failed to fetch entity for identifier cache invalidation",
-				log.String("entityID", entityID), log.Error(err))
+				log.MaskedString(log.LoggerKeyEntityID, entityID), log.Error(err))
 			return
 		}
 		entity = &fetched
@@ -338,7 +360,7 @@ func (s *cacheBackedEntityStore) cacheEntityByID(ctx context.Context, entity *pr
 	}
 	if err := s.entityByIDCache.Set(ctx, cache.CacheKey{Key: entity.ID}, entity); err != nil {
 		s.logger.Error(ctx, "Failed to cache entity by ID",
-			log.String("entityID", entity.ID), log.Error(err))
+			log.MaskedString(log.LoggerKeyEntityID, entity.ID), log.Error(err))
 	}
 }
 
@@ -350,7 +372,7 @@ func (s *cacheBackedEntityStore) cacheEntityWithCredentialsByID(ctx context.Cont
 	if err := s.entityWithCredentialsByIDCache.Set(ctx,
 		cache.CacheKey{Key: ewc.Entity.ID}, ewc); err != nil {
 		s.logger.Error(ctx, "Failed to cache entity with credentials by ID",
-			log.String("entityID", ewc.Entity.ID), log.Error(err))
+			log.MaskedString(log.LoggerKeyEntityID, ewc.Entity.ID), log.Error(err))
 	}
 }
 
@@ -358,12 +380,21 @@ func (s *cacheBackedEntityStore) invalidateEntityByID(ctx context.Context, entit
 	if entityID == "" {
 		return
 	}
+	s.deleteEntityByID(ctx, entityID)
+	// A read between the write and its commit can cache the row as it was, and a read inside the
+	// transaction can cache a row that is rolled back, so the entry is dropped again once the
+	// transaction ends.
+	transaction.OnTransactionEnd(ctx, func() { s.deleteEntityByID(context.WithoutCancel(ctx), entityID) })
+}
+
+// deleteEntityByID drops the cached copies of the entity.
+func (s *cacheBackedEntityStore) deleteEntityByID(ctx context.Context, entityID string) {
 	if err := s.entityByIDCache.Delete(ctx, cache.CacheKey{Key: entityID}); err != nil {
 		s.logger.Error(ctx, "Failed to invalidate entity cache by ID",
-			log.String("entityID", entityID), log.Error(err))
+			log.MaskedString(log.LoggerKeyEntityID, entityID), log.Error(err))
 	}
 	if err := s.entityWithCredentialsByIDCache.Delete(ctx, cache.CacheKey{Key: entityID}); err != nil {
 		s.logger.Error(ctx, "Failed to invalidate entity with credentials cache by ID",
-			log.String("entityID", entityID), log.Error(err))
+			log.MaskedString(log.LoggerKeyEntityID, entityID), log.Error(err))
 	}
 }

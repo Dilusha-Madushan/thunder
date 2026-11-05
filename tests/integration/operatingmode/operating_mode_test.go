@@ -173,7 +173,7 @@ func (ts *OperatingModeTestSuite) TestNonAuthenticationFlowsAreRestricted() {
 			ts.Equal(http.StatusServiceUnavailable, resp.StatusCode, "body: %s", body)
 			var errResp flowFeatureError
 			ts.Require().NoError(json.Unmarshal(body, &errResp))
-			ts.Equal("FES-1020", errResp.Code)
+			ts.Equal("FES-1025", errResp.Code)
 		})
 	}
 }
@@ -195,7 +195,7 @@ func (ts *OperatingModeTestSuite) TestAttributeCollectionIsFencedBeforeMutation(
 		"nickname": restrictedTestAttributeValue,
 	}, "", step.ChallengeToken)
 	ts.Require().NoError(err)
-	ts.requireFlowError(step, "FET-1115")
+	ts.requireFlowError(step, "FET-1135")
 }
 
 func (ts *OperatingModeTestSuite) TestExecutorCapabilitiesAreFencedInsideAuthenticationFlows() {
@@ -204,8 +204,8 @@ func (ts *OperatingModeTestSuite) TestExecutorCapabilitiesAreFencedInsideAuthent
 		app  string
 		code string
 	}{
-		{name: "organization unit creation", app: "ou", code: "FET-1113"},
-		{name: "credential update", app: "credential", code: "FET-1116"},
+		{name: "organization unit creation", app: "ou", code: "FET-1133"},
+		{name: "credential update", app: "credential", code: "FET-1136"},
 	}
 
 	for _, tt := range tests {

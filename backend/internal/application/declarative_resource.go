@@ -67,7 +67,7 @@ func (e *applicationExporter) GetParameterizerType() string {
 // GetAllResourceIDs retrieves all application IDs.
 // In composite mode, this excludes declarative (YAML-based) applications.
 func (e *applicationExporter) GetAllResourceIDs(ctx context.Context) ([]string, *tidcommon.ServiceError) {
-	apps, err := e.service.GetApplicationList(ctx)
+	apps, err := e.service.GetApplicationList(ctx, nil)
 	if err != nil {
 		return nil, &tidcommon.InternalServerError
 	}
@@ -217,6 +217,8 @@ func parseToApplicationDTO(data []byte) (*model.ApplicationDTO, error) {
 		InboundAuthProfile: providers.InboundAuthProfile{
 			AuthFlowID:                appRequest.AuthFlowID,
 			AuthFlowHandle:            appRequest.AuthFlowHandle,
+			DeviceGrantFlowID:         appRequest.DeviceGrantFlowID,
+			DeviceGrantFlowHandle:     appRequest.DeviceGrantFlowHandle,
 			RegistrationFlowID:        appRequest.RegistrationFlowID,
 			RegistrationFlowHandle:    appRequest.RegistrationFlowHandle,
 			IsRegistrationFlowEnabled: appRequest.IsRegistrationFlowEnabled,
@@ -281,6 +283,11 @@ func parseToApplicationDTO(data []byte) (*model.ApplicationDTO, error) {
 		appDTO.InboundAuthConfig = inboundAuthConfigDTOs
 	}
 	return &appDTO, nil
+}
+
+// SecretFields names where an exported application holds its client secret.
+func (e *applicationExporter) SecretFields() []string {
+	return []string{"inboundAuthConfig[].config.clientSecret"}
 }
 
 // GetResourceRules returns the parameterization rules for applications.

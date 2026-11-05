@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/thunder-id/thunderid/internal/connection/authzenpdp"
+	"github.com/thunder-id/thunderid/internal/connection/httpconnection"
 	"github.com/thunder-id/thunderid/internal/idp"
 	"github.com/thunder-id/thunderid/internal/notification"
 	"github.com/thunder-id/thunderid/internal/system/cmodels"
@@ -162,14 +163,19 @@ func writeServiceError(ctx context.Context, w http.ResponseWriter, svcErr *tidco
 	status := http.StatusInternalServerError
 	if svcErr.Type == tidcommon.ClientErrorType {
 		switch svcErr.Code {
-		case idp.ErrorIDPNotFound.Code, notification.ErrorSenderNotFound.Code, authzenpdp.ErrorNotFound.Code:
+		case idp.ErrorIDPNotFound.Code, notification.ErrorSenderNotFound.Code, authzenpdp.ErrorNotFound.Code,
+			httpconnection.ErrorNotFound.Code, ErrorSharingPolicyNotFound.Code, ErrorConnectionNotSharedToOU.Code:
 			status = http.StatusNotFound
 		case idp.ErrorIDPAlreadyExists.Code,
 			idp.ErrorIDPHasBlockingDependencies.Code,
 			notification.ErrorDuplicateSenderName.Code,
 			notification.ErrorSenderHasBlockingDependencies.Code,
 			authzenpdp.ErrorHasBlockingDependencies.Code,
-			authzenpdp.ErrorAlreadyExists.Code:
+			authzenpdp.ErrorAlreadyExists.Code,
+			httpconnection.ErrorAlreadyExists.Code,
+			httpconnection.ErrorHasBlockingDependencies.Code,
+			ErrorSharingPolicyExists.Code,
+			ErrorSharingPolicyVersionMismatch.Code:
 			status = http.StatusConflict
 		default:
 			status = http.StatusBadRequest
@@ -194,13 +200,19 @@ func writeInvalidBody(ctx context.Context, w http.ResponseWriter) {
 // writeSenderMappingError reports authentication validation as a client error while retaining a
 // server error for failures to construct or encrypt sender properties.
 func writeSenderMappingError(ctx context.Context, w http.ResponseWriter, err error) {
+	writeServiceError(ctx, w, senderMappingServiceError(err))
+}
+
+// senderMappingServiceError returns the service error a request mapping error stands for.
+func senderMappingServiceError(err error) *tidcommon.ServiceError {
 	if errors.Is(err, errUnsupportedAuthenticationType) {
-		writeServiceError(ctx, w, &ErrorInvalidAuthenticationType)
-		return
+		return &ErrorInvalidAuthenticationType
 	}
 	if errors.Is(err, errInvalidSMSGatewayAuthentication) {
-		writeServiceError(ctx, w, &notification.ErrorInvalidRequestFormat)
-		return
+		return &notification.ErrorInvalidRequestFormat
 	}
-	writeServiceError(ctx, w, &tidcommon.InternalServerError)
+	if errors.Is(err, errInvalidHTTPAuthentication) {
+		return &httpconnection.ErrorInvalidAuthentication
+	}
+	return &tidcommon.InternalServerError
 }

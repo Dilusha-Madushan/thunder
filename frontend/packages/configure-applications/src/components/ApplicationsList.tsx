@@ -1,7 +1,7 @@
 // Copyright 2025-2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import {QueryErrorNotice, ResourceAvatar} from '@thunderid/components';
+import {AccessStatusIndicator, QueryErrorNotice, ResourceAvatar} from '@thunderid/components';
 import {useConfig} from '@thunderid/contexts';
 import {useDataGridLocaleText} from '@thunderid/hooks';
 import {useLogger} from '@thunderid/logger/react';
@@ -17,6 +17,7 @@ import useApplicationRoutes from '../hooks/useApplicationRoutes';
 import type {BasicApplication} from '../models/application';
 import getApplicationErrorMessage from '../utils/getApplicationErrorMessage';
 import getTemplateMetadata from '../utils/getTemplateMetadata';
+import isSystemConsoleClient from '../utils/isSystemConsoleClient';
 
 export default function ApplicationsList(): JSX.Element {
   const routes = useApplicationRoutes();
@@ -26,7 +27,7 @@ export default function ApplicationsList(): JSX.Element {
   const logger = useLogger('ApplicationsList');
   const dataGridLocaleText = useDataGridLocaleText();
   const {data, isLoading, error, refetch} = useGetApplications();
-  const systemConsoleClientId = (config?.client?.client_id ?? 'CONSOLE').toUpperCase();
+  const consoleClientId = config?.client?.client_id;
 
   // Resolves an error through the `applications` catalog. `t` defaults to the `common` namespace,
   // so this forwards explicit `ns:` prefixes unchanged and prefixes bare keys with `applications:`,
@@ -119,6 +120,16 @@ export default function ApplicationsList(): JSX.Element {
           ),
       },
       {
+        field: 'status',
+        headerName: t('applications:listing.columns.status', 'Status'),
+        flex: 0.4,
+        minWidth: 110,
+        sortable: false,
+        renderCell: (params: DataGrid.GridRenderCellParams<BasicApplication>): JSX.Element => (
+          <AccessStatusIndicator status={params.row.status} category="application" tabIndex={params.tabIndex} />
+        ),
+      },
+      {
         field: 'actions',
         headerName: t('applications:listing.columns.actions'),
         width: 150,
@@ -130,15 +141,21 @@ export default function ApplicationsList(): JSX.Element {
         renderCell: (params: DataGrid.GridRenderCellParams<BasicApplication>): JSX.Element => (
           <ListingTable.RowActions>
             {params.row.isReadOnly ? (
-              <Tooltip title={t('common:status.readOnly', 'Read Only')}>
-                <IconButton size="small" disableRipple sx={{cursor: 'default'}}>
+              <Tooltip title={t('common:status.readOnly', 'Read only')}>
+                <IconButton
+                  aria-label={t('common:status.readOnly', 'Read only')}
+                  size="small"
+                  disableRipple
+                  sx={{cursor: 'default'}}
+                >
                   <Eye size={16} />
                 </IconButton>
               </Tooltip>
             ) : (
               <>
-                <Tooltip title={t('common:actions.edit')}>
+                <Tooltip title={t('common:actions.edit', 'Edit')}>
                   <IconButton
+                    aria-label={t('common:actions.edit', 'Edit')}
                     size="small"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -148,9 +165,10 @@ export default function ApplicationsList(): JSX.Element {
                     <Pencil size={16} />
                   </IconButton>
                 </Tooltip>
-                {params.row.clientId?.toUpperCase() !== systemConsoleClientId && (
-                  <Tooltip title={t('common:actions.delete')}>
+                {!isSystemConsoleClient(params.row.clientId, consoleClientId) && (
+                  <Tooltip title={t('common:actions.delete', 'Delete')}>
                     <IconButton
+                      aria-label={t('common:actions.delete', 'Delete')}
                       size="small"
                       color="error"
                       onClick={(e) => {
@@ -168,7 +186,7 @@ export default function ApplicationsList(): JSX.Element {
         ),
       },
     ],
-    [handleDeleteClick, handleEditClick, systemConsoleClientId, t],
+    [consoleClientId, handleDeleteClick, handleEditClick, t],
   );
 
   if (error) {

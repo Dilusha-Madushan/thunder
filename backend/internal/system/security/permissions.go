@@ -296,6 +296,7 @@ func InitSystemPermissions(handle string) {
 		{"GET /users", p.UserView},
 		{"POST /users", p.User},
 		{"GET /users/**", p.UserView},
+		{"POST /users/*/sharing-policies", p.User},
 		{"PUT /users/**", p.User},
 		{"DELETE /users/**", p.User},
 
@@ -348,6 +349,14 @@ func InitSystemPermissions(handle string) {
 		{"GET /agent-types/**", p.AgentTypeView},
 		{"PUT /agent-types/**", p.AgentType},
 		{"DELETE /agent-types/**", p.AgentType},
+
+		// Project APIs. Creating a project creates a root organization unit, which is a root
+		// administrator operation, so the whole surface requires root.
+		{"GET /projects", p.Root},
+		{"POST /projects", p.Root},
+		{"GET /projects/**", p.Root},
+		{"PUT /projects/**", p.Root},
+		{"DELETE /projects/**", p.Root},
 
 		// Variable store APIs. The whole surface requires root rather than a narrower permission:
 		// the store holds credentials, and even the list of names is sensitive. This matches the

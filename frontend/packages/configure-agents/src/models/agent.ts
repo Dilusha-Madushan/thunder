@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type {AssertionConfig, OAuth2Config} from '@thunderid/configure-applications';
+import type {AccessStatusReport} from '@thunderid/types';
+
 /**
  * Handle of the bootstrap-provisioned `default` agent type, which the agent listing's Schema button
  * looks up to show the schema behind the listed agents.
@@ -17,6 +19,15 @@ export interface AgentInboundAuthConfig {
 
 export interface AgentLoginConsentConfig {
   validityPeriod?: number;
+}
+
+/**
+ * Where an agent stands in its lifespan, derived by the server on every read.
+ */
+export type AgentLifespanPhase = 'UNBOUNDED' | 'ACTIVE' | 'EXPIRED';
+
+export interface AgentLifespan {
+  phase: AgentLifespanPhase;
 }
 
 export interface Agent {
@@ -41,6 +52,19 @@ export interface Agent {
   assertion?: AssertionConfig;
   loginConsent?: AgentLoginConsentConfig;
   isReadOnly?: boolean;
+  /**
+   * Effective access status, derived by the server at read time. Read-only.
+   */
+  status?: AccessStatusReport;
+  /**
+   * The RFC 3339 instant the agent's lifespan ends. Absent when it does not expire. On an edit, null
+   * removes the end.
+   */
+  validUntil?: string | null;
+  /**
+   * Where the agent stands in its lifespan. Read-only.
+   */
+  lifespan?: AgentLifespan;
 }
 
 export interface BasicAgent {
@@ -54,6 +78,19 @@ export interface BasicAgent {
   clientId?: string;
   attributes?: Record<string, unknown>;
   isReadOnly?: boolean;
+  /**
+   * Effective access status, derived by the server at read time. Read-only.
+   */
+  status?: AccessStatusReport;
+  /**
+   * The RFC 3339 instant the agent's lifespan ends. Absent when it does not expire. On an edit, null
+   * removes the end.
+   */
+  validUntil?: string | null;
+  /**
+   * Where the agent stands in its lifespan. Read-only.
+   */
+  lifespan?: AgentLifespan;
 }
 
 export interface AgentListResponse {
@@ -79,6 +116,8 @@ export interface UpdateAgentRequest {
   description?: string;
   logoUrl?: string;
   owner?: string;
+  /** Whether the agent acts on behalf of a user. Not stored; it selects the grant rules checked on save. */
+  delegated?: boolean;
   attributes?: Record<string, unknown>;
   allowedUserTypes?: string[];
   allowedAgentTypes?: string[];
@@ -86,6 +125,8 @@ export interface UpdateAgentRequest {
   authFlowId?: string;
   registrationFlowId?: string;
   isRegistrationFlowEnabled?: boolean;
+  /** Absent leaves the lifespan unchanged; null removes its end. */
+  validUntil?: string | null;
 }
 
 export interface AgentGroup {

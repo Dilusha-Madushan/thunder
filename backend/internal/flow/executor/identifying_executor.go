@@ -4,6 +4,7 @@
 package executor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,7 @@ type identifyingExecutor struct {
 	providers.Executor
 	entityProvider entityprovider.EntityProviderInterface
 	authnProvider  providers.AuthnProviderManager
+	accessGuard    *accessGuard
 	logger         *log.Logger
 }
 
@@ -51,6 +53,7 @@ func newIdentifyingExecutor(
 	flowFactory core.FlowFactoryInterface,
 	entityProvider entityprovider.EntityProviderInterface,
 	authnProvider providers.AuthnProviderManager,
+	accessGuard *accessGuard,
 ) *identifyingExecutor {
 	if name == "" {
 		name = ExecutorNameIdentifying
@@ -70,6 +73,7 @@ func newIdentifyingExecutor(
 		Executor:       base,
 		entityProvider: entityProvider,
 		authnProvider:  authnProvider,
+		accessGuard:    accessGuard,
 		logger:         logger,
 	}
 }
@@ -83,7 +87,7 @@ func (i *identifyingExecutor) IdentifyEntity(ctx context.Context, filters map[st
 	logger.Debug(ctx, "Identifying entity with filters")
 
 	if entityID, ok := filters[userAttributeUserID].(string); ok && entityID != "" {
-		entity, epErr := i.entityProvider.GetEntity(entityID)
+		entity, epErr := i.entityProvider.GetEntityProfile(ctx, entityID)
 		if epErr != nil {
 			if epErr.Code == entityprovider.ErrorCodeEntityNotFound {
 				execResp.Error = errForEntityCategory(ErrEntityNotFound, category)
@@ -104,7 +108,7 @@ func (i *identifyingExecutor) IdentifyEntity(ctx context.Context, filters map[st
 		}
 	}
 
-	entityID, err := i.entityProvider.IdentifyEntity(searchableFilter)
+	entityID, err := i.entityProvider.IdentifyEntity(ctx, searchableFilter)
 	if err != nil {
 		switch err.Code {
 		case entityprovider.ErrorCodeEntityNotFound:
@@ -228,6 +232,34 @@ func (i *identifyingExecutor) executeIdentify(ctx *providers.NodeContext,
 		return execResp, nil
 	}
 
+	// A recovery flow never reaches the assertion check, so a held account is refused here.
+	if ctx.FlowType == providers.FlowTypeRecovery {
+		held, stated, fault := i.accessGuard.heldAt(ctx.Context, *userID, providers.AccessPlaneRecovery, "",
+			logger)
+		if fault != nil {
+			// Answered as a failed account lookup.
+			execResp.Status = providers.ExecFailure
+			execResp.Error = errForEntityCategory(ErrFailedToIdentifyEntity, categoryUnscoped)
+			return execResp, nil
+		}
+		if held {
+			// A refusal that names no hold takes the unknown-user branch.
+			if stated != nil {
+				execResp.Status = providers.ExecFailure
+				execResp.Error = stated
+				return execResp, nil
+			}
+			if loginHintAttr == "" {
+				execResp.Status = providers.ExecUserInputRequired
+				execResp.Inputs = i.GetRequiredInputs(ctx)
+			} else {
+				execResp.Status = providers.ExecFailure
+			}
+			execResp.Error = errForEntityCategory(ErrEntityNotFound, categoryUnscoped)
+			return execResp, nil
+		}
+	}
+
 	execResp.RuntimeData[userAttributeUserID] = *userID
 	execResp.Status = providers.ExecComplete
 
@@ -309,7 +341,7 @@ func (i *identifyingExecutor) executeResolveLinkHolders(ctx *providers.NodeConte
 	// attribute-based resolve may have left with users who do not hold this link. The picks carried in
 	// the user inputs narrow them again each round.
 	federated := federatedIdentityFrom(ctx)
-	holders, epErr := i.entityProvider.GetLinkedEntities(federated.IdpID, federated.Sub)
+	holders, epErr := i.entityProvider.GetLinkedEntities(ctx.Context, federated.IdpID, federated.Sub)
 	if epErr != nil {
 		logger.Debug(ctx.Context, "Failed to retrieve the users linked to the federated identity",
 			log.String("errorCode", string(epErr.Code)))
@@ -363,7 +395,7 @@ func (i *identifyingExecutor) promptLinkHolders(ctx context.Context, holders []*
 }
 
 // bindLinkHolder makes the AuthUser name the link holder the user picked. The holder came from the
-// link itself, so it is authenticated as the provisioning executor authenticates an entity it created.
+// link itself, so it is authenticated by entity ID, which the provider admits as a federated sign-in.
 func (i *identifyingExecutor) bindLinkHolder(ctx *providers.NodeContext, execResp *providers.ExecutorResponse,
 	entityID string, logger *log.Logger) (*providers.ExecutorResponse, error) {
 	if i.authnProvider == nil {
@@ -375,7 +407,7 @@ func (i *identifyingExecutor) bindLinkHolder(ctx *providers.NodeContext, execRes
 		}
 		logger.Debug(ctx.Context, "Failed to bind the resolved link holder", log.String("errorCode", svcErr.Code))
 		execResp.Status = providers.ExecFailure
-		execResp.Error = errForEntityCategory(ErrFailedToIdentifyEntity, categoryUnscoped)
+		execResp.Error = cmp.Or(statedHold(svcErr), errForEntityCategory(ErrFailedToIdentifyEntity, categoryUnscoped))
 		return execResp, nil
 	}
 
@@ -419,7 +451,7 @@ func (i *identifyingExecutor) executeCheckStateFederated(ctx *providers.NodeCont
 	execResp *providers.ExecutorResponse, federated *core.ExternalIdentity) (*providers.ExecutorResponse, error) {
 	logger := i.logger.With(log.String(log.LoggerKeyExecutionID, ctx.ExecutionID))
 
-	holders, epErr := i.entityProvider.GetLinkedEntities(federated.IdpID, federated.Sub)
+	holders, epErr := i.entityProvider.GetLinkedEntities(ctx.Context, federated.IdpID, federated.Sub)
 	if epErr != nil {
 		if epErr.Code == entityprovider.ErrorCodeNotImplemented {
 			execResp.Status = providers.ExecComplete
@@ -446,7 +478,7 @@ func (i *identifyingExecutor) executeIdentifyFederated(ctx *providers.NodeContex
 	execResp *providers.ExecutorResponse, federated *core.ExternalIdentity) (*providers.ExecutorResponse, error) {
 	logger := i.logger.With(log.String(log.LoggerKeyExecutionID, ctx.ExecutionID))
 
-	holders, epErr := i.entityProvider.GetLinkedEntities(federated.IdpID, federated.Sub)
+	holders, epErr := i.entityProvider.GetLinkedEntities(ctx.Context, federated.IdpID, federated.Sub)
 	if epErr != nil {
 		logger.Debug(ctx.Context, "Failed to retrieve the users linked to the federated identity",
 			log.String("errorCode", string(epErr.Code)))
@@ -529,7 +561,7 @@ func (i *identifyingExecutor) searchCandidates(ctx context.Context,
 		}
 	}
 
-	users, err := i.entityProvider.SearchEntities(searchableFilters)
+	users, err := i.entityProvider.SearchEntities(ctx, searchableFilters)
 	if err != nil {
 		if err.Code == entityprovider.ErrorCodeEntityNotFound {
 			logger.Debug(ctx, "No users found for the provided filters")

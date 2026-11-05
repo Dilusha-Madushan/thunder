@@ -21,11 +21,10 @@ import {
   CardHeader,
   CircularProgress,
   Divider,
-  FormControl,
-  FormLabel,
   IconButton,
   InputAdornment,
   Popover,
+  Stack,
   TextField,
   Tooltip,
   Typography,
@@ -45,17 +44,17 @@ export interface I18nTextInputLabels {
   triggerTooltip?: string;
   /** Heading inside the popover when selecting an existing key. Default: "Translation". */
   popoverTitle?: string;
-  /** Heading inside the popover when creating a new key. Default: "Create New Translation". */
+  /** Heading inside the popover when creating a new key. Default: "Create new translation". */
   createTitle?: string;
   /** Tooltip on the "create new" button. Default: "Create a new translation key". */
   createTooltip?: string;
   /** Label for the language selector. Default: "Language". */
   languageLabel?: string;
-  /** Label for the translation key field. Default: "Translation Key". */
+  /** Label for the translation key field. Default: "Translation key". */
   keyLabel?: string;
   /** Placeholder for the key autocomplete in select mode. Default: "Select a translation key". */
   selectKeyPlaceholder?: string;
-  /** Label for the translation value field. Default: "Translation Value". */
+  /** Label for the translation value field. Default: "Translation value". */
   valueLabel?: string;
   /** Caption above the rendered translation. Default: "Resolved value". */
   resolvedValueLabel?: string;
@@ -81,12 +80,12 @@ export interface I18nTextInputLabels {
 const DEFAULT_LABELS: Required<I18nTextInputLabels> = {
   triggerTooltip: 'Configure translation',
   popoverTitle: 'Translation',
-  createTitle: 'Create New Translation',
+  createTitle: 'Create new translation',
   createTooltip: 'Create a new translation key',
   languageLabel: 'Language',
-  keyLabel: 'Translation Key',
+  keyLabel: 'Translation key',
   selectKeyPlaceholder: 'Select a translation key',
-  valueLabel: 'Translation Value',
+  valueLabel: 'Translation value',
   resolvedValueLabel: 'Resolved value',
   keyRequiredError: 'Translation key is required',
   valueRequiredError: 'Translation value is required',
@@ -508,9 +507,10 @@ export default function I18nTextInput({
   const resolvedValue = isDynamic ? (resolve(value, {t}) ?? '') : '';
 
   return (
-    <FormControl fullWidth>
-      <FormLabel>{label}</FormLabel>
+    <Stack>
       <TextField
+        labelPlacement="top"
+        label={label}
         fullWidth
         value={value}
         onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value)}
@@ -575,6 +575,6 @@ export default function I18nTextInput({
         labels={labels}
         onTranslationCreated={onTranslationCreated}
       />
-    </FormControl>
+    </Stack>
   );
 }

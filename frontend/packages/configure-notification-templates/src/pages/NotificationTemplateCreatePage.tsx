@@ -1,7 +1,7 @@
 // Copyright 2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import {FullScreenCreationWizardLayout} from '@thunderid/components';
+import {DocumentTitle, FullScreenCreationWizardLayout} from '@thunderid/components';
 import {
   OrganizationUnitPickerScreen,
   useGetOrganizationUnit,
@@ -137,11 +137,11 @@ export default function NotificationTemplateCreatePage(): JSX.Element {
   };
 
   const channelCrumb = isEmail
-    ? t('navigation:pages.emailTemplates', 'Email Templates')
-    : t('navigation:pages.smsTemplates', 'SMS Templates');
+    ? t('navigation:pages.emailTemplates', 'Email templates')
+    : t('navigation:pages.smsTemplates', 'SMS templates');
 
   const stepLabel = (value: CreateStep): string => {
-    if (value === 'organizationUnit') return t('create.steps.organizationUnit', 'Organization Unit');
+    if (value === 'organizationUnit') return t('create.steps.organizationUnit', 'Organization unit');
     if (value === 'template') return t('create.steps.template', 'Template');
     if (value === 'identity') return t('create.steps.identity', 'Details');
     return t('create.steps.content', 'Content');
@@ -165,32 +165,38 @@ export default function NotificationTemplateCreatePage(): JSX.Element {
 
   // The OU step is a full-screen picker rendered outside the wizard layout, matching the app and
   // verifiable-presentation create flows.
+  const pageTitle = t('listing.addTemplate', 'New template');
+
   if (effectiveStep === 'organizationUnit') {
     if (isOuLoading || !hasMultipleOUs) {
       return (
         <Box sx={{minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+          <DocumentTitle title={pageTitle} />
           <CircularProgress />
         </Box>
       );
     }
     return (
-      <OrganizationUnitPickerScreen
-        icon={<Home size={26} />}
-        title={t('create.organizationUnit.title', 'Where should this template belong?')}
-        subtitle={t(
-          'create.organizationUnit.subtitle',
-          "Choose the organization unit that will own this template. You can't change this once created.",
-        )}
-        value={effectiveOuId}
-        onChange={(value: string): void => {
-          setSubmitError(null);
-          setOuId(value);
-        }}
-        onBack={goToList}
-        onContinue={() => setStep('template')}
-        backLabel={t('common:actions.back', 'Back')}
-        continueLabel={t('common:actions.continue', 'Continue')}
-      />
+      <>
+        <DocumentTitle title={pageTitle} />
+        <OrganizationUnitPickerScreen
+          icon={<Home size={26} />}
+          title={t('create.organizationUnit.title', 'Where should this template belong?')}
+          subtitle={t(
+            'create.organizationUnit.subtitle',
+            "Choose the organization unit that will own this template. You can't change this once created.",
+          )}
+          value={effectiveOuId}
+          onChange={(value: string): void => {
+            setSubmitError(null);
+            setOuId(value);
+          }}
+          onBack={goToList}
+          onContinue={() => setStep('template')}
+          backLabel={t('common:actions.back', 'Back')}
+          continueLabel={t('common:actions.continue', 'Continue')}
+        />
+      </>
     );
   }
 
@@ -243,6 +249,7 @@ export default function NotificationTemplateCreatePage(): JSX.Element {
         </Stack>
       }
     >
+      <DocumentTitle title={pageTitle} />
       {effectiveStep === 'template' && (
         <SelectNotificationTemplate channel={channel} selected={selection} onSelect={applySelection} />
       )}

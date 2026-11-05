@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {GithubIcon, GoogleIcon, ResourceAvatar} from '@thunderid/components';
-import {Mail, MessageSquare, Send, ServerCog} from '@wso2/oxygen-ui-icons-react';
+import {Mail, MessageSquare, Send, ServerCog, Webhook} from '@wso2/oxygen-ui-icons-react';
 import {CONNECTION_CATEGORIES} from '../constants/connection-categories';
 import ConnectionConstants from '../constants/connection-constants';
 import {
@@ -87,6 +87,7 @@ export const CONNECTION_VENDOR_META: ConnectionVendorMeta[] = [
     logo: <ResourceAvatar transparent variant="rounded" size={AVATAR_SIZE} fallback={<MessageSquare size={28} />} />,
     categories: ['sms'],
     presentation: 'branded',
+    deleteDescriptionKey: 'connections:detail.dangerZone.delete.smsDescription',
   },
   {
     key: 'vonage',
@@ -97,11 +98,12 @@ export const CONNECTION_VENDOR_META: ConnectionVendorMeta[] = [
     logo: <ResourceAvatar transparent variant="rounded" size={AVATAR_SIZE} fallback={<Send size={28} />} />,
     categories: ['sms'],
     presentation: 'branded',
+    deleteDescriptionKey: 'connections:detail.dangerZone.delete.smsDescription',
   },
   {
     key: 'sms-gateway',
     backendType: ConnectionTypes.SMS_GATEWAY,
-    displayName: 'SMS Gateway',
+    displayName: 'SMS gateway',
     descriptionKey: 'connections:vendor.sms-gateway.description',
     logo: (
       <ResourceAvatar
@@ -115,11 +117,12 @@ export const CONNECTION_VENDOR_META: ConnectionVendorMeta[] = [
     presentation: 'custom',
     supportsAuthentication: true,
     generalSettingsCardCopy: 'configuration',
+    deleteDescriptionKey: 'connections:detail.dangerZone.delete.smsDescription',
   },
   {
     key: 'authzen-pdp',
     backendType: ConnectionTypes.AUTHZEN_PDP,
-    displayName: 'Policy Decision Point (PDP)',
+    displayName: 'Policy decision point (PDP)',
     descriptionKey: 'connections:vendor.authzen-pdp.description',
     logo: <ResourceAvatar transparent variant="rounded" size={AVATAR_SIZE} fallback={<ServerCog size={28} />} />,
     categories: ['authorization', 'custom'],
@@ -127,6 +130,7 @@ export const CONNECTION_VENDOR_META: ConnectionVendorMeta[] = [
     supportsAuthentication: true,
     supportsSubjectMapping: true,
     generalSettingsCardCopy: 'configuration',
+    deleteDescriptionKey: 'connections:detail.dangerZone.delete.pdpDescription',
   },
   {
     key: 'email-smtp',
@@ -137,6 +141,20 @@ export const CONNECTION_VENDOR_META: ConnectionVendorMeta[] = [
     categories: ['email'],
     presentation: 'custom',
     generalSettingsCardCopy: 'configuration',
+    deleteDescriptionKey: 'connections:detail.dangerZone.delete.emailDescription',
+  },
+  {
+    key: 'http',
+    backendType: ConnectionTypes.HTTP,
+    displayName: 'Service endpoint',
+    descriptionKey: 'connections:vendor.http.description',
+    logo: <ResourceAvatar transparent variant="rounded" size={AVATAR_SIZE} fallback={<Webhook size={28} />} />,
+    categories: ['custom'],
+    presentation: 'custom',
+    reentersCredentialsOnOriginChange: true,
+    showsUsages: true,
+    generalSettingsCardCopy: 'configuration',
+    deleteDescriptionKey: 'connections:detail.dangerZone.delete.httpDescription',
   },
 ];
 

@@ -9,7 +9,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
 )
 
-const dropUserShareMigrationTableOperationID engine.OperationID = "2.0.0-m1-pidp.1/entitydb/" +
+const dropUserShareMigrationTableOperationID engine.OperationID = "2.0.0-m1-pidp/entitydb/" +
 	"18_drop_user_share_migration_table"
 
 // newDropUserShareMigrationTableOperation drops the working table once every operation that reads it has

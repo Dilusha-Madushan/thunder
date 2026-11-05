@@ -6,7 +6,6 @@ package current
 
 import (
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
-	previous "github.com/thunder-id/thunderid/internal/system/migration/releases/v2_0_0"
 	release "github.com/thunder-id/thunderid/internal/system/migration/releases/v2_0_0_1"
 )
 
@@ -23,16 +22,11 @@ func DefinitionWithDependencies(dependencies Dependencies) (*engine.ReleaseDefin
 	return release.DefinitionWithDependencies(dependencies)
 }
 
-// Catalog returns the ordered migration manifests known to the current binary. The previous release is
-// listed so that a store still at its source level is routed through it first.
+// Catalog returns the ordered migration manifests known to the current binary.
 func Catalog() ([]engine.ReleaseManifest, error) {
-	previousDefinition, err := previous.Definition()
-	if err != nil {
-		return nil, err
-	}
 	definition, err := release.Definition()
 	if err != nil {
 		return nil, err
 	}
-	return []engine.ReleaseManifest{previousDefinition.Manifest, definition.Manifest}, nil
+	return []engine.ReleaseManifest{definition.Manifest}, nil
 }

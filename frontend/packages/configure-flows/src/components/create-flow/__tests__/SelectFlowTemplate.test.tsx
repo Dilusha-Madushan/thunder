@@ -54,7 +54,7 @@ const passwordTemplate: FlowTemplate = {
   type: 'CREDENTIALS_AUTH',
   flowType: 'AUTHENTICATION',
   display: {
-    label: 'Username & Password',
+    label: 'Username & password',
     description: 'Basic authentication',
     image: 'basic.svg',
     showOnResourcePanel: true,
@@ -103,6 +103,20 @@ const unknownIconTemplate: FlowTemplate = {
   config: {name: '', handle: '', nodes: []},
 };
 
+const deviceGrantTemplate: FlowTemplate = {
+  resourceType: 'TEMPLATE',
+  category: 'DEVICE_AUTHORIZATION',
+  type: 'DEVICE_GRANT',
+  flowType: 'DEVICE_GRANT',
+  display: {
+    label: 'Device authorization',
+    description: 'Verify a device code and sign in to authorize the device',
+    image: 'assets/images/icons/lock.svg',
+    showOnResourcePanel: true,
+  },
+  config: {name: 'Device Authorization Flow', handle: 'device-authorization-flow', nodes: []},
+};
+
 const mockTemplates: FlowTemplate[] = [
   blankTemplate,
   passwordTemplate,
@@ -110,12 +124,13 @@ const mockTemplates: FlowTemplate[] = [
   githubTemplate,
   compositeTemplate,
   unknownIconTemplate,
+  deviceGrantTemplate,
 ];
 
 vi.mock('../../../api/useGetFlowsMeta', () => ({
-  default: () => ({
+  default: ({flowType}: {flowType: string}) => ({
     data: {
-      templates: mockTemplates,
+      templates: mockTemplates.filter((template) => template.flowType === flowType),
       steps: [],
       actions: [],
       elements: [],
@@ -163,7 +178,7 @@ describe('SelectFlowTemplate', () => {
     it('should render non-blank templates in the grid', () => {
       render(<SelectFlowTemplate {...defaultProps} />);
 
-      expect(screen.getByText('Username & Password')).toBeInTheDocument();
+      expect(screen.getByText('Username & password')).toBeInTheDocument();
       expect(screen.getByText('Google')).toBeInTheDocument();
     });
 
@@ -171,6 +186,13 @@ describe('SelectFlowTemplate', () => {
       render(<SelectFlowTemplate {...defaultProps} />);
 
       expect(screen.getByText('GitHub')).toBeInTheDocument();
+    });
+
+    it('should render the generic Device Authorization icon', () => {
+      render(<SelectFlowTemplate {...defaultProps} flowType="DEVICE_GRANT" />);
+
+      expect(screen.getAllByText('Device authorization')).toHaveLength(2);
+      expect(screen.getByTestId('icon-lock')).toBeInTheDocument();
     });
 
     it('should render a composite icon row for a template with multiple icons', () => {
@@ -194,7 +216,7 @@ describe('SelectFlowTemplate', () => {
       fireEvent.change(screen.getByPlaceholderText('Search templates...'), {target: {value: 'google'}});
 
       expect(screen.getByText('Google')).toBeInTheDocument();
-      expect(screen.queryByText('Username & Password')).not.toBeInTheDocument();
+      expect(screen.queryByText('Username & password')).not.toBeInTheDocument();
     });
 
     it('should filter templates by description', () => {
@@ -203,7 +225,7 @@ describe('SelectFlowTemplate', () => {
       fireEvent.change(screen.getByPlaceholderText('Search templates...'), {target: {value: 'mapped icon'}});
 
       expect(screen.getByText('Custom flow')).toBeInTheDocument();
-      expect(screen.queryByText('Username & Password')).not.toBeInTheDocument();
+      expect(screen.queryByText('Username & password')).not.toBeInTheDocument();
     });
 
     it('should show the no-results message when nothing matches the search', () => {
@@ -239,7 +261,7 @@ describe('SelectFlowTemplate', () => {
       render(<SelectFlowTemplate {...defaultProps} />);
 
       expect(screen.getByText('Password')).toBeInTheDocument();
-      expect(screen.getByText('Social Login')).toBeInTheDocument();
+      expect(screen.getByText('Social login')).toBeInTheDocument();
     });
 
     it('should filter templates when a category chip is clicked', () => {
@@ -247,7 +269,7 @@ describe('SelectFlowTemplate', () => {
 
       fireEvent.click(screen.getByText('Password'));
 
-      expect(screen.getByText('Username & Password')).toBeInTheDocument();
+      expect(screen.getByText('Username & password')).toBeInTheDocument();
       expect(screen.queryByText('Google')).not.toBeInTheDocument();
     });
 
@@ -257,7 +279,7 @@ describe('SelectFlowTemplate', () => {
       fireEvent.click(screen.getByText('Password'));
       fireEvent.click(screen.getByText('All'));
 
-      expect(screen.getByText('Username & Password')).toBeInTheDocument();
+      expect(screen.getByText('Username & password')).toBeInTheDocument();
       expect(screen.getByText('Google')).toBeInTheDocument();
     });
   });
@@ -272,7 +294,7 @@ describe('SelectFlowTemplate', () => {
     it('should call onTemplateChange when a template card is clicked', () => {
       render(<SelectFlowTemplate {...defaultProps} selectedTemplate={blankTemplate} />);
 
-      fireEvent.click(screen.getByText('Username & Password'));
+      fireEvent.click(screen.getByText('Username & password'));
 
       expect(mockOnTemplateChange).toHaveBeenCalledWith(passwordTemplate);
     });
@@ -288,7 +310,7 @@ describe('SelectFlowTemplate', () => {
     it('should call onTemplateChange when Enter is pressed on a template card', () => {
       render(<SelectFlowTemplate {...defaultProps} selectedTemplate={blankTemplate} />);
 
-      fireEvent.keyDown(screen.getByText('Username & Password').closest('[role="button"]')!, {key: 'Enter'});
+      fireEvent.keyDown(screen.getByText('Username & password').closest('[role="button"]')!, {key: 'Enter'});
 
       expect(mockOnTemplateChange).toHaveBeenCalledWith(passwordTemplate);
     });
@@ -296,7 +318,7 @@ describe('SelectFlowTemplate', () => {
     it('should call onTemplateChange when Space is pressed on a template card', () => {
       render(<SelectFlowTemplate {...defaultProps} selectedTemplate={blankTemplate} />);
 
-      fireEvent.keyDown(screen.getByText('Username & Password').closest('[role="button"]')!, {key: ' '});
+      fireEvent.keyDown(screen.getByText('Username & password').closest('[role="button"]')!, {key: ' '});
 
       expect(mockOnTemplateChange).toHaveBeenCalledWith(passwordTemplate);
     });
@@ -304,7 +326,7 @@ describe('SelectFlowTemplate', () => {
     it('should ignore unrelated key presses on a template card', () => {
       render(<SelectFlowTemplate {...defaultProps} selectedTemplate={blankTemplate} />);
 
-      fireEvent.keyDown(screen.getByText('Username & Password').closest('[role="button"]')!, {key: 'a'});
+      fireEvent.keyDown(screen.getByText('Username & password').closest('[role="button"]')!, {key: 'a'});
 
       expect(mockOnTemplateChange).not.toHaveBeenCalled();
     });

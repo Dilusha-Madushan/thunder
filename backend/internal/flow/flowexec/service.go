@@ -8,7 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
+	"time"
 
 	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 
@@ -20,6 +20,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/flow/core"
 	"github.com/thunder-id/thunderid/internal/flow/graphbuilder"
 	"github.com/thunder-id/thunderid/internal/flow/session"
+	oauth2const "github.com/thunder-id/thunderid/internal/oauth/oauth2/constants"
 	sysContext "github.com/thunder-id/thunderid/internal/system/context"
 	"github.com/thunder-id/thunderid/internal/system/cryptolib"
 	"github.com/thunder-id/thunderid/internal/system/featuregate"
@@ -51,8 +52,11 @@ type flowExecService struct {
 	attestationVerifier providers.AttestationProvider
 	jwtService          jwt.JWTServiceInterface
 	serverConfigSvc     serverConfigProvider
+	governance          providers.IdentityGovernanceProvider
 	featureGate         *featuregate.Gate
 	cfg                 flowconfig.Config
+	// ssoHandleTTL is how long a handle returned in the response body stays usable.
+	ssoHandleTTL time.Duration
 }
 
 // newFlowExecService creates a new instance of flowExecService with the provided dependencies.
@@ -66,8 +70,10 @@ func newFlowExecService(flowProvider providers.FlowProvider,
 	graphBuilder graphbuilder.GraphBuilderInterface,
 	jwtService jwt.JWTServiceInterface,
 	serverConfigSvc serverConfigProvider,
+	governance providers.IdentityGovernanceProvider,
 	featureGate *featuregate.Gate,
-	cfg flowconfig.Config) FlowExecServiceInterface {
+	cfg flowconfig.Config,
+	ssoHandleTTL time.Duration) FlowExecServiceInterface {
 	return &flowExecService{
 		flowProvider:        flowProvider,
 		flowStore:           flowStore,
@@ -80,29 +86,33 @@ func newFlowExecService(flowProvider providers.FlowProvider,
 		graphBuilder:        graphBuilder,
 		jwtService:          jwtService,
 		serverConfigSvc:     serverConfigSvc,
+		governance:          governance,
 		featureGate:         featureGate,
 		cfg:                 cfg,
+		ssoHandleTTL:        ssoHandleTTL,
 	}
 }
 
 // Execute executes a flow with the given data
 func (s *flowExecService) Execute(ctx context.Context,
 	appID, executionID, flowType string, verbose bool,
-	action string, inputs map[string]string, challengeToken, flowSecret, attestationToken string) (
-	*FlowStep, *tidcommon.ServiceError) {
+	action string, inputs map[string]string, challengeToken, flowSecret, attestationToken string,
+	sessionData []SessionData) (*FlowStep, *tidcommon.ServiceError) {
 	return s.execute(ctx, "", appID, executionID, flowType, verbose, action, inputs,
-		challengeToken, flowSecret, attestationToken)
+		challengeToken, flowSecret, attestationToken, sessionData)
 }
 
 // ExecuteByID starts or continues an administrator-selected flow by its immutable flow ID.
 func (s *flowExecService) ExecuteByID(ctx context.Context, flowID, executionID string, verbose bool,
-	action string, inputs map[string]string, challengeToken string) (*FlowStep, *tidcommon.ServiceError) {
-	return s.execute(ctx, flowID, "", executionID, "", verbose, action, inputs, challengeToken, "", "")
+	action string, inputs map[string]string, challengeToken string, sessionData []SessionData) (
+	*FlowStep, *tidcommon.ServiceError) {
+	return s.execute(ctx, flowID, "", executionID, "", verbose, action, inputs, challengeToken, "", "",
+		sessionData)
 }
 
 func (s *flowExecService) execute(ctx context.Context, flowID, appID, executionID, flowType string, verbose bool,
-	action string, inputs map[string]string, challengeToken, flowSecret, attestationToken string) (
-	*FlowStep, *tidcommon.ServiceError) {
+	action string, inputs map[string]string, challengeToken, flowSecret, attestationToken string,
+	sessionData []SessionData) (*FlowStep, *tidcommon.ServiceError) {
 	logger := log.GetLogger().With(log.String(log.LoggerKeyComponentName, "FlowExecService"))
 
 	// Get trace ID from context
@@ -158,11 +168,18 @@ func (s *flowExecService) execute(ctx context.Context, flowID, appID, executionI
 		}
 	}
 
+	// Checked after the context loads, so a flow started before the application was suspended is
+	// refused too. A flow that loads no application is not checked.
+	if svcErr := s.refuseHeldApplication(ctx, engineCtx.Application.ID, logger); svcErr != nil {
+		return nil, svcErr
+	}
+
 	// Set trace ID to engine context (request context is already set during context loading)
 	engineCtx.TraceID = traceID
 
-	// Resolve the inbound SSO handle for this flow from the request-scoped transport inputs.
-	applyInboundSSO(engineCtx, ctx)
+	// Resolve the inbound SSO handle for this flow from the request body or the request-scoped
+	// transport inputs.
+	applyInboundSSO(engineCtx, ctx, sessionData)
 
 	flowStep, flowErr := s.flowEngine.Execute(engineCtx)
 
@@ -182,20 +199,27 @@ func (s *flowExecService) execute(ctx context.Context, flowID, appID, executionI
 		}
 		if assertion := s.buildErrorAssertion(ctx, engineCtx, errorType,
 			flowErr.ErrorDescription.String(), logger); assertion != "" {
-			return &FlowStep{ErrorAssertion: assertion}, flowErr
+			return &FlowStep{ErrorAssertion: assertion,
+				Data: FlowData{AdditionalData: flowErrorCallbackData(engineCtx)}}, flowErr
 		}
 		return nil, flowErr
 	}
+
+	// Return the SSO session this step started or ended in the response body too.
+	s.applyOutboundSSO(&flowStep)
 
 	// Surface the OAuth callback type (grant type) from runtime data onto the terminal response so the
 	// Gate/SDK routes the completion or failure to the correct callback handler (e.g. CIBA).
 	// TODO: Remove once the OAuth callback handler can determine the grant type without runtime data.
 	if flowStep.Status == providers.FlowStatusComplete || flowStep.Status == providers.FlowStatusError {
-		if callbackType := engineCtx.RuntimeData[common.RuntimeKeyCallbackType]; callbackType != "" {
+		if callbackType := common.RuntimeDataOrShared(engineCtx.RuntimeData,
+			engineCtx.sharedRuntimeData, common.RuntimeKeyCallbackType); callbackType != "" {
 			if flowStep.Data.AdditionalData == nil {
 				flowStep.Data.AdditionalData = make(map[string]string)
 			}
 			flowStep.Data.AdditionalData[common.DataCallbackType] = callbackType
+			flowStep.Data.AdditionalData[oauth2const.AuthID] = common.RuntimeDataOrShared(
+				engineCtx.RuntimeData, engineCtx.sharedRuntimeData, common.RuntimeKeyAuthorizationRequestID)
 		}
 	}
 
@@ -237,11 +261,32 @@ func (s *flowExecService) execute(ctx context.Context, flowID, appID, executionI
 	return &flowStep, nil
 }
 
+// flowErrorCallbackData returns the callback metadata needed to report a signed flow failure.
+func flowErrorCallbackData(engineCtx *EngineContext) map[string]string {
+	if engineCtx == nil {
+		return nil
+	}
+
+	callbackType := common.RuntimeDataOrShared(engineCtx.RuntimeData, engineCtx.sharedRuntimeData,
+		common.RuntimeKeyCallbackType)
+	authID := common.RuntimeDataOrShared(engineCtx.RuntimeData, engineCtx.sharedRuntimeData,
+		common.RuntimeKeyAuthorizationRequestID)
+	if callbackType == "" || authID == "" {
+		return nil
+	}
+
+	return map[string]string{
+		common.DataCallbackType: callbackType,
+		oauth2const.AuthID:      authID,
+	}
+}
+
 // buildErrorAssertion signs an assertion binding the flow error type and description to the OAuth
 // authorization request
 func (s *flowExecService) buildErrorAssertion(ctx context.Context, engineCtx *EngineContext,
 	errorType, description string, logger *log.Logger) string {
-	authReqID := engineCtx.RuntimeData[common.RuntimeKeyAuthorizationRequestID]
+	authReqID := common.RuntimeDataOrShared(engineCtx.RuntimeData, engineCtx.sharedRuntimeData,
+		common.RuntimeKeyAuthorizationRequestID)
 	if authReqID == "" {
 		return ""
 	}
@@ -317,21 +362,48 @@ func requiredFlowFeature(flowType providers.FlowType) (featuregate.Feature, bool
 	}
 }
 
-// applyInboundSSO selects the SSO handle carried for this flow from the request-scoped
-// transport inputs and stashes it on the engine context for the SSO-Check node to consume.
-// It is a no-op when no inbound transport is present.
-func applyInboundSSO(engineCtx *EngineContext, ctx context.Context) {
+// applyInboundSSO selects the SSO handle carried for this flow and stashes it on the engine context
+// for the SSO-Check node to consume. A handle the caller sent in the request body wins over the
+// request-scoped transport inputs. It is a no-op when neither carries one.
+func applyInboundSSO(engineCtx *EngineContext, ctx context.Context, sessionData []SessionData) {
 	if engineCtx == nil || engineCtx.Graph == nil {
 		return
+	}
+	// ssoFlowID resolves the flow whose session this execution operates on — the running flow for
+	// login/SSO, or the login flow (SessionFlowID) for a sign-out flow — so the correct per-flow handle
+	// is selected.
+	flowID := ssoFlowID(engineCtx)
+	if len(sessionData) > 0 {
+		flowIdentifier := session.FlowIdentifier(flowID)
+		for _, entry := range sessionData {
+			if entry.FlowIdentifier == flowIdentifier && entry.SessionHandle != "" {
+				engineCtx.SSOHandleIn = entry.SessionHandle
+				return
+			}
+		}
 	}
 	inbound, ok := session.InboundFrom(ctx)
 	if !ok {
 		return
 	}
-	// ssoFlowID resolves the flow whose session this execution operates on — the running flow for
-	// login/SSO, or the login flow (SessionFlowID) for a sign-out flow — so the correct per-flow cookie
-	// is selected.
-	engineCtx.SSOHandleIn = inbound.HandleFor(ssoFlowID(engineCtx))
+	engineCtx.SSOHandleIn = inbound.HandleFor(flowID)
+}
+
+// applyOutboundSSO adds the SSO session this step started or ended to the step, keyed by flow
+// identifier, for the response body to return to a caller that holds its handles itself.
+func (s *flowExecService) applyOutboundSSO(flowStep *FlowStep) {
+	if flowStep.SSOHandleOut != "" && flowStep.SSOFlowID != "" {
+		flowStep.SessionData = []IssuedSessionData{{
+			SessionData: SessionData{
+				FlowIdentifier: session.FlowIdentifier(flowStep.SSOFlowID),
+				SessionHandle:  flowStep.SSOHandleOut,
+			},
+			ExpiresIn: int64(s.ssoHandleTTL.Seconds()),
+		}}
+	}
+	if flowStep.SSOClearFlowID != "" {
+		flowStep.ClearedSessions = []string{session.FlowIdentifier(flowStep.SSOClearFlowID)}
+	}
 }
 
 // initContext initializes a new flow context with the given details.
@@ -393,11 +465,13 @@ func (s *flowExecService) loadNewContext(ctx context.Context, flowID, appID, flo
 
 // checkDirectFlowInitiationAllowed governs which applications may initiate an authentication or
 // sign-out flow directly over HTTP, based on how the application is classified:
-//   - RedirectOnly — the application signs users in through a redirect-based protocol component
+//   - NotPermitted — the application signs users in through a redirect-based protocol component
 //     (currently OAuth 2.0 authorization_code apps) and must have its flows initiated by that
-//     component, not via a direct HTTP call.
-//   - FlowSecret — a backend / server-side application (including embedded apps with no protocol
-//     profile) that must authenticate at flow initiation by presenting its Flow Secret.
+//     component, or it has no use for a direct flow (browser and m2m apps, and OAuth clients without
+//     the token-exchange grant, which cannot redeem a flow assertion).
+//   - FlowSecret — a backend / server-side application with the token-exchange grant (including
+//     embedded apps with no protocol profile) that must authenticate at flow initiation by
+//     presenting its Flow Secret.
 //   - Attestation — a mobile application that authenticates at flow initiation by presenting a valid
 //     platform attestation (e.g. a Google Play Integrity token) proving its binary identity.
 //   - DevMode — a mobile application with attestation dev mode enabled, which may initiate a flow
@@ -526,18 +600,12 @@ func (s *flowExecService) resolveFlowInitiationModeFromProfile(
 		return flowInitiationFlowSecret, nil, nil
 	}
 
-	// Redirect (authorization_code) apps initiate through the OAuth component; M2M apps get tokens
-	// directly. Neither may initiate a flow directly.
-	if slices.Contains(profile.GrantTypes, string(providers.GrantTypeAuthorizationCode)) ||
-		isClientCredentialsOnly(profile.GrantTypes) {
+	// Redirect (authorization_code) apps initiate through the OAuth component, and apps without the
+	// token-exchange grant cannot redeem a flow assertion. Neither may initiate a flow directly.
+	if !appmodel.IsFlowNativeGrantSet(profile.GrantTypes) {
 		return flowInitiationNotPermitted, nil, nil
 	}
 	return flowInitiationFlowSecret, nil, nil
-}
-
-// isClientCredentialsOnly reports whether client_credentials is the only configured grant type.
-func isClientCredentialsOnly(grantTypes []string) bool {
-	return len(grantTypes) == 1 && grantTypes[0] == string(providers.GrantTypeClientCredentials)
 }
 
 // initContext initializes a new flow context with the given details.
@@ -704,7 +772,8 @@ func (s *flowExecService) setApplicationToContext(engineCtx *EngineContext,
 	logger *log.Logger) *tidcommon.ServiceError {
 	// Skip application loading for app-independent flows
 	if engineCtx.FlowType == providers.FlowTypeUserOnboarding ||
-		engineCtx.FlowType == providers.FlowTypeAdministration {
+		engineCtx.FlowType == providers.FlowTypeAdministration ||
+		engineCtx.FlowType == providers.FlowTypeSystem {
 		return nil
 	}
 
@@ -879,6 +948,13 @@ func (s *flowExecService) getFlowGraph(ctx context.Context, appID string, flowTy
 		return client.SignOutFlowID, nil
 	}
 
+	if flowType == providers.FlowTypeDeviceGrant {
+		if client.DeviceGrantFlowID == "" {
+			return "", &ErrorDeviceGrantFlowDisabled
+		}
+		return client.DeviceGrantFlowID, nil
+	}
+
 	// Default to authentication flow ID
 	if client.AuthFlowID == "" {
 		logger.Error(ctx, "Authentication flow is not configured for the entity",
@@ -893,7 +969,8 @@ func (s *flowExecService) getFlowGraph(ctx context.Context, appID string, flowTy
 func validateFlowType(flowTypeStr string) (providers.FlowType, *tidcommon.ServiceError) {
 	switch providers.FlowType(flowTypeStr) {
 	case providers.FlowTypeAuthentication, providers.FlowTypeRegistration, providers.FlowTypeUserOnboarding,
-		providers.FlowTypeRecovery, providers.FlowTypeSignOut, providers.FlowTypeAdministration:
+		providers.FlowTypeRecovery, providers.FlowTypeSignOut, providers.FlowTypeAdministration,
+		providers.FlowTypeDeviceGrant:
 		return providers.FlowType(flowTypeStr), nil
 	default:
 		return "", &ErrorInvalidFlowType
@@ -930,10 +1007,26 @@ func isComplete(step FlowStep) bool {
 	return step.Status == providers.FlowStatusComplete
 }
 
-// prepareContext prepares the flow context by merging any data.
+// withoutConstantInputs returns the submitted inputs without the ones the flow holds constant.
+func withoutConstantInputs(graph core.GraphInterface, inputs map[string]string) map[string]string {
+	if graph == nil || len(inputs) == 0 {
+		return inputs
+	}
+
+	accepted := make(map[string]string, len(inputs))
+	for identifier, value := range inputs {
+		if !graph.IsConstantInput(identifier) {
+			accepted[identifier] = value
+		}
+	}
+	return accepted
+}
+
+// prepareContext prepares the flow context by merging any data. Inputs the flow holds constant are left
+// out, so no way of starting or continuing a flow can set one.
 func prepareContext(ctx *EngineContext, action string, inputs map[string]string) {
 	// Append any inputs present to the context
-	if len(inputs) > 0 {
+	if inputs = withoutConstantInputs(ctx.Graph, inputs); len(inputs) > 0 {
 		ctx.UserInputs = sysutils.MergeStringMaps(ctx.UserInputs, inputs)
 	}
 
@@ -1005,6 +1098,10 @@ func (s *flowExecService) InitiateFlow(ctx context.Context,
 		return "", err
 	}
 
+	if svcErr := s.refuseHeldApplication(ctx, engineCtx.Application.ID, logger); svcErr != nil {
+		return "", svcErr
+	}
+
 	// Replace the RuntimeData with initContext RuntimeData
 	engineCtx.RuntimeData = initContext.RuntimeData
 	engineCtx.SetInitiatorRequest(initContext.InitiatorRequest)
@@ -1029,7 +1126,7 @@ func (s *flowExecService) InitiateFlow(ctx context.Context,
 //
 // InitialInputs are placed directly into UserInputs before execution so executor nodes that
 // read from ctx.UserInputs (e.g. the identifying executor) can resolve data without requiring
-// an interactive input step from the user.
+// an interactive input step from the user. An input the flow holds constant is left out.
 func (s *flowExecService) InitiateAndExecute(ctx context.Context,
 	initContext *FlowInitContext) (*FlowStep, *tidcommon.ServiceError) {
 	logger := log.GetLogger().With(log.String(log.LoggerKeyComponentName, "FlowExecService"))
@@ -1064,6 +1161,11 @@ func (s *flowExecService) InitiateAndExecute(ctx context.Context,
 		return nil, err
 	}
 
+	if svcErr := s.refuseHeldApplication(ctx, engineCtx.Application.ID, logger); svcErr != nil {
+		return nil, svcErr
+	}
+
+	engineCtx.TraceID = sysContext.GetTraceID(ctx)
 	engineCtx.RuntimeData = initContext.RuntimeData
 	engineCtx.SetInitiatorRequest(initContext.InitiatorRequest)
 	prepareContext(engineCtx, "", initContext.InitialInputs)
@@ -1083,6 +1185,69 @@ func (s *flowExecService) InitiateAndExecute(ctx context.Context,
 	}
 
 	return &flowStep, nil
+}
+
+// ExecuteSystemFlow runs the system flow sysCtx names to completion, with its inputs as the user
+// inputs and its runtime data as what the steps share, and returns what the steps shared. A step's
+// refusal is returned as it is. The context is never stored, since a system flow cannot pause.
+func (s *flowExecService) ExecuteSystemFlow(ctx context.Context, sysCtx *common.SystemFlowContext) (
+	*common.SystemFlowResult, *tidcommon.ServiceError) {
+	logger := log.GetLogger().With(log.String(log.LoggerKeyComponentName, "FlowExecService"),
+		log.String("handle", sysCtx.Handle))
+	flow, svcErr := s.flowProvider.GetSystemFlow(ctx, sysCtx.Handle)
+	if svcErr != nil {
+		logger.Error(ctx, "Failed to get the system flow", log.String("error", svcErr.Error.DefaultValue))
+		return nil, &tidcommon.InternalServerError
+	}
+
+	engineCtx, svcErr := s.initContext(ctx, flow.ID, "", providers.FlowTypeSystem, flow, false, logger)
+	if svcErr != nil {
+		return nil, svcErr
+	}
+	prepareContext(engineCtx, "", sysCtx.Inputs)
+	for key, value := range sysCtx.RuntimeData {
+		engineCtx.setSharedRuntimeData(key, value)
+	}
+
+	flowStep, svcErr := s.flowEngine.Execute(engineCtx)
+	if svcErr != nil {
+		return nil, svcErr
+	}
+	switch flowStep.Status {
+	case providers.FlowStatusComplete:
+		return &common.SystemFlowResult{ExecutionID: engineCtx.ExecutionID,
+			RuntimeData: engineCtx.sharedRuntimeData}, nil
+	case providers.FlowStatusError:
+		if flowStep.Error != nil {
+			return nil, flowStep.Error
+		}
+		logger.Error(ctx, "The system flow failed without a reason",
+			log.String(log.LoggerKeyExecutionID, engineCtx.ExecutionID))
+		return nil, &tidcommon.InternalServerError
+	default:
+		logger.Error(ctx, "The system flow stopped for input",
+			log.String(log.LoggerKeyExecutionID, engineCtx.ExecutionID), log.String("status", string(flowStep.Status)))
+		return nil, &tidcommon.InternalServerError
+	}
+}
+
+// refuseHeldApplication refuses a flow driven by a suspended application, at the application plane.
+func (s *flowExecService) refuseHeldApplication(ctx context.Context, appID string,
+	logger *log.Logger) *tidcommon.ServiceError {
+	if s.governance == nil || appID == "" {
+		return nil
+	}
+
+	decision, svcErr := s.governance.EvaluateAccess(ctx, appID, providers.AccessPlaneApplication, "")
+	if svcErr != nil {
+		// An unreadable authority refuses.
+		return &tidcommon.InternalServerError
+	}
+	if !decision.Admitted {
+		logger.Debug(ctx, "Refused a flow for a held application", log.String("appID", appID))
+		return &ErrorFlowApplicationNotUsable
+	}
+	return nil
 }
 
 // getFlowContext retrieves the flow context from the store and decrypts it if needed.

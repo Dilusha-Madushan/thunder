@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	snapshotDuplicateUsersOperationID engine.OperationID = "2.0.0-m1-pidp.1/entitydb/08_snapshot_duplicate_users"
-	snapshotDuplicateUsersRollbackID  engine.OperationID = "2.0.0-m1-pidp.1/entitydb/" +
+	snapshotDuplicateUsersOperationID engine.OperationID = "2.0.0-m1-pidp/entitydb/08_snapshot_duplicate_users"
+	snapshotDuplicateUsersRollbackID  engine.OperationID = "2.0.0-m1-pidp/entitydb/" +
 		"08_snapshot_duplicate_users_rollback"
 
 	// snapshotDuplicateUsersBatchSize is the number of email groups recorded per batch.

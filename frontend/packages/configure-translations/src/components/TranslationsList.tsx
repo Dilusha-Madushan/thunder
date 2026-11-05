@@ -92,10 +92,10 @@ export default function TranslationsList(): JSX.Element {
         hideable: false,
         renderCell: (params: DataGrid.GridRenderCellParams<{id: string; code: string}>): JSX.Element => (
           <ListingTable.RowActions>
-            <Tooltip title={t('common:actions.edit')}>
+            <Tooltip title={t('common:actions.edit', 'Edit')}>
               <IconButton
                 size="small"
-                aria-label={t('common:actions.edit')}
+                aria-label={t('common:actions.edit', 'Edit')}
                 onClick={(e) => {
                   e.stopPropagation();
                   handleEditClick(params.row.code);
@@ -104,11 +104,11 @@ export default function TranslationsList(): JSX.Element {
                 <Pencil size={16} />
               </IconButton>
             </Tooltip>
-            <Tooltip title={t('common:actions.delete')}>
+            <Tooltip title={t('common:actions.delete', 'Delete')}>
               <IconButton
                 size="small"
                 color="error"
-                aria-label={t('common:actions.delete')}
+                aria-label={t('common:actions.delete', 'Delete')}
                 onClick={(e) => {
                   e.stopPropagation();
                   handleDeleteClick(params.row.code);

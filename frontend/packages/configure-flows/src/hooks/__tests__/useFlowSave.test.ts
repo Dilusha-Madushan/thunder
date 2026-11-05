@@ -84,6 +84,7 @@ describe('useFlowSave', () => {
       flowName: 'Test Flow',
       flowHandle: 'test-flow',
       flowType: 'AUTHENTICATION',
+      ouId: 'ou-123' as string | undefined,
       showError: mockShowError,
       showSuccess: mockShowSuccess,
       setOpenValidationPanel: mockSetOpenValidationPanel,
@@ -163,6 +164,24 @@ describe('useFlowSave', () => {
 
       expect(mockCreateFlowMutate).toHaveBeenCalled();
       expect(mockUpdateFlowMutate).not.toHaveBeenCalled();
+    });
+
+    it('includes the organization unit and reports the created flow ID', () => {
+      mockCreateFlowMutate.mockImplementation((_, options: {onSuccess: (flow: {id: string}) => void}) => {
+        options.onSuccess({id: 'created-flow-id'});
+      });
+      const onCreated = vi.fn();
+      const {result} = renderUseFlowSave({onCreated, ouId: 'ou-device-grant'});
+
+      act(() => {
+        result.current.handleSave(createMockCanvasData());
+      });
+
+      expect(mockCreateFlowMutate).toHaveBeenCalledWith(
+        expect.objectContaining({ouId: 'ou-device-grant'}),
+        expect.any(Object),
+      );
+      expect(onCreated).toHaveBeenCalledWith('created-flow-id');
     });
 
     it('should show success message on create success', () => {
@@ -350,6 +369,35 @@ describe('useFlowSave', () => {
       });
 
       expect(mockShowError).toHaveBeenCalledWith('Failed to save flow. Please try again.');
+    });
+
+    it('should send the flow owner on update', () => {
+      const {result} = renderUseFlowSave({flowId: 'flow-123', isEditingExistingFlow: true, isFlowValid: true});
+
+      act(() => {
+        result.current.handleSave(createMockCanvasData());
+      });
+
+      expect(mockUpdateFlowMutate).toHaveBeenCalledWith(
+        expect.objectContaining({flowData: expect.objectContaining({ouId: 'ou-123'}) as unknown}),
+        expect.any(Object),
+      );
+    });
+
+    it('should not update and should show an error when the flow owner is missing', () => {
+      const {result} = renderUseFlowSave({
+        flowId: 'flow-123',
+        isEditingExistingFlow: true,
+        isFlowValid: true,
+        ouId: undefined,
+      });
+
+      act(() => {
+        result.current.handleSave(createMockCanvasData());
+      });
+
+      expect(mockUpdateFlowMutate).not.toHaveBeenCalled();
+      expect(mockShowError).toHaveBeenCalledWith('flows:core.loginFlowBuilder.errors.saveFailed');
     });
 
     it('should call createFlow when flowId is missing even if isEditingExistingFlow is true', () => {

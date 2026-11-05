@@ -194,6 +194,31 @@ func (suite *AuthorizationServiceTestSuite) TestEvaluateAccessPassesPropertiesTo
 	suite.True(response.Decision)
 }
 
+// The organization unit an evaluation names reaches the engine, which counts only the subject's
+// role assignments made there.
+func (suite *AuthorizationServiceTestSuite) TestEvaluateAccessBatchPassesTheOUToEngine() {
+	suite.mockEngine.On("EvaluateAccessBatch", mock.Anything,
+		mock.MatchedBy(func(req engine.AccessEvaluationsRequest) bool {
+			return len(req.Evaluations) == 1 && req.Evaluations[0].OUID == "ou-owner"
+		})).
+		Return(&engine.AccessEvaluationsResponse{
+			Evaluations: []engine.AccessEvaluationResponse{{Decision: true}},
+		}, nil)
+
+	response, err := suite.service.EvaluateAccessBatch(context.Background(), providers.AccessEvaluationsRequest{
+		Evaluations: []providers.AccessEvaluationRequest{{
+			Subject:        providers.Subject{Category: "app", ID: "app1"},
+			ResourceServer: providers.AccessEvaluationResourceServer{ID: "document"},
+			Permission:     providers.Permission{Name: "read"},
+			OUID:           "ou-owner",
+		}},
+	})
+
+	suite.Nil(err)
+	suite.Require().Len(response.Evaluations, 1)
+	suite.True(response.Evaluations[0].Decision)
+}
+
 func (suite *AuthorizationServiceTestSuite) TestEvaluateAccessBatchEmpty() {
 	response, err := suite.service.EvaluateAccessBatch(context.Background(), providers.AccessEvaluationsRequest{})
 
@@ -243,13 +268,13 @@ func (suite *AuthorizationServiceTestSuite) TestEvaluateAccessEmptyEngineRespons
 
 func TestAuthorizationServiceEnrichesSubjectPropertiesAndCachesEntities(t *testing.T) {
 	entityService := entitymock.NewEntityServiceInterfaceMock(t)
-	entityService.EXPECT().GetEntity(mock.Anything, "user1").Return(&providers.Entity{
+	entityService.EXPECT().GetEntityProfile(mock.Anything, "user1").Return(&providers.Entity{
 		ID:         "user1",
 		Category:   providers.EntityCategoryUser,
 		OUID:       "ou-1",
 		Attributes: json.RawMessage(`{"email":"alice@example.com"}`),
 	}, nil).Once()
-	entityService.EXPECT().GetEntity(mock.Anything, "agent1").Return(&providers.Entity{
+	entityService.EXPECT().GetEntityProfile(mock.Anything, "agent1").Return(&providers.Entity{
 		ID:         "agent1",
 		Category:   providers.EntityCategoryAgent,
 		OUID:       "ou-2",
@@ -290,7 +315,7 @@ func TestAuthorizationServiceEnrichesSubjectPropertiesAndCachesEntities(t *testi
 
 func TestAuthorizationServiceEnrichRequestRejectsInvalidEntityAttributes(t *testing.T) {
 	entityService := entitymock.NewEntityServiceInterfaceMock(t)
-	entityService.EXPECT().GetEntity(mock.Anything, "user1").Return(&providers.Entity{
+	entityService.EXPECT().GetEntityProfile(mock.Anything, "user1").Return(&providers.Entity{
 		ID:         "user1",
 		Category:   providers.EntityCategoryUser,
 		Attributes: json.RawMessage(`{"email":`),
@@ -308,7 +333,7 @@ func TestAuthorizationServiceEnrichRequestRejectsInvalidEntityAttributes(t *test
 
 func TestAuthorizationServiceEnrichRequestMapsEntityLookupError(t *testing.T) {
 	entityService := entitymock.NewEntityServiceInterfaceMock(t)
-	entityService.EXPECT().GetEntity(mock.Anything, "user1").
+	entityService.EXPECT().GetEntityProfile(mock.Anything, "user1").
 		Return((*providers.Entity)(nil), errors.New("store failed"))
 
 	service := &authorizationService{entityService: entityService}
@@ -323,9 +348,9 @@ func TestAuthorizationServiceEnrichRequestMapsEntityLookupError(t *testing.T) {
 
 func TestAuthorizationServiceEnrichRequestContinuesForUnknownEntity(t *testing.T) {
 	entityService := entitymock.NewEntityServiceInterfaceMock(t)
-	entityService.EXPECT().GetEntity(mock.Anything, "unknown").
+	entityService.EXPECT().GetEntityProfile(mock.Anything, "unknown").
 		Return((*providers.Entity)(nil), entitypkg.ErrEntityNotFound).Once()
-	entityService.EXPECT().GetEntity(mock.Anything, "user1").Return(&providers.Entity{
+	entityService.EXPECT().GetEntityProfile(mock.Anything, "user1").Return(&providers.Entity{
 		ID:         "user1",
 		Category:   providers.EntityCategoryUser,
 		OUID:       "ou-1",

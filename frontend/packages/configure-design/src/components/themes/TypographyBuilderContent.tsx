@@ -12,8 +12,6 @@ import {
 import {
   Autocomplete,
   Box,
-  FormControl,
-  FormLabel,
   Link,
   Stack,
   TextField,
@@ -204,7 +202,7 @@ export default function TypographyBuilderContent({draft, onUpdate}: TypographyBu
 
   return (
     <Stack gap={1}>
-      <ConfigCard title={t('themes.forms.typography_builder.font_family.title', 'Font Family')}>
+      <ConfigCard title={t('themes.forms.typography_builder.font_family.title', 'Font family')}>
         <ToggleButtonGroup
           value={fontMode}
           exclusive
@@ -217,7 +215,7 @@ export default function TypographyBuilderContent({draft, onUpdate}: TypographyBu
             {t('themes.forms.typography_builder.font_family.modes.web_safe', 'Use a web-safe font')}
           </ToggleButton>
           <ToggleButton value="import" sx={{textTransform: 'none', fontSize: '0.75rem'}}>
-            {t('themes.forms.typography_builder.font_family.modes.import', 'Use a Custom Font')}
+            {t('themes.forms.typography_builder.font_family.modes.import', 'Use a custom font')}
           </ToggleButton>
         </ToggleButtonGroup>
 
@@ -248,57 +246,51 @@ export default function TypographyBuilderContent({draft, onUpdate}: TypographyBu
           />
         ) : (
           <Stack gap={1.5} sx={{mb: 1.5}}>
-            <FormControl fullWidth>
-              <FormLabel htmlFor="font-import-url-input">
-                {t('themes.forms.typography_builder.fields.font_import_url.label', 'Font Import URL')}
-              </FormLabel>
-              <TextField
-                fullWidth
-                id="font-import-url-input"
-                size="small"
-                value={importURL}
-                onChange={(e) => {
-                  const newUrl = e.target.value;
-                  const newFamily = newUrl ? fontFamily : '';
-                  applyFont(newFamily, newUrl);
-                  // Pre-sync so the re-sync effect doesn't flip mode when clearing the field.
-                  setPrevFontFamily(newFamily);
-                  setPrevImportURL(newUrl);
-                }}
-                placeholder={t(
-                  'themes.forms.typography_builder.fields.font_import_url.placeholder',
-                  'E.g., https://fonts.googleapis.com/css2?family=Poppins',
-                )}
-                helperText={t(
-                  'themes.forms.typography_builder.fields.font_import_url.helper_text',
-                  'Enter a URL to import a custom font from a font service.',
-                )}
-              />
-            </FormControl>
+            <TextField
+              labelPlacement="top"
+              label={t('themes.forms.typography_builder.fields.font_import_url.label', 'Font import URL')}
+              fullWidth
+              id="font-import-url-input"
+              size="small"
+              value={importURL}
+              onChange={(e) => {
+                const newUrl = e.target.value;
+                const newFamily = newUrl ? fontFamily : '';
+                applyFont(newFamily, newUrl);
+                // Pre-sync so the re-sync effect doesn't flip mode when clearing the field.
+                setPrevFontFamily(newFamily);
+                setPrevImportURL(newUrl);
+              }}
+              placeholder={t(
+                'themes.forms.typography_builder.fields.font_import_url.placeholder',
+                'E.g., https://fonts.googleapis.com/css2?family=Poppins',
+              )}
+              helperText={t(
+                'themes.forms.typography_builder.fields.font_import_url.helper_text',
+                'Enter a URL to import a custom font from a font service.',
+              )}
+            />
             <CspOriginHint value={importURL} resourceType="font" />
-            <FormControl fullWidth>
-              <FormLabel htmlFor="font-family-input">
-                {t('themes.forms.typography_builder.fields.font_family_input.label', 'Font Family')}
-              </FormLabel>
-              <TextField
-                fullWidth
-                id="font-family-input"
-                size="small"
-                value={fontFamily}
-                onChange={(e) => {
-                  const newFamily = e.target.value;
-                  applyFont(newFamily, importURL);
-                  // Pre-sync so the re-sync effect doesn't flip mode while typing a family name.
-                  setPrevFontFamily(newFamily);
-                  setPrevImportURL(importURL);
-                }}
-                placeholder={t('themes.forms.typography_builder.fields.font_family_input.placeholder', 'E.g. Poppins')}
-                helperText={t(
-                  'themes.forms.typography_builder.fields.font_family_input.helper_text',
-                  'Enter the font family name documented by the font service above.',
-                )}
-              />
-            </FormControl>
+            <TextField
+              labelPlacement="top"
+              label={t('themes.forms.typography_builder.fields.font_family_input.label', 'Font family')}
+              fullWidth
+              id="font-family-input"
+              size="small"
+              value={fontFamily}
+              onChange={(e) => {
+                const newFamily = e.target.value;
+                applyFont(newFamily, importURL);
+                // Pre-sync so the re-sync effect doesn't flip mode while typing a family name.
+                setPrevFontFamily(newFamily);
+                setPrevImportURL(importURL);
+              }}
+              placeholder={t('themes.forms.typography_builder.fields.font_family_input.placeholder', 'E.g. Poppins')}
+              helperText={t(
+                'themes.forms.typography_builder.fields.font_family_input.helper_text',
+                'Enter the font family name documented by the font service above.',
+              )}
+            />
           </Stack>
         )}
 
@@ -334,7 +326,7 @@ export default function TypographyBuilderContent({draft, onUpdate}: TypographyBu
       </ConfigCard>
 
       <ConfigCard
-        title={t('themes.forms.typography_builder.font_weights.title', 'Font Weights')}
+        title={t('themes.forms.typography_builder.font_weights.title', 'Font weights')}
         defaultOpen={false}
         action={
           <Link
@@ -410,7 +402,7 @@ export default function TypographyBuilderContent({draft, onUpdate}: TypographyBu
       </ConfigCard>
 
       <ConfigCard
-        title={t('themes.forms.typography_builder.base_sizes.title', 'Base Sizes')}
+        title={t('themes.forms.typography_builder.base_sizes.title', 'Base sizes')}
         defaultOpen={false}
         action={
           <Link
@@ -430,7 +422,7 @@ export default function TypographyBuilderContent({draft, onUpdate}: TypographyBu
         }
       >
         <SliderRow
-          label={t('themes.forms.typography_builder.fields.base_font_size.label', 'Base Font Size')}
+          label={t('themes.forms.typography_builder.fields.base_font_size.label', 'Base font size')}
           value={(typo?.fontSize as number | undefined) ?? 14}
           min={10}
           max={24}
@@ -444,7 +436,7 @@ export default function TypographyBuilderContent({draft, onUpdate}: TypographyBu
           }
         />
         <SliderRow
-          label={t('themes.forms.typography_builder.fields.html_font_size.label', 'HTML Font Size')}
+          label={t('themes.forms.typography_builder.fields.html_font_size.label', 'HTML font size')}
           value={(typo?.htmlFontSize as number | undefined) ?? 16}
           min={10}
           max={24}
@@ -460,7 +452,7 @@ export default function TypographyBuilderContent({draft, onUpdate}: TypographyBu
       </ConfigCard>
 
       <ConfigCard
-        title={t('themes.forms.typography_builder.type_scale.title', 'Type Scale')}
+        title={t('themes.forms.typography_builder.type_scale.title', 'Type scale')}
         defaultOpen={false}
         action={
           <Link

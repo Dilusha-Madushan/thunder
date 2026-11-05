@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	deleteDuplicateUsersOperationID engine.OperationID = "2.0.0-m1-pidp.1/entitydb/16_delete_duplicate_users"
+	deleteDuplicateUsersOperationID engine.OperationID = "2.0.0-m1-pidp/entitydb/16_delete_duplicate_users"
 
 	// deleteDuplicateUsersBatchSize is the number of originals whose duplicates are deleted per batch.
 	deleteDuplicateUsersBatchSize = 100

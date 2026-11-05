@@ -83,7 +83,6 @@ func dbEntityRow() map[string]interface{} {
 		"ou_id":             "ou-1",
 		"category":          "user",
 		"type":              "employee",
-		"state":             "ACTIVE",
 		"attributes":        `{"email":"a@b.com"}`,
 		"system_attributes": nil,
 	}
@@ -664,6 +663,104 @@ func (s *DBStoreTestSuite) TestGetEntityListByOUIDs_Success() {
 	s.Len(list, 1)
 }
 
+func (s *DBStoreTestSuite) TestGetEntityListCountBySystemAttributes() {
+	sysQuery := SystemAttributeQuery{SystemAttributes: map[string]interface{}{"owner": "u1"}}
+
+	s.expectClientError()
+	_, err := s.store.GetEntityListCountBySystemAttributes(s.ctx, "agent", sysQuery)
+	s.Error(err, "provider error")
+
+	s.SetupTest()
+	s.expectClient()
+	_, err = s.store.GetEntityListCountBySystemAttributes(s.ctx, "agent", SystemAttributeQuery{})
+	s.Error(err, "build error")
+
+	s.SetupTest()
+	s.expectClient()
+	s.onQueryAny([]map[string]interface{}{{"total": int64(2)}}, nil)
+	count, err := s.store.GetEntityListCountBySystemAttributes(s.ctx, "agent", sysQuery)
+	s.NoError(err)
+	s.Equal(2, count)
+}
+
+func (s *DBStoreTestSuite) TestGetEntityListBySystemAttributes() {
+	sysQuery := SystemAttributeQuery{SystemAttributes: map[string]interface{}{"owner": "u1"}}
+
+	s.expectClientError()
+	_, err := s.store.GetEntityListBySystemAttributes(s.ctx, "agent", sysQuery, 10, 0)
+	s.Error(err, "provider error")
+
+	s.SetupTest()
+	s.expectClient()
+	_, err = s.store.GetEntityListBySystemAttributes(s.ctx, "agent", SystemAttributeQuery{}, 10, 0)
+	s.Error(err, "build error")
+
+	s.SetupTest()
+	s.expectClient()
+	s.onQueryAny(nil, errors.New("query failed"))
+	_, err = s.store.GetEntityListBySystemAttributes(s.ctx, "agent", sysQuery, 10, 0)
+	s.Error(err, "query error")
+
+	s.SetupTest()
+	s.expectClient()
+	s.onQueryAny([]map[string]interface{}{dbEntityRow()}, nil)
+	list, err := s.store.GetEntityListBySystemAttributes(s.ctx, "agent", sysQuery, 10, 0)
+	s.NoError(err)
+	s.Len(list, 1)
+}
+
+func (s *DBStoreTestSuite) TestGetEntityListCountBySystemAttributesAndOUIDs() {
+	sysQuery := SystemAttributeQuery{SystemAttributes: map[string]interface{}{"owner": "u1"}}
+
+	count, err := s.store.GetEntityListCountBySystemAttributesAndOUIDs(s.ctx, "agent", sysQuery, []string{})
+	s.NoError(err)
+	s.Zero(count, "an empty OU list matches nothing without a query")
+
+	s.expectClientError()
+	_, err = s.store.GetEntityListCountBySystemAttributesAndOUIDs(s.ctx, "agent", sysQuery, []string{"ou1"})
+	s.Error(err, "provider error")
+
+	s.SetupTest()
+	s.expectClient()
+	_, err = s.store.GetEntityListCountBySystemAttributesAndOUIDs(
+		s.ctx, "agent", SystemAttributeQuery{}, []string{"ou1"})
+	s.Error(err, "build error")
+
+	s.SetupTest()
+	s.expectClient()
+	s.onQueryAny([]map[string]interface{}{{"total": int64(3)}}, nil)
+	count, err = s.store.GetEntityListCountBySystemAttributesAndOUIDs(s.ctx, "agent", sysQuery, []string{"ou1"})
+	s.NoError(err)
+	s.Equal(3, count)
+}
+
+func (s *DBStoreTestSuite) TestGetEntityListBySystemAttributesAndOUIDs() {
+	sysQuery := SystemAttributeQuery{SystemAttributes: map[string]interface{}{"owner": "u1"}}
+	ouIDs := []string{"ou1"}
+
+	s.expectClientError()
+	_, err := s.store.GetEntityListBySystemAttributesAndOUIDs(s.ctx, "agent", sysQuery, ouIDs, 10, 0)
+	s.Error(err, "provider error")
+
+	s.SetupTest()
+	s.expectClient()
+	_, err = s.store.GetEntityListBySystemAttributesAndOUIDs(s.ctx, "agent", SystemAttributeQuery{}, ouIDs, 10, 0)
+	s.Error(err, "build error")
+
+	s.SetupTest()
+	s.expectClient()
+	s.onQueryAny(nil, errors.New("query failed"))
+	_, err = s.store.GetEntityListBySystemAttributesAndOUIDs(s.ctx, "agent", sysQuery, ouIDs, 10, 0)
+	s.Error(err, "query error")
+
+	s.SetupTest()
+	s.expectClient()
+	s.onQueryAny([]map[string]interface{}{dbEntityRow()}, nil)
+	list, err := s.store.GetEntityListBySystemAttributesAndOUIDs(s.ctx, "agent", sysQuery, ouIDs, 10, 0)
+	s.NoError(err)
+	s.Len(list, 1)
+}
+
 func (s *DBStoreTestSuite) TestValidateEntityIDs_Empty() {
 	invalid, err := s.store.ValidateEntityIDs(s.ctx, []string{})
 	s.NoError(err)
@@ -920,7 +1017,6 @@ func goodRow() map[string]interface{} {
 		"ou_id":             "ou-1",
 		"category":          "user",
 		"type":              "employee",
-		"state":             "ACTIVE",
 		"attributes":        `{"email":"a@b.com"}`,
 		"system_attributes": `{"key":"val"}`,
 	}
@@ -932,7 +1028,7 @@ func (s *StoreHelpersTestSuite) TestBuildEntityFromResultRow_Success() {
 	s.Equal("entity-1", e.ID)
 	s.Equal(providers.EntityCategoryUser, e.Category)
 	s.Equal("employee", e.Type)
-	s.Equal(providers.EntityStateActive, e.State)
+	s.Empty(e.State)
 	s.Equal("ou-1", e.OUID)
 	s.NotNil(e.Attributes)
 	s.NotNil(e.SystemAttributes)
@@ -975,11 +1071,11 @@ func (s *StoreHelpersTestSuite) TestBuildEntityFromResultRow_MissingType() {
 	s.Error(err)
 }
 
-func (s *StoreHelpersTestSuite) TestBuildEntityFromResultRow_MissingState() {
+func (s *StoreHelpersTestSuite) TestBuildEntityFromResultRow_WithoutState() {
 	row := goodRow()
-	delete(row, "state")
-	_, err := buildEntityFromResultRow(row)
-	s.Error(err)
+	e, err := buildEntityFromResultRow(row)
+	s.NoError(err)
+	s.Empty(e.State)
 }
 
 func (s *StoreHelpersTestSuite) TestBuildEntityFromResultRow_BadAttributes() {

@@ -21,7 +21,7 @@ Flow SSO is **flow-centric**: a session belongs to exactly one flow. Every appli
 A flow SSO session has three characteristics:
 
 - **Per-flow.** The flow is the grouping key. The session covers only applications that use the same flow.
-- **Browser-scoped.** <ProductName /> references the session with a per-flow cookie that the browser sends on each request. Flow SSO applies to browser-based authentication.
+- **Carried by the caller.** A browser carries the session in a per-flow cookie. An application that runs the flow itself through the Flow Execution API carries it in the request body. See [App-Native Sign-In](#app-native-sign-in).
 - **Checkpoint-based.** A **checkpoint** is the authentication that SSO can skip. You define it with a **Check SSO Session** node and a **Save / Load Session** node, and the checkpoint covers the steps between them. On a later sign-in, the flow reuses the checkpoint instead of prompting for those steps.
 
 ## Single Sign-On Nodes
@@ -72,7 +72,7 @@ The first time a user signs in, the flow takes the **Authenticate** path and **S
 
 Two timeouts bound every flow SSO session:
 
-- **Idle timeout**: the maximum inactivity period. The idle deadline moves forward on each use of the session, so an active session stays alive. The default is 30 minutes.
+- **Idle timeout**: the maximum inactivity period. The idle deadline moves forward on each use of the session, so an active session stays alive. A sign-in that reuses the session counts as use, and so does a `refresh_token` grant for tokens issued under the session, so an application that keeps a user signed in by refreshing tokens keeps the session alive for other applications too. To limit database writes, the deadline moves at most once per activity-refresh interval, which is 1 minute by default. The default idle timeout is 2 hours.
 - **Absolute timeout**: the maximum total lifetime, fixed when the session is created and never extended. The default is 8 hours.
 
 A session expires when it passes either deadline. After expiry, **Check SSO Session** takes the **Authenticate** path and the user signs in again.
@@ -82,11 +82,14 @@ Set the timeouts in the `session` server-config resource. In a source checkout, 
 ```yaml
 name: session
 value:
-  idleTimeoutSeconds: 1800      # 30 minutes
-  absoluteTimeoutSeconds: 28800 # 8 hours
+  idleTimeoutSeconds: 7200              # 2 hours
+  absoluteTimeoutSeconds: 28800         # 8 hours
+  activityRefreshIntervalSeconds: 60    # 1 minute
 ```
 
-The idle timeout must not exceed the absolute timeout.
+The idle timeout must not exceed the absolute timeout, and the activity-refresh interval must be less than the idle timeout.
+
+A token refresh keeps the session alive only if it arrives before the idle deadline; a later refresh does not revive an expired session. An application that refreshes when its access token expires therefore needs an idle timeout longer than the access token validity period. The default idle timeout of 2 hours leaves room for the default access token validity of 1 hour. A deployment that follows NIST SP 800-63B-4 at AAL2, which recommends an inactivity timeout of no more than 1 hour, should set the idle timeout to 3600 seconds or less and set the access token validity period of its applications below it.
 
 ## Session Cookie
 
@@ -94,10 +97,53 @@ The idle timeout must not exceed the absolute timeout.
 
 - `HttpOnly`, so client-side scripts cannot read it.
 - `SameSite=Lax`.
-- `Secure`, when the server runs over TLS.
+- `Secure`, when the server runs over TLS or `server.public_url` uses `https`, as behind a proxy that terminates TLS.
 
 The cookie lifetime matches the absolute session timeout.
 
-## Current Scope and Limitations
+## App-Native Sign-In
 
-- Flow SSO applies to **browser-based** authentication, because it relies on the cookies.
+An application that runs flows itself through `POST /flow/execute` has no browser cookie, so <ProductName /> also returns the session in the response body. The application stores it and sends it back on later requests.
+
+When a step starts a session, the response includes it in the `sessionData` array, in the same shape the request uses plus `expiresIn`. The per-flow cookie is set as well. The session starts at the **Save / Load Session** node, which need not be the last step, so `sessionData` can arrive on an `INCOMPLETE` response. Store it from any response that includes it.
+
+```json
+{
+  "executionId": "01a17bb9-4fd5-7979-afda-9760afc83397",
+  "flowStatus": "COMPLETE",
+  "data": {},
+  "assertion": "<jwt_token>",
+  "sessionData": [
+    {
+      "flowIdentifier": "f51bdb0f22d906bb",
+      "sessionHandle": "<session_handle>",
+      "expiresIn": 28800
+    }
+  ]
+}
+```
+
+| Field | Description |
+|---|---|
+| `flowIdentifier` | Identifies the flow the session belongs to. It is the `<hash>` part of the `tid_sso_<hash>` cookie name. |
+| `sessionHandle` | The session handle. It is the cookie's value. |
+| `expiresIn` | Seconds until the session reaches its absolute timeout. It matches the cookie lifetime. |
+
+To reuse a session, send every session the application holds in the `sessionData` array of each request of the flow, not only the first. <ProductName /> does not keep the handle with the flow, so a **Check SSO Session** node reached after a prompt step uses the session sent with that request. <ProductName /> uses the entry whose `flowIdentifier` matches the flow being run, ahead of any session cookie. When that session is valid, **Check SSO Session** takes the **Skip to** path. An entry without a `flowIdentifier` or a `sessionHandle` is refused with a `400` error.
+
+```json
+{
+  "applicationId": "01a17b81-f398-754c-9bc6-2eb2802e1e02",
+  "flowType": "AUTHENTICATION",
+  "sessionData": [
+    {
+      "flowIdentifier": "f51bdb0f22d906bb",
+      "sessionHandle": "<session_handle>"
+    }
+  ]
+}
+```
+
+A step that reuses a session does not return `sessionData` again. To sign the user out, send the same `sessionData` with a `SIGNOUT` flow. A sign-out acts on the application's sign-in flow, so <ProductName /> uses the entry whose `flowIdentifier` matches that flow and ends only that session. The response lists the session in `clearedSessions`, by `flowIdentifier`, so the application can delete it. The listing does not confirm the session was still active.
+
+The session handle resumes the session without authentication, so store it as you would a credential. The cookie's `HttpOnly` attribute does not protect a handle in a response body: any code that reads the response can read it. A handle is not bound to the application that received it, so any application whose sign-in flow is the session's flow can present it.

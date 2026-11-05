@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	createRuntimeStoreDeviceReqPartitionOperationID engine.OperationID = "2.0.0-m1-pidp.1/runtime_transient/" +
+	createRuntimeStoreDeviceReqPartitionOperationID engine.OperationID = "2.0.0-m1-pidp/runtime_transient/" +
 		"02_create_runtime_store_device_req_partition"
 
 	runtimeStoreTable          = "RUNTIME_STORE"

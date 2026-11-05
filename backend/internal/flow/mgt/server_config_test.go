@@ -57,7 +57,7 @@ func (s *FlowConfigHandlerTestSuite) TestDecode_InvalidJSON() {
 }
 
 func (s *FlowConfigHandlerTestSuite) TestValidate_WrongType() {
-	err := s.handler.Validate("not-a-config", nil, nil)
+	err := s.handler.Validate(context.Background(), "not-a-config", nil, nil)
 	s.Error(err)
 }
 
@@ -65,7 +65,7 @@ func (s *FlowConfigHandlerTestSuite) TestValidate_NegativeExpiry() {
 	cfg := flowconfig.FlowSectionConfig{
 		AuthFlow: flowconfig.FlowTypeConfig{ExpirySeconds: -1},
 	}
-	err := s.handler.Validate(cfg, nil, nil)
+	err := s.handler.Validate(context.Background(), cfg, nil, nil)
 	s.Error(err)
 }
 
@@ -76,7 +76,7 @@ func (s *FlowConfigHandlerTestSuite) TestValidate_ValidConfig() {
 		RecoveryFlow:     flowconfig.FlowTypeConfig{ExpirySeconds: 1800},
 		SignOutFlow:      flowconfig.FlowTypeConfig{ExpirySeconds: 1800},
 	}
-	err := s.handler.Validate(cfg, nil, nil)
+	err := s.handler.Validate(context.Background(), cfg, nil, nil)
 	s.NoError(err)
 }
 
@@ -90,7 +90,7 @@ func (s *FlowConfigHandlerTestSuite) TestValidate_HandleValidatorCalled() {
 	cfg := flowconfig.FlowSectionConfig{
 		AuthFlow: flowconfig.FlowTypeConfig{DefaultHandle: "valid-handle"},
 	}
-	err := s.handler.Validate(cfg, nil, nil)
+	err := s.handler.Validate(context.Background(), cfg, nil, nil)
 	s.NoError(err)
 	s.True(called)
 }
@@ -103,7 +103,7 @@ func (s *FlowConfigHandlerTestSuite) TestValidate_HandleValidatorRejectsUnknown(
 	cfg := flowconfig.FlowSectionConfig{
 		SignOutFlow: flowconfig.FlowTypeConfig{DefaultHandle: "nonexistent"},
 	}
-	err := s.handler.Validate(cfg, nil, nil)
+	err := s.handler.Validate(context.Background(), cfg, nil, nil)
 	s.Error(err)
 }
 
@@ -111,7 +111,7 @@ func (s *FlowConfigHandlerTestSuite) TestValidate_NoValidatorSkipsHandleCheck() 
 	cfg := flowconfig.FlowSectionConfig{
 		AuthFlow: flowconfig.FlowTypeConfig{DefaultHandle: "any-handle"},
 	}
-	err := s.handler.Validate(cfg, nil, nil)
+	err := s.handler.Validate(context.Background(), cfg, nil, nil)
 	s.NoError(err)
 }
 
@@ -171,7 +171,7 @@ func (s *FlowConfigHandlerTestSuite) TestMergeFlowTypeConfig_WritableExpiryWins(
 // An unset handle is valid: it is how a deployment opts out of flow-based deletion and keeps the
 // native endpoint.
 func (s *FlowConfigHandlerTestSuite) TestValidate_UserDeletionHandleOptional() {
-	s.NoError(s.handler.Validate(flowconfig.FlowSectionConfig{}, nil, nil))
+	s.NoError(s.handler.Validate(context.Background(), flowconfig.FlowSectionConfig{}, nil, nil))
 }
 
 // The handle must name an administration flow, not merely exist.
@@ -185,7 +185,7 @@ func (s *FlowConfigHandlerTestSuite) TestValidate_UserDeletionHandleCheckedAgain
 		UserDeletionFlow: flowconfig.FlowTypeConfig{DefaultHandle: "default-user-deletion-flow"},
 	}
 
-	s.Require().NoError(s.handler.Validate(cfg, nil, nil))
+	s.Require().NoError(s.handler.Validate(context.Background(), cfg, nil, nil))
 	s.Equal(providers.FlowTypeAdministration, gotType)
 }
 
@@ -197,7 +197,7 @@ func (s *FlowConfigHandlerTestSuite) TestValidate_UserDeletionHandleRejectedWhen
 		UserDeletionFlow: flowconfig.FlowTypeConfig{DefaultHandle: "not-an-admin-flow"},
 	}
 
-	err := s.handler.Validate(cfg, nil, nil)
+	err := s.handler.Validate(context.Background(), cfg, nil, nil)
 
 	s.Require().Error(err)
 	s.Contains(err.Error(), "userDeletionFlow.defaultHandle")
@@ -240,7 +240,7 @@ func (s *FlowConfigHandlerTestSuite) TestValidate_AgentOnboardingHandleCheckedAg
 		AgentOnboardingFlow: flowconfig.FlowTypeConfig{DefaultHandle: "default-agent-onboarding-flow"},
 	}
 
-	s.Require().NoError(s.handler.Validate(cfg, nil, nil))
+	s.Require().NoError(s.handler.Validate(context.Background(), cfg, nil, nil))
 	s.Equal(providers.FlowTypeAdministration, gotType)
 }
 
@@ -252,10 +252,40 @@ func (s *FlowConfigHandlerTestSuite) TestValidate_AgentOnboardingHandleRejectedW
 		AgentOnboardingFlow: flowconfig.FlowTypeConfig{DefaultHandle: "not-an-admin-flow"},
 	}
 
-	err := s.handler.Validate(cfg, nil, nil)
+	err := s.handler.Validate(context.Background(), cfg, nil, nil)
 
 	s.Require().Error(err)
 	s.Contains(err.Error(), "agentOnboardingFlow.defaultHandle")
+}
+
+func (s *FlowConfigHandlerTestSuite) TestValidate_LifecycleHandlesCheckedAgainstAdministration() {
+	gotTypes := map[string]providers.FlowType{}
+	s.handler.SetHandleValidator(func(_ context.Context, handle string, flowType providers.FlowType) bool {
+		gotTypes[handle] = flowType
+		return true
+	})
+	cfg := flowconfig.FlowSectionConfig{
+		UserUnlockFlow:           flowconfig.FlowTypeConfig{DefaultHandle: "user-unlock"},
+		UserSuspendFlow:          flowconfig.FlowTypeConfig{DefaultHandle: "user-suspend"},
+		UserUnsuspendFlow:        flowconfig.FlowTypeConfig{DefaultHandle: "user-unsuspend"},
+		AgentUnlockFlow:          flowconfig.FlowTypeConfig{DefaultHandle: "agent-unlock"},
+		AgentSuspendFlow:         flowconfig.FlowTypeConfig{DefaultHandle: "agent-suspend"},
+		AgentUnsuspendFlow:       flowconfig.FlowTypeConfig{DefaultHandle: "agent-unsuspend"},
+		ApplicationSuspendFlow:   flowconfig.FlowTypeConfig{DefaultHandle: "application-suspend"},
+		ApplicationUnsuspendFlow: flowconfig.FlowTypeConfig{DefaultHandle: "application-unsuspend"},
+	}
+
+	s.Require().NoError(s.handler.Validate(context.Background(), cfg, nil, nil))
+	s.Equal(map[string]providers.FlowType{
+		"user-unlock":           providers.FlowTypeAdministration,
+		"user-suspend":          providers.FlowTypeAdministration,
+		"user-unsuspend":        providers.FlowTypeAdministration,
+		"agent-unlock":          providers.FlowTypeAdministration,
+		"agent-suspend":         providers.FlowTypeAdministration,
+		"agent-unsuspend":       providers.FlowTypeAdministration,
+		"application-suspend":   providers.FlowTypeAdministration,
+		"application-unsuspend": providers.FlowTypeAdministration,
+	}, gotTypes)
 }
 
 // An operator can repoint agent onboarding at their own administration flow through the writable
@@ -275,18 +305,34 @@ func (s *FlowConfigHandlerTestSuite) TestMerge_AgentOnboardingHandleOverlays() {
 	s.Equal("default-agent-onboarding-flow", kept.AgentOnboardingFlow.DefaultHandle)
 }
 
-func (s *FlowConfigHandlerTestSuite) TestMerge_CarriesEveryAdministrationFlow() {
-	ro := flowconfig.FlowSectionConfig{
-		UserDeletionFlow:           flowconfig.FlowTypeConfig{DefaultHandle: "ro-user-deletion"},
-		ApplicationDeletionFlow:    flowconfig.FlowTypeConfig{DefaultHandle: "ro-application-deletion"},
-		SecretRegenerationFlow:     flowconfig.FlowTypeConfig{DefaultHandle: "ro-secret-regeneration"},
-		RoleAssignmentRemovalFlow:  flowconfig.FlowTypeConfig{DefaultHandle: "ro-role-assignment-removal"},
-		RoleDeletionFlow:           flowconfig.FlowTypeConfig{DefaultHandle: "ro-role-deletion"},
-		RolePermissionRemovalFlow:  flowconfig.FlowTypeConfig{DefaultHandle: "ro-role-permission-removal"},
-		GroupDeletionFlow:          flowconfig.FlowTypeConfig{DefaultHandle: "ro-group-deletion"},
-		GroupMembershipRemovalFlow: flowconfig.FlowTypeConfig{DefaultHandle: "ro-group-membership-removal"},
-		ActionDeletionFlow:         flowconfig.FlowTypeConfig{DefaultHandle: "ro-action-deletion"},
+// everyAdministrationFlow names a handle, prefixed with prefix, for every administration flow.
+func everyAdministrationFlow(prefix string) flowconfig.FlowSectionConfig {
+	handle := func(name string) flowconfig.FlowTypeConfig {
+		return flowconfig.FlowTypeConfig{DefaultHandle: prefix + "-" + name}
 	}
+	return flowconfig.FlowSectionConfig{
+		UserDeletionFlow:           handle("user-deletion"),
+		ApplicationDeletionFlow:    handle("application-deletion"),
+		SecretRegenerationFlow:     handle("secret-regeneration"),
+		RoleAssignmentRemovalFlow:  handle("role-assignment-removal"),
+		RoleDeletionFlow:           handle("role-deletion"),
+		RolePermissionRemovalFlow:  handle("role-permission-removal"),
+		GroupDeletionFlow:          handle("group-deletion"),
+		GroupMembershipRemovalFlow: handle("group-membership-removal"),
+		ActionDeletionFlow:         handle("action-deletion"),
+		UserUnlockFlow:             handle("user-unlock"),
+		UserSuspendFlow:            handle("user-suspend"),
+		UserUnsuspendFlow:          handle("user-unsuspend"),
+		AgentUnlockFlow:            handle("agent-unlock"),
+		AgentSuspendFlow:           handle("agent-suspend"),
+		AgentUnsuspendFlow:         handle("agent-unsuspend"),
+		ApplicationSuspendFlow:     handle("application-suspend"),
+		ApplicationUnsuspendFlow:   handle("application-unsuspend"),
+	}
+}
+
+func (s *FlowConfigHandlerTestSuite) TestMerge_CarriesEveryAdministrationFlow() {
+	ro := everyAdministrationFlow("ro")
 
 	merged, ok := s.handler.Merge(ro, flowconfig.FlowSectionConfig{}).(flowconfig.FlowSectionConfig)
 
@@ -295,31 +341,27 @@ func (s *FlowConfigHandlerTestSuite) TestMerge_CarriesEveryAdministrationFlow() 
 }
 
 func (s *FlowConfigHandlerTestSuite) TestMerge_WritableWinsForEveryAdministrationFlow() {
-	wr := flowconfig.FlowSectionConfig{
-		UserDeletionFlow:           flowconfig.FlowTypeConfig{DefaultHandle: "wr-user-deletion"},
-		ApplicationDeletionFlow:    flowconfig.FlowTypeConfig{DefaultHandle: "wr-application-deletion"},
-		SecretRegenerationFlow:     flowconfig.FlowTypeConfig{DefaultHandle: "wr-secret-regeneration"},
-		RoleAssignmentRemovalFlow:  flowconfig.FlowTypeConfig{DefaultHandle: "wr-role-assignment-removal"},
-		RoleDeletionFlow:           flowconfig.FlowTypeConfig{DefaultHandle: "wr-role-deletion"},
-		RolePermissionRemovalFlow:  flowconfig.FlowTypeConfig{DefaultHandle: "wr-role-permission-removal"},
-		GroupDeletionFlow:          flowconfig.FlowTypeConfig{DefaultHandle: "wr-group-deletion"},
-		GroupMembershipRemovalFlow: flowconfig.FlowTypeConfig{DefaultHandle: "wr-group-membership-removal"},
-		ActionDeletionFlow:         flowconfig.FlowTypeConfig{DefaultHandle: "wr-action-deletion"},
-	}
-	ro := flowconfig.FlowSectionConfig{
-		UserDeletionFlow:           flowconfig.FlowTypeConfig{DefaultHandle: "ro-user-deletion"},
-		ApplicationDeletionFlow:    flowconfig.FlowTypeConfig{DefaultHandle: "ro-application-deletion"},
-		SecretRegenerationFlow:     flowconfig.FlowTypeConfig{DefaultHandle: "ro-secret-regeneration"},
-		RoleAssignmentRemovalFlow:  flowconfig.FlowTypeConfig{DefaultHandle: "ro-role-assignment-removal"},
-		RoleDeletionFlow:           flowconfig.FlowTypeConfig{DefaultHandle: "ro-role-deletion"},
-		RolePermissionRemovalFlow:  flowconfig.FlowTypeConfig{DefaultHandle: "ro-role-permission-removal"},
-		GroupDeletionFlow:          flowconfig.FlowTypeConfig{DefaultHandle: "ro-group-deletion"},
-		GroupMembershipRemovalFlow: flowconfig.FlowTypeConfig{DefaultHandle: "ro-group-membership-removal"},
-		ActionDeletionFlow:         flowconfig.FlowTypeConfig{DefaultHandle: "ro-action-deletion"},
-	}
+	wr := everyAdministrationFlow("wr")
+	ro := everyAdministrationFlow("ro")
 
 	merged, ok := s.handler.Merge(ro, wr).(flowconfig.FlowSectionConfig)
 
 	s.Require().True(ok)
 	s.Equal(wr, merged)
+}
+
+func (s *FlowConfigHandlerTestSuite) TestValidate_PassesRequestContextToHandleValidator() {
+	type ctxKey struct{}
+	var got context.Context
+	s.handler.SetHandleValidator(func(ctx context.Context, _ string, _ providers.FlowType) bool {
+		got = ctx
+		return true
+	})
+	cfg := flowconfig.FlowSectionConfig{
+		AuthFlow: flowconfig.FlowTypeConfig{DefaultHandle: "basic-login"},
+	}
+	ctx := context.WithValue(context.Background(), ctxKey{}, "org-deployment")
+
+	s.Require().NoError(s.handler.Validate(ctx, cfg, nil, nil))
+	s.Equal("org-deployment", got.Value(ctxKey{}))
 }

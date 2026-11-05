@@ -39,6 +39,8 @@ type NotificationTemplateServiceInterface interface {
 		*Template, *tidcommon.ServiceError)
 	DeleteTemplate(ctx context.Context, channel ChannelType, id string) *tidcommon.ServiceError
 	SetDependencyRegistry(r resourcedependency.Registry)
+	GetResourceDependencies(ctx context.Context, resourceType, id string) (
+		[]resourcedependency.ResourceDependency, error)
 }
 
 // notificationTemplateService is the default implementation.
@@ -138,10 +140,14 @@ func (ts *notificationTemplateService) CreateTemplate(ctx context.Context, chann
 	dao.Handle = request.Handle
 	dao.OUID = request.OUID
 
-	id, err := utils.GenerateUUIDv7()
-	if err != nil {
-		ts.logger.Error(ctx, "Failed to generate template id", log.Error(err))
-		return nil, &tidcommon.InternalServerError
+	id := request.ID
+	if id == "" {
+		var err error
+		id, err = utils.GenerateUUIDv7()
+		if err != nil {
+			ts.logger.Error(ctx, "Failed to generate template id", log.Error(err))
+			return nil, &tidcommon.InternalServerError
+		}
 	}
 	dao.ID = id
 
@@ -274,7 +280,7 @@ func (ts *notificationTemplateService) UpdateTemplate(ctx context.Context, chann
 	return daoToTemplate(dao), nil
 }
 
-// DeleteTemplate deletes a template, rejecting the delete with a conflict if a flow references it.
+// DeleteTemplate deletes a template, rejecting the delete with a conflict if it is in use.
 func (ts *notificationTemplateService) DeleteTemplate(
 	ctx context.Context, channel ChannelType, id string,
 ) *tidcommon.ServiceError {
@@ -301,7 +307,7 @@ func (ts *notificationTemplateService) DeleteTemplate(
 		return &ErrorTemplateReadOnly
 	}
 
-	// A template referenced by a flow cannot be deleted (see the notification templates design).
+	// A template reported as a blocking dependency by the registry cannot be deleted.
 	if ts.dependencyRegistry != nil {
 		resp, depErr := ts.dependencyRegistry.GetDependencies(
 			ctx, resourcedependency.ResourceTypeNotificationTemplate, id)
@@ -309,15 +315,21 @@ func (ts *notificationTemplateService) DeleteTemplate(
 			ts.logger.Error(ctx, "Failed to resolve template dependencies", log.String("id", id), log.Error(depErr))
 			return &tidcommon.InternalServerError
 		}
-		// Fail closed: if usage could not be determined (nil response or nil TotalResults),
-		// BlockingUsages reports none, so refuse the delete rather than risk removing a referenced
-		// template.
+		// Fail closed: unknown usage (nil response or TotalResults) refuses the delete.
 		if resp == nil || resp.TotalResults == nil {
 			ts.logger.Error(ctx, "Incomplete dependency response for template", log.String("id", id))
 			return &tidcommon.InternalServerError
 		}
-		if len(resourcedependency.BlockingUsages(resp)) > 0 {
-			return &ErrorTemplateInUse
+		if blocking := resourcedependency.BlockingUsages(resp); len(blocking) > 0 {
+			usages := resourcedependency.SummarizeBlockingUsages(blocking)
+			// Carry the usage summary as a param so a localized client key can interpolate it; the
+			// default value stays a complete sentence for non-UI consumers and logs.
+			return tidcommon.CustomServiceError(ErrorTemplateInUse, tidcommon.I18nMessage{
+				Key: "error.notificationtemplateservice.template_in_use_description",
+				DefaultValue: fmt.Sprintf(
+					"The template cannot be deleted because %s depend on it. Remove or reassign them first.", usages),
+				Params: map[string]string{"usages": usages},
+			})
 		}
 	}
 
@@ -340,6 +352,39 @@ func (ts *notificationTemplateService) DeleteTemplate(
 // provider services are initialized to avoid a cyclic import.
 func (ts *notificationTemplateService) SetDependencyRegistry(r resourcedependency.Registry) {
 	ts.dependencyRegistry = r
+}
+
+// GetResourceDependencies implements resourcedependency.Provider: it blocks deletion of a template
+// required by a built-in endpoint. It lives on the template service, not the consumer, because
+// template deletion is served on both planes while a consumer runs on one.
+func (ts *notificationTemplateService) GetResourceDependencies(
+	ctx context.Context, resourceType, id string) ([]resourcedependency.ResourceDependency, error) {
+	usages := make([]resourcedependency.ResourceDependency, 0)
+	if resourceType != resourcedependency.ResourceTypeNotificationTemplate {
+		return usages, nil
+	}
+
+	for _, r := range systemReservedTemplates {
+		dao, err := ts.store.GetTemplateByHandle(ctx, r.channel, r.handle)
+		if err != nil {
+			if errors.Is(err, errTemplateNotFound) {
+				// Not provisioned; nothing to protect.
+				continue
+			}
+			// The registry logs provider errors from GetDependencies; don't double-log here.
+			return nil, err
+		}
+		if dao.ID == id {
+			usages = append(usages, resourcedependency.ResourceDependency{
+				ResourceType:     systemEndpointReferrer,
+				ID:               r.consumerID,
+				DisplayName:      r.displayName,
+				BehaviorOnDelete: resourcedependency.BehaviorRestrict,
+			})
+		}
+	}
+
+	return usages, nil
 }
 
 // persistUniqueHandle runs write inside a transaction after checking that handle is free in the
@@ -463,7 +508,7 @@ func (ts *notificationTemplateService) resolveOU(ctx context.Context, ouID strin
 	}
 	exists, svcErr := ts.ouService.IsOrganizationUnitExists(ctx, ouID)
 	if svcErr != nil {
-		ts.logger.Error(ctx, "Failed to verify organization unit", log.String("ouId", ouID),
+		ts.logger.Error(ctx, "Failed to verify organization unit", log.String("ouID", ouID),
 			log.Any("error", svcErr))
 		return &tidcommon.InternalServerError
 	}

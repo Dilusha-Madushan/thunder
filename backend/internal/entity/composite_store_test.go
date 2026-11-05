@@ -257,10 +257,36 @@ func (s *CompositeStoreTestSuite) TestGetEntityListCount_FileCountError() {
 
 func (s *CompositeStoreTestSuite) TestGetEntityListCount_DBListError() {
 	s.dbStore.On("GetEntityListCount", mock.Anything, "user", mock.Anything).Return(2, nil)
-	s.fileStore.On("GetEntityListCount", mock.Anything, "user", mock.Anything).Return(0, nil)
+	s.fileStore.On("GetEntityListCount", mock.Anything, "user", mock.Anything).Return(1, nil)
 	s.dbStore.On("GetEntityList", mock.Anything, "user", 2, 0, mock.Anything).Return(nil, s.testErr)
 	_, err := s.store.GetEntityListCount(s.ctx, "user", nil)
 	s.Error(err)
+}
+
+func (s *CompositeStoreTestSuite) TestGetEntityListCount_OneStoreEmpty_ReadsNoEntities() {
+	for _, tc := range []struct {
+		name      string
+		dbCount   int
+		fileCount int
+	}{
+		{"no declared matches", 5, 0},
+		{"no stored matches", 0, 3},
+	} {
+		s.Run(tc.name, func() {
+			s.SetupTest()
+			s.dbStore.On("GetEntityListCount", mock.Anything, "user", mock.Anything).Return(tc.dbCount, nil)
+			s.fileStore.On("GetEntityListCount", mock.Anything, "user", mock.Anything).Return(tc.fileCount, nil)
+
+			count, err := s.store.GetEntityListCount(s.ctx, "user", nil)
+
+			s.Require().NoError(err)
+			s.Equal(tc.dbCount+tc.fileCount, count)
+			s.dbStore.AssertNotCalled(s.T(), "GetEntityList", mock.Anything, mock.Anything, mock.Anything,
+				mock.Anything, mock.Anything)
+			s.fileStore.AssertNotCalled(s.T(), "GetEntityList", mock.Anything, mock.Anything, mock.Anything,
+				mock.Anything, mock.Anything)
+		})
+	}
 }
 
 func (s *CompositeStoreTestSuite) TestGetEntityListCount_FileListError() {
@@ -337,6 +363,88 @@ func (s *CompositeStoreTestSuite) TestGetEntityListByOUIDs_Error() {
 	ouIDs := []string{"ou1"}
 	s.dbStore.On("GetEntityListCountByOUIDs", mock.Anything, "user", ouIDs, mock.Anything).Return(0, s.testErr)
 	_, err := s.store.GetEntityListByOUIDs(s.ctx, "user", ouIDs, 10, 0, nil)
+	s.Error(err)
+}
+
+func (s *CompositeStoreTestSuite) TestGetEntityListBySystemAttributes_MergesStores() {
+	sysQuery := SystemAttributeQuery{SystemAttributes: map[string]interface{}{"owner": "u1"}}
+	e1 := compEntity("e1", "ou1")
+	e2 := compEntity("e2", "ou1")
+	s.dbStore.On("GetEntityListCountBySystemAttributes", mock.Anything, "agent", sysQuery).Return(1, nil)
+	s.fileStore.On("GetEntityListCountBySystemAttributes", mock.Anything, "agent", sysQuery).Return(1, nil)
+	s.dbStore.On("GetEntityListBySystemAttributes", mock.Anything, "agent", sysQuery, 1, 0).
+		Return([]providers.Entity{e1}, nil)
+	s.fileStore.On("GetEntityListBySystemAttributes", mock.Anything, "agent", sysQuery, 1, 0).
+		Return([]providers.Entity{e2}, nil)
+
+	count, err := s.store.GetEntityListCountBySystemAttributes(s.ctx, "agent", sysQuery)
+	s.NoError(err)
+	s.Equal(2, count)
+
+	list, err := s.store.GetEntityListBySystemAttributes(s.ctx, "agent", sysQuery, 10, 0)
+	s.NoError(err)
+	s.Len(list, 2)
+}
+
+func (s *CompositeStoreTestSuite) TestGetEntityListBySystemAttributes_LimitExceeded() {
+	sysQuery := SystemAttributeQuery{SystemAttributes: map[string]interface{}{"owner": "u1"}}
+	limit := serverconst.MaxCompositeStoreRecords + 1
+	s.dbStore.On("GetEntityListCountBySystemAttributes", mock.Anything, "agent", sysQuery).Return(limit, nil)
+	s.fileStore.On("GetEntityListCountBySystemAttributes", mock.Anything, "agent", sysQuery).Return(0, nil)
+
+	_, err := s.store.GetEntityListBySystemAttributes(s.ctx, "agent", sysQuery, limit, 0)
+	s.ErrorIs(err, errResultLimitExceededInCompositeMode)
+}
+
+func (s *CompositeStoreTestSuite) TestGetEntityListBySystemAttributes_Error() {
+	sysQuery := SystemAttributeQuery{SystemAttributes: map[string]interface{}{"owner": "u1"}}
+	s.dbStore.On("GetEntityListCountBySystemAttributes", mock.Anything, "agent", sysQuery).Return(0, s.testErr)
+	_, err := s.store.GetEntityListBySystemAttributes(s.ctx, "agent", sysQuery, 10, 0)
+	s.Error(err)
+}
+
+func (s *CompositeStoreTestSuite) TestGetEntityListBySystemAttributesAndOUIDs_MergesStores() {
+	sysQuery := SystemAttributeQuery{SystemAttributes: map[string]interface{}{"owner": "u1"}}
+	ouIDs := []string{"ou1"}
+	e1 := compEntity("e1", "ou1")
+	e2 := compEntity("e2", "ou1")
+	s.dbStore.On("GetEntityListCountBySystemAttributesAndOUIDs", mock.Anything, "agent", sysQuery, ouIDs).
+		Return(1, nil)
+	s.fileStore.On("GetEntityListCountBySystemAttributesAndOUIDs", mock.Anything, "agent", sysQuery, ouIDs).
+		Return(1, nil)
+	s.dbStore.On("GetEntityListBySystemAttributesAndOUIDs", mock.Anything, "agent", sysQuery, ouIDs, 1, 0).
+		Return([]providers.Entity{e1}, nil)
+	s.fileStore.On("GetEntityListBySystemAttributesAndOUIDs", mock.Anything, "agent", sysQuery, ouIDs, 1, 0).
+		Return([]providers.Entity{e2}, nil)
+
+	count, err := s.store.GetEntityListCountBySystemAttributesAndOUIDs(s.ctx, "agent", sysQuery, ouIDs)
+	s.NoError(err)
+	s.Equal(2, count)
+
+	list, err := s.store.GetEntityListBySystemAttributesAndOUIDs(s.ctx, "agent", sysQuery, ouIDs, 10, 0)
+	s.NoError(err)
+	s.Len(list, 2)
+}
+
+func (s *CompositeStoreTestSuite) TestGetEntityListBySystemAttributesAndOUIDs_LimitExceeded() {
+	sysQuery := SystemAttributeQuery{SystemAttributes: map[string]interface{}{"owner": "u1"}}
+	ouIDs := []string{"ou1"}
+	limit := serverconst.MaxCompositeStoreRecords + 1
+	s.dbStore.On("GetEntityListCountBySystemAttributesAndOUIDs", mock.Anything, "agent", sysQuery, ouIDs).
+		Return(limit, nil)
+	s.fileStore.On("GetEntityListCountBySystemAttributesAndOUIDs", mock.Anything, "agent", sysQuery, ouIDs).
+		Return(0, nil)
+
+	_, err := s.store.GetEntityListBySystemAttributesAndOUIDs(s.ctx, "agent", sysQuery, ouIDs, limit, 0)
+	s.ErrorIs(err, errResultLimitExceededInCompositeMode)
+}
+
+func (s *CompositeStoreTestSuite) TestGetEntityListBySystemAttributesAndOUIDs_Error() {
+	sysQuery := SystemAttributeQuery{SystemAttributes: map[string]interface{}{"owner": "u1"}}
+	ouIDs := []string{"ou1"}
+	s.dbStore.On("GetEntityListCountBySystemAttributesAndOUIDs", mock.Anything, "agent", sysQuery, ouIDs).
+		Return(0, s.testErr)
+	_, err := s.store.GetEntityListBySystemAttributesAndOUIDs(s.ctx, "agent", sysQuery, ouIDs, 10, 0)
 	s.Error(err)
 }
 

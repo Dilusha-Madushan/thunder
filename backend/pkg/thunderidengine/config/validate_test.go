@@ -5,6 +5,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
@@ -299,10 +300,23 @@ func (suite *ValidateTestSuite) TestDPoPConfig_Validate() {
 		assert.NoError(t, c.Validate())
 	})
 
+	suite.T().Run("ML-DSA algorithms pass", func(t *testing.T) {
+		c := &DPoPConfig{IatWindow: 60, Leeway: 5, MaxJTILength: 128,
+			AllowedAlgs: []string{"ML-DSA-44", "ML-DSA-65", "ML-DSA-87"}}
+		assert.NoError(t, c.Validate())
+	})
+
 	suite.T().Run("all supported algorithms pass", func(t *testing.T) {
-		algs := []string{"ES256", "ES384", "ES512", "PS256", "PS384", "PS512", "RS256", "RS384", "RS512", "EdDSA"}
+		algs := []string{"ES256", "ES384", "ES512", "PS256", "RS256", "RS512", "EdDSA"}
 		c := &DPoPConfig{IatWindow: 60, MaxJTILength: 128, AllowedAlgs: algs}
 		assert.NoError(t, c.Validate())
+	})
+
+	suite.T().Run("algorithms unsupported by the runtime verifier fail", func(t *testing.T) {
+		for _, alg := range []string{"RS384", "PS384", "PS512"} {
+			c := &DPoPConfig{IatWindow: 60, Leeway: 5, MaxJTILength: 128, AllowedAlgs: []string{alg}}
+			assert.ErrorContains(t, c.Validate(), alg)
+		}
 	})
 }
 
@@ -500,4 +514,71 @@ func (suite *ValidateTestSuite) TestBackchannelLogoutConfig_Validate() {
 			assert.ErrorContains(t, c.Validate(), "oauth.logout.backchannel."+tc.name+" must be at most")
 		}
 	})
+}
+
+func (suite *ValidateTestSuite) TestUserLookupConfig_Validate() {
+	issuer := TrustedIssuerConfig{Issuer: "https://issuer.example.com", JWKSURL: "https://issuer.example.com/jwks",
+		Audience: "aud"}
+	lookup := UserLookupConfig{URL: "https://issuer.example.com/users/{id}",
+		TokenURL: "https://issuer.example.com/oauth2/token", ClientID: "lookup", ClientSecret: "s3cret"}
+
+	suite.T().Run("unset passes and leaves users by id", func(t *testing.T) {
+		assert.NoError(t, (&UserLookupConfig{}).Validate())
+		assert.False(t, (&UserLookupConfig{}).Enabled())
+	})
+
+	suite.T().Run("a complete lookup passes, through the trusted issuer", func(t *testing.T) {
+		c := issuer
+		c.UserLookup = lookup
+		assert.NoError(t, c.Validate())
+		assert.Equal(t, "https://issuer.example.com/users/u%2F1", c.UserLookup.UserURL("u/1"))
+		assert.Equal(t, "username", c.UserLookup.NameAttributeOrDefault())
+		assert.Equal(t, 5*time.Minute, c.UserLookup.CacheTTLOrDefault())
+	})
+
+	suite.T().Run("the lookup is checked without an issuer too", func(t *testing.T) {
+		c := TrustedIssuerConfig{UserLookup: UserLookupConfig{URL: "https://issuer.example.com/users/{id}"}}
+		assert.ErrorContains(t, c.Validate(), "token_url is not an http(s) URL")
+	})
+
+	suite.T().Run("the URL must carry the id", func(t *testing.T) {
+		c := lookup
+		c.URL = "https://issuer.example.com/users"
+		assert.ErrorContains(t, c.Validate(), "must carry {id}")
+	})
+
+	suite.T().Run("the endpoints must be http(s) URLs", func(t *testing.T) {
+		c := lookup
+		c.TokenURL = "issuer.example.com/token"
+		assert.ErrorContains(t, c.Validate(), "token_url is not an http(s) URL")
+	})
+
+	suite.T().Run("the client must be set", func(t *testing.T) {
+		c := lookup
+		c.ClientSecret = ""
+		assert.ErrorContains(t, c.Validate(), "client_id and client_secret must be set")
+	})
+
+	suite.T().Run("the cache time must not be negative", func(t *testing.T) {
+		c := lookup
+		c.CacheTTL = -1
+		assert.ErrorContains(t, c.Validate(), "cache_ttl must not be negative")
+	})
+}
+
+func (suite *ValidateTestSuite) TestAuthorizationDetailsConfig_Validate() {
+	for _, timeout := range []int64{0, 1, 5, 30} {
+		assert.NoError(suite.T(), (&AuthorizationDetailsConfig{ProcessorTimeout: timeout}).Validate(), timeout)
+	}
+	for _, timeout := range []int64{-1, 31} {
+		assert.ErrorContains(suite.T(), (&AuthorizationDetailsConfig{ProcessorTimeout: timeout}).Validate(),
+			"oauth.authorization_details.processor_timeout", timeout)
+	}
+}
+
+func (suite *ValidateTestSuite) TestAuthorizationDetailsConfig_IsTypeMetadataEnabled() {
+	enabled, disabled := true, false
+	assert.True(suite.T(), AuthorizationDetailsConfig{TypeMetadataEnabled: &enabled}.IsTypeMetadataEnabled())
+	assert.False(suite.T(), AuthorizationDetailsConfig{TypeMetadataEnabled: &disabled}.IsTypeMetadataEnabled())
+	assert.True(suite.T(), AuthorizationDetailsConfig{}.IsTypeMetadataEnabled(), "the endpoint is served by default")
 }

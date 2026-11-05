@@ -19,6 +19,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/flow/session"
 	"github.com/thunder-id/thunderid/internal/system/cache"
 	"github.com/thunder-id/thunderid/internal/system/config"
+	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 	"github.com/thunder-id/thunderid/tests/mocks/authnprovider/managermock"
 	"github.com/thunder-id/thunderid/tests/mocks/flow/sessionmock"
@@ -43,7 +44,7 @@ func (suite *SessionExecutorTestSuite) TearDownTest() {
 func (suite *SessionExecutorTestSuite) newExecutor(sso session.Service,
 	authn providers.AuthnProviderManager) *sessionExecutor {
 	flowFactory, _ := core.Initialize(cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"))
-	return newSessionExecutor(flowFactory, sso, authn)
+	return newSessionExecutor(flowFactory, sso, authn, newAccessGuard(admitAllAccess(suite.T())))
 }
 
 // saveAuthnMock returns a provider that resolves the fresh-save subject (user-1 / ou-1 / person).
@@ -256,6 +257,54 @@ func (suite *SessionExecutorTestSuite) TestFreshSave_Unauthenticated() {
 	suite.Empty(resp.EngineData[common.RuntimeKeySSOSessionHandle])
 }
 
+// TestFreshSave_ResolvesTheSubjectOnce verifies the hold check and the save share one resolution.
+func (suite *SessionExecutorTestSuite) TestFreshSave_ResolvesTheSubjectOnce() {
+	sso := sessionmock.NewServiceMock(suite.T())
+	var in session.SaveCheckpointInput
+	captureSave(sso, &in, session.SaveCheckpointResult{Handle: "h", Created: true})
+	authn := suite.saveAuthnMock()
+	exec := suite.newExecutor(sso, authn)
+
+	resp, err := exec.Execute(freshCtx())
+
+	suite.Require().NoError(err)
+	suite.Equal(providers.ExecComplete, resp.Status)
+	authn.AssertNumberOfCalls(suite.T(), "GetEntityReference", 1)
+}
+
+func (suite *SessionExecutorTestSuite) TestFreshSave_HeldSubjectSavesNothing() {
+	cases := []struct {
+		name     string
+		decision providers.AccessDecision
+		fault    *tidcommon.ServiceError
+		wantCode string
+	}{
+		{name: "unstated", wantCode: ErrInvalidCredentials.Code},
+		{name: "stated", decision: providers.AccessDecision{Reason: providers.AccessRefusalReasonSuspended},
+			wantCode: ErrAccountSuspended.Code},
+		{name: "fault", fault: &tidcommon.InternalServerError},
+	}
+	for _, tc := range cases {
+		suite.Run(tc.name, func() {
+			sso := sessionmock.NewServiceMock(suite.T())
+			exec := suite.newExecutor(sso, suite.saveAuthnMock())
+			exec.accessGuard = newAccessGuard(expectAccess(suite.T(), "user-1", providers.AccessPlaneSession, "",
+				tc.decision, tc.fault))
+
+			resp, err := exec.Execute(freshCtx())
+
+			if tc.wantCode == "" {
+				suite.Error(err)
+			} else {
+				suite.Require().NoError(err)
+				suite.Equal(providers.ExecFailure, resp.Status)
+				suite.Equal(tc.wantCode, resp.Error.Code)
+			}
+			sso.AssertNotCalled(suite.T(), "SaveCheckpoint", mock.Anything, mock.Anything)
+		})
+	}
+}
+
 // TestFreshSave_EntityReferenceErrorIsNonFatal covers a subject-resolution failure: the save is
 // skipped (service never called) without failing authentication.
 func (suite *SessionExecutorTestSuite) TestFreshSave_EntityReferenceErrorIsNonFatal() {
@@ -306,6 +355,11 @@ func (suite *SessionExecutorTestSuite) TestFreshSave_SanitizesSnapshot() {
 	ctx.RuntimeData["applicationId"] = "app-a"
 	ctx.RuntimeData[common.RuntimeKeyClientID] = "sso_app_a"
 	ctx.RuntimeData[common.RuntimeKeyAuthorizationRequestID] = "authz-req-1"
+	ctx.RuntimeData[common.RuntimeKeyClientIDHost] = "client.example.com"
+	ctx.RuntimeData[common.RuntimeKeyRedirectURIHost] = "127.0.0.1"
+	ctx.RuntimeData[common.RuntimeKeyRequestedAuthorizationDetails] = `[{"type":"payment"}]`
+	ctx.RuntimeData[common.RuntimeKeyConsentedAuthorizationDetails] = `[{"type":"payment"}]`
+	ctx.RuntimeData[common.RuntimeKeyConsentSessionToken] = "consent.session.token"
 
 	_, err := exec.Execute(ctx)
 	suite.Require().NoError(err)
@@ -327,6 +381,11 @@ func (suite *SessionExecutorTestSuite) TestFreshSave_SanitizesSnapshot() {
 	suite.NotContains(rd, "applicationId")
 	suite.NotContains(rd, common.RuntimeKeyClientID)
 	suite.NotContains(rd, common.RuntimeKeyAuthorizationRequestID)
+	suite.NotContains(rd, common.RuntimeKeyClientIDHost)
+	suite.NotContains(rd, common.RuntimeKeyRedirectURIHost)
+	suite.NotContains(rd, common.RuntimeKeyRequestedAuthorizationDetails)
+	suite.NotContains(rd, common.RuntimeKeyConsentedAuthorizationDetails)
+	suite.NotContains(rd, common.RuntimeKeyConsentSessionToken)
 }
 
 func ssoLoadCtx() *providers.NodeContext {
@@ -482,6 +541,38 @@ func (suite *SessionExecutorTestSuite) TestSanitizeSnapshotRuntimeData_DropsRequ
 	_, hasSilent := sanitized[common.RuntimeKeySilentAuthOnly]
 	suite.False(hasSilent, "the silent marker belongs to one request and must not be persisted")
 	suite.Equal("value", sanitized["keep_me"], "unrelated runtime data must still be snapshotted")
+}
+
+func (suite *SessionExecutorTestSuite) TestSanitizeSnapshotRuntimeData_DropsPendingFailureReason() {
+	sanitized := sanitizeSnapshotRuntimeData(map[string]string{
+		"failureReasonJSON": `{"code":"FET-1118"}`,
+		"keep_me":           "value",
+	})
+
+	suite.NotContains(sanitized, "failureReasonJSON")
+	suite.Equal("value", sanitized["keep_me"])
+}
+
+func (suite *SessionExecutorTestSuite) TestFreshSave_LeavesExtensionDataOutOfTheSnapshot() {
+	ctx := freshCtx()
+	ctx.RuntimeData["extension.risk_check.riskScore"] = "12"
+	ctx.RuntimeData["extension.risk_check.email"] = "svc@example.com"
+	ctx.RuntimeData[common.ExtensionAttemptCountKey("risk_check")] = "1"
+	ctx.RuntimeData["failureReason"] = "flow-owned"
+	sso := sessionmock.NewServiceMock(suite.T())
+	var in session.SaveCheckpointInput
+	captureSave(sso, &in, session.SaveCheckpointResult{Handle: "handle-xyz", Created: true})
+	exec := suite.newExecutor(sso, suite.saveAuthnMock())
+
+	_, err := exec.Execute(ctx)
+	suite.Require().NoError(err)
+
+	for key := range in.RuntimeData {
+		suite.False(strings.HasPrefix(key, common.ExtensionDataKeyPrefix), "%s entered the snapshot", key)
+	}
+	suite.NotContains(in.RuntimeData, common.ExtensionAttemptCountKey("risk_check"))
+	suite.Equal("alice@example.com", in.RuntimeData["email"], "the flow's own data is still snapshotted")
+	suite.Equal("flow-owned", in.RuntimeData["failureReason"], "a key named failureReason is not special")
 }
 
 // TestFreshSave_PublishesSessionID verifies a save publishes the session id on RuntimeData, and not

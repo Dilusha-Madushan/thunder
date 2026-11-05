@@ -13,10 +13,6 @@ import (
 	"github.com/thunder-id/thunderid/tests/integration/testutils"
 )
 
-const (
-	mockNotificationServerPortOU = 8098
-)
-
 var (
 	basicRegistrationFlowWithOU = testutils.Flow{
 		Name:     "Basic Registration Flow with OU Test",
@@ -442,13 +438,11 @@ func (ts *OURegistrationFlowTestSuite) SetupSuite() {
 	}
 	ts.entityTypeID = schemaID
 
-	// Start mock notification server for SMS flow
-	ts.mockServer = testutils.NewMockNotificationServer(mockNotificationServerPortOU)
-	err = ts.mockServer.Start()
+	// Create mock notification server for SMS flow
+	ts.mockServer, err = testutils.NewMockNotificationServer()
 	if err != nil {
-		ts.T().Fatalf("Failed to start mock notification server: %v", err)
+		ts.T().Fatalf("Failed to create mock notification server: %v", err)
 	}
-	time.Sleep(100 * time.Millisecond)
 
 	// Create notification sender for SMS flow
 	customSender := testutils.NotificationSender{
@@ -565,6 +559,13 @@ func (ts *OURegistrationFlowTestSuite) TearDownSuite() {
 		}
 	}
 
+	// delete user type
+	if ts.entityTypeID != "" {
+		if err := testutils.DeleteUserType(ts.entityTypeID); err != nil {
+			ts.T().Logf("Failed to delete dynamic user type during teardown: %v", err)
+		}
+	}
+
 	// Delete test organization units
 	if ts.smsFlowTestOUID != "" {
 		if err := testutils.DeleteOrganizationUnit(ts.smsFlowTestOUID); err != nil {
@@ -574,13 +575,6 @@ func (ts *OURegistrationFlowTestSuite) TearDownSuite() {
 	if ts.basicFlowTestOUID != "" {
 		if err := testutils.DeleteOrganizationUnit(ts.basicFlowTestOUID); err != nil {
 			ts.T().Logf("Failed to delete test organization unit during teardown: %v", err)
-		}
-	}
-
-	// delete user type
-	if ts.entityTypeID != "" {
-		if err := testutils.DeleteUserType(ts.entityTypeID); err != nil {
-			ts.T().Logf("Failed to delete dynamic user type during teardown: %v", err)
 		}
 	}
 }

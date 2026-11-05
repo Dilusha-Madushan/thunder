@@ -180,3 +180,67 @@ func (_c *HierarchyEnumeratorInterfaceMock_DescendantOUIDs_Call) RunAndReturn(ru
 	_c.Call.Return(run)
 	return _c
 }
+
+// RootOUIDs provides a mock function for the type HierarchyEnumeratorInterfaceMock
+func (_mock *HierarchyEnumeratorInterfaceMock) RootOUIDs(ctx context.Context) ([]string, *common.ServiceError) {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RootOUIDs")
+	}
+
+	var r0 []string
+	var r1 *common.ServiceError
+	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]string, *common.ServiceError)); ok {
+		return returnFunc(ctx)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context) []string); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context) *common.ServiceError); ok {
+		r1 = returnFunc(ctx)
+	} else {
+		if ret.Get(1) != nil {
+			r1 = ret.Get(1).(*common.ServiceError)
+		}
+	}
+	return r0, r1
+}
+
+// HierarchyEnumeratorInterfaceMock_RootOUIDs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RootOUIDs'
+type HierarchyEnumeratorInterfaceMock_RootOUIDs_Call struct {
+	*mock.Call
+}
+
+// RootOUIDs is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *HierarchyEnumeratorInterfaceMock_Expecter) RootOUIDs(ctx any) *HierarchyEnumeratorInterfaceMock_RootOUIDs_Call {
+	return &HierarchyEnumeratorInterfaceMock_RootOUIDs_Call{Call: _e.mock.On("RootOUIDs", ctx)}
+}
+
+func (_c *HierarchyEnumeratorInterfaceMock_RootOUIDs_Call) Run(run func(ctx context.Context)) *HierarchyEnumeratorInterfaceMock_RootOUIDs_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *HierarchyEnumeratorInterfaceMock_RootOUIDs_Call) Return(strings []string, serviceError *common.ServiceError) *HierarchyEnumeratorInterfaceMock_RootOUIDs_Call {
+	_c.Call.Return(strings, serviceError)
+	return _c
+}
+
+func (_c *HierarchyEnumeratorInterfaceMock_RootOUIDs_Call) RunAndReturn(run func(ctx context.Context) ([]string, *common.ServiceError)) *HierarchyEnumeratorInterfaceMock_RootOUIDs_Call {
+	_c.Call.Return(run)
+	return _c
+}

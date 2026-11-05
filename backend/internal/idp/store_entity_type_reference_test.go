@@ -32,6 +32,7 @@ func idpRow(id, attributeConfiguration string) map[string]interface{} {
 		"name":                    "IDP " + id,
 		"description":             "",
 		"type":                    "OIDC",
+		"ou_id":                   "ou-1",
 		"properties":              `{"client_id":{"value":"test","isSecret":false}}`,
 		"attribute_configuration": attributeConfiguration,
 	}

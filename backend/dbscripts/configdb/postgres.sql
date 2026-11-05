@@ -108,16 +108,26 @@ CREATE TABLE "ROLE_PERMISSION" (
 -- Index for resource server queries with deployment isolation on ROLE_PERMISSION
 CREATE INDEX idx_role_permission_resource_server ON "ROLE_PERMISSION" (RESOURCE_SERVER_ID, DEPLOYMENT_ID);
 
--- Table to store Role assignments (to entities and groups)
+-- Table to store Role assignments (to entities and groups). ASSIGNMENT_OU_ID is the organization unit
+-- the assignment was made in: the role's owner, or an organization unit the role is shared with.
+-- SHARING_POLICY_ID is the sharing policy that mandates the assignment, or '' for a direct assignment.
 CREATE TABLE "ROLE_ASSIGNMENT" (
     DEPLOYMENT_ID       VARCHAR(255) NOT NULL,
     ROLE_ID         VARCHAR(36) NOT NULL,
+    ASSIGNMENT_OU_ID VARCHAR(36) NOT NULL,
     ASSIGNEE_TYPE   VARCHAR(6)  NOT NULL CHECK (ASSIGNEE_TYPE IN ('entity', 'group')),
     ASSIGNEE_ID     VARCHAR(36) NOT NULL,
+    SHARING_POLICY_ID VARCHAR(36) NOT NULL DEFAULT '',
     CREATED_AT      TIMESTAMPTZ DEFAULT NOW(),
     UPDATED_AT      TIMESTAMPTZ DEFAULT NOW(),
-    PRIMARY KEY (ROLE_ID, DEPLOYMENT_ID, ASSIGNEE_TYPE, ASSIGNEE_ID)
+    PRIMARY KEY (ROLE_ID, DEPLOYMENT_ID, ASSIGNMENT_OU_ID, ASSIGNEE_TYPE, ASSIGNEE_ID, SHARING_POLICY_ID)
 );
+
+-- Index for removing the assignments a sharing policy mandates, with deployment isolation
+CREATE INDEX idx_role_assignment_sharing_policy ON "ROLE_ASSIGNMENT" (DEPLOYMENT_ID, SHARING_POLICY_ID);
+
+-- Index for looking up an assignee's role assignments, optionally in one organization unit, with deployment isolation
+CREATE INDEX idx_role_assignment_assignee ON "ROLE_ASSIGNMENT" (DEPLOYMENT_ID, ASSIGNEE_TYPE, ASSIGNEE_ID, ASSIGNMENT_OU_ID);
 
 -- Table to store theme configurations.
 CREATE TABLE "THEME" (
@@ -164,6 +174,7 @@ CREATE TABLE "INBOUND_CLIENT" (
     DEPLOYMENT_ID VARCHAR(255) NOT NULL,
     ENTITY_ID VARCHAR(36) NOT NULL,
     AUTH_FLOW_ID VARCHAR(100) NOT NULL,
+    DEVICE_GRANT_FLOW_ID VARCHAR(100),
     REGISTRATION_FLOW_ID VARCHAR(100),
     IS_REGISTRATION_FLOW_ENABLED CHAR(1) DEFAULT '1',
     RECOVERY_FLOW_ID VARCHAR(100),
@@ -198,6 +209,7 @@ CREATE TABLE "IDP" (
     NAME VARCHAR(255) NOT NULL,
     DESCRIPTION VARCHAR(500),
     TYPE VARCHAR(20) NOT NULL,
+    OU_ID VARCHAR(36) NOT NULL,
     PROPERTIES JSONB,
     ATTRIBUTE_CONFIGURATION JSONB,
     CREATED_AT TIMESTAMPTZ DEFAULT NOW(),
@@ -218,6 +230,7 @@ CREATE TABLE "NOTIFICATION_SENDER" (
     ID VARCHAR(36) NOT NULL,
     DESCRIPTION VARCHAR(500),
     TYPE VARCHAR(20) NOT NULL,
+    OU_ID VARCHAR(36) NOT NULL,
     PROVIDER VARCHAR(20) NOT NULL,
     PROPERTIES JSONB,
     CREATED_AT TIMESTAMPTZ DEFAULT NOW(),
@@ -235,6 +248,7 @@ CREATE TABLE "AUTHORIZATION_PDP_CONNECTION" (
 	NAME VARCHAR(255) NOT NULL,
 	DESCRIPTION VARCHAR(500),
 	TYPE VARCHAR(50) NOT NULL,
+	OU_ID VARCHAR(36) NOT NULL,
 	PROPERTIES JSONB NOT NULL,
     CREATED_AT TIMESTAMPTZ DEFAULT NOW(),
     UPDATED_AT TIMESTAMPTZ DEFAULT NOW()
@@ -243,6 +257,23 @@ CREATE TABLE "AUTHORIZATION_PDP_CONNECTION" (
 -- Unique constraint: Authorization PDP provider names must be unique per provider type and deployment.
 CREATE UNIQUE INDEX idx_authorization_pdp_connection_type_name_deployment
 	ON "AUTHORIZATION_PDP_CONNECTION" (DEPLOYMENT_ID, TYPE, NAME);
+
+-- Table to store outbound HTTP endpoint connections. Secret values in PROPERTIES are encrypted.
+CREATE TABLE "HTTP_CONNECTION" (
+    DEPLOYMENT_ID VARCHAR(255) NOT NULL,
+    ID            VARCHAR(36) NOT NULL,
+    NAME          VARCHAR(255) NOT NULL,
+    DESCRIPTION   VARCHAR(500),
+    OU_ID         VARCHAR(36) NOT NULL,
+    PROPERTIES    JSONB NOT NULL,
+    CREATED_AT    TIMESTAMPTZ DEFAULT NOW(),
+    UPDATED_AT    TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (DEPLOYMENT_ID, ID)
+);
+
+-- Unique constraint: HTTP connection names must be unique per deployment.
+CREATE UNIQUE INDEX idx_http_connection_name_deployment
+    ON "HTTP_CONNECTION" (DEPLOYMENT_ID, NAME);
 
 -- Table to store certificates associated with various entities.
 CREATE TABLE "CERTIFICATE" (
@@ -280,6 +311,26 @@ CREATE INDEX idx_resource_server_name_deployment ON "RESOURCE_SERVER" (DEPLOYMEN
 -- Unique constraint: Resource server identifier must be unique per deployment
 CREATE UNIQUE INDEX uq_resource_server_identifier
     ON "RESOURCE_SERVER"(IDENTIFIER, DEPLOYMENT_ID);
+
+-- Table to store RFC 9396 authorization details types. The schema is kept as text, as it was written,
+-- so that the order in which it declares its properties is kept.
+CREATE TABLE "AUTHORIZATION_DETAIL_TYPE" (
+    DEPLOYMENT_ID VARCHAR(255) NOT NULL,
+    ID VARCHAR(36) NOT NULL,
+    TYPE VARCHAR(512) NOT NULL,
+    NAME VARCHAR(100) NOT NULL,
+    DESCRIPTION TEXT,
+    VERSION INTEGER NOT NULL DEFAULT 1,
+    SCHEMA_DEFINITION TEXT NOT NULL,
+    PROPERTIES JSONB,
+    CREATED_AT TIMESTAMPTZ DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (DEPLOYMENT_ID, ID)
+);
+
+-- Unique constraint: an authorization details type value is unique per deployment
+CREATE UNIQUE INDEX uq_authorization_detail_type
+    ON "AUTHORIZATION_DETAIL_TYPE"(DEPLOYMENT_ID, TYPE);
 
 -- Table to store resources within resource servers.
 CREATE TABLE "RESOURCE" (
@@ -365,6 +416,7 @@ CREATE TABLE "FLOW" (
     NAME VARCHAR(100) NOT NULL,
     FLOW_TYPE VARCHAR(50) NOT NULL,
     ACTIVE_VERSION INTEGER NOT NULL,
+    OU_ID VARCHAR(36) NOT NULL,
     CREATED_AT TIMESTAMPTZ DEFAULT NOW(),
     UPDATED_AT TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (HANDLE, FLOW_TYPE, DEPLOYMENT_ID),
@@ -513,7 +565,8 @@ CREATE UNIQUE INDEX idx_gateway_default_deployment
 
 -- A captured state of this deployment's configuration, named by a hash of what it captured and
 -- ordered per deployment. It is what is applied to a gateway. Its values, when the export carried
--- any, are held encrypted as one secret.
+-- any, are held encrypted as one secret. CREATED_BY is the id of the user it was
+-- captured for; their name is read from the trusted issuer when shown, never stored.
 CREATE TABLE "CONFIGURATION_VERSION" (
     DEPLOYMENT_ID VARCHAR(255) NOT NULL,
     ID VARCHAR(36) PRIMARY KEY,
@@ -523,20 +576,51 @@ CREATE TABLE "CONFIGURATION_VERSION" (
     RESOURCES TEXT NOT NULL,
     VARIABLES TEXT,
     NOTE TEXT,
+    IS_CURRENT CHAR(1) NOT NULL DEFAULT '0',
     CREATED_AT TIMESTAMPTZ DEFAULT NOW(),
+    CREATED_BY VARCHAR(255),
     UNIQUE (DEPLOYMENT_ID, SEQ),
     UNIQUE (DEPLOYMENT_ID, HASH)
 );
 
 -- The configuration version each gateway holds, and the one it held before, which is what a revert
--- returns it to. A gateway declared in a file has no GATEWAY row, so there is no foreign key.
+-- returns it to, with who applied it. A gateway declared in a file has no GATEWAY row, so there is no foreign key.
 CREATE TABLE "GATEWAY_APPLIED_VERSION" (
     DEPLOYMENT_ID VARCHAR(255) NOT NULL,
     GATEWAY_ID VARCHAR(36) NOT NULL,
     APPLIED_SEQ INTEGER NOT NULL,
     PREVIOUS_SEQ INTEGER,
     APPLIED_AT TIMESTAMPTZ DEFAULT NOW(),
+    APPLIED_BY VARCHAR(255),
+    -- When each value the applied version refers to was last set, as the gateway's store said at the
+    -- apply, so the next apply reports those set again since by comparing the store's own times.
+    HELD_VALUES TEXT,
+    -- Whether the gateway holds the applied version whole. An apply that left changes out, or whose
+    -- import refused some, records the version all the same as partly applied. MASTER_SEQ and
+    -- MASTER_HASH name the master the apply left, RESOURCES_HELD of RESOURCES_TOTAL count the
+    -- version's resources that master holds as the version has them, and PREVIOUS_MASTER_SEQ is the
+    -- master a revert returns the gateway to.
+    COMPLETE BOOLEAN NOT NULL DEFAULT TRUE,
+    MASTER_SEQ INTEGER,
+    MASTER_HASH VARCHAR(64),
+    PREVIOUS_MASTER_SEQ INTEGER,
+    RESOURCES_HELD INTEGER,
+    RESOURCES_TOTAL INTEGER,
     PRIMARY KEY (GATEWAY_ID, DEPLOYMENT_ID)
+);
+
+-- One apply or revert at a time per gateway, across every node of this plane: an apply claims the
+-- row with a token of its own before it sends anything and clears it when done, and a claim older
+-- than an import may take is taken over. PENDING_LATEST records that the latest version is to be
+-- applied again once the running apply finishes, for whoever asked while it ran.
+CREATE TABLE "GATEWAY_APPLY_LEASE" (
+    DEPLOYMENT_ID VARCHAR(255) NOT NULL,
+    GATEWAY_ID VARCHAR(36) NOT NULL,
+    TOKEN VARCHAR(36),
+    APPLYING_SINCE TIMESTAMPTZ,
+    PENDING_LATEST BOOLEAN NOT NULL DEFAULT FALSE,
+    PENDING_BY VARCHAR(255),
+    PRIMARY KEY (DEPLOYMENT_ID, GATEWAY_ID)
 );
 
 -- The resources each gateway is set to leave alone: an apply neither writes nor removes them there,
@@ -551,7 +635,28 @@ CREATE TABLE "GATEWAY_EXCLUDED_RESOURCE" (
     RESOURCE_TYPE VARCHAR(255) NOT NULL,
     RESOURCE_ID VARCHAR(255),
     RESOURCE_NAME VARCHAR(255),
+    -- Set by a release that let an apply skip a resource once; such a row was owed to the gateway,
+    -- not a standing choice. Read to tell the two apart, never set any more.
+    ONCE BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (DEPLOYMENT_ID, GATEWAY_ID, RESOURCE_KEY)
+);
+
+-- What each gateway holds, resource by resource: every resource deployed to it as the gateway last
+-- accepted it, in RESOURCES, and in MANIFEST one entry per resource saying how it got there and
+-- whether the gateway accepted it. Each apply writes a new row, numbered per gateway, and keeps the
+-- earlier ones as the gateway's history, within the same bound as the versions. HASH names the row
+-- by what it holds. A gateway declared in a file has no GATEWAY row, so there is no foreign key.
+CREATE TABLE "GATEWAY_MASTER" (
+    DEPLOYMENT_ID VARCHAR(255) NOT NULL,
+    ID VARCHAR(36) PRIMARY KEY,
+    GATEWAY_ID VARCHAR(36) NOT NULL,
+    SEQ INTEGER NOT NULL,
+    HASH VARCHAR(64) NOT NULL,
+    RESOURCES TEXT NOT NULL,
+    MANIFEST TEXT NOT NULL,
+    CREATED_AT TIMESTAMPTZ DEFAULT NOW(),
+    CREATED_BY VARCHAR(255),
+    UNIQUE (DEPLOYMENT_ID, GATEWAY_ID, SEQ)
 );
 
 -- Table capturing the resource-sharing graph. Generic across resource types: a policy is one

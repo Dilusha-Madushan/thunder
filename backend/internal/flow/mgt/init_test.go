@@ -747,6 +747,7 @@ func (s *InitTestSuite) TestInitializeStore_MutableMode() {
 	store, compositeStore, _, err := initializeStore(
 		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"),
 		mockValidator,
+		newOuProviderMock(s.T()),
 		nil,
 	)
 
@@ -789,6 +790,7 @@ func (s *InitTestSuite) TestInitializeStore_DeclarativeMode() {
 	store, compositeStore, _, err := initializeStore(
 		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"),
 		mockValidator,
+		newOuProviderMock(s.T()),
 		nil,
 	)
 
@@ -836,6 +838,7 @@ func (s *InitTestSuite) TestInitializeStore_CompositeMode() {
 	store, compositeStore, _, err := initializeStore(
 		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"),
 		mockValidator,
+		newOuProviderMock(s.T()),
 		nil,
 	)
 
@@ -882,6 +885,7 @@ func (s *InitTestSuite) TestInitializeStore_DeclarativeMode_ResourceLoadingError
 	store, compositeStore, _, err := initializeStore(
 		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"),
 		mockValidator,
+		newOuProviderMock(s.T()),
 		nil,
 	)
 
@@ -931,6 +935,7 @@ func (s *InitTestSuite) TestInitializeStore_CompositeMode_ResourceLoadingError()
 	store, compositeStore, _, err := initializeStore(
 		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"),
 		mockValidator,
+		newOuProviderMock(s.T()),
 		nil,
 	)
 
@@ -980,6 +985,7 @@ func (s *InitTestSuite) TestInitializeStore_DefaultMode() {
 	store, compositeStore, _, err := initializeStore(
 		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"),
 		mockValidator,
+		newOuProviderMock(s.T()),
 		nil,
 	)
 
@@ -1025,6 +1031,7 @@ func (s *InitTestSuite) TestInitializeStore_ModeNormalization() {
 	store, compositeStore, _, err := initializeStore(
 		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"),
 		mockValidator,
+		newOuProviderMock(s.T()),
 		nil,
 	)
 

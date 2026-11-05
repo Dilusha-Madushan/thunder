@@ -257,7 +257,7 @@ func (s *authorizationService) enrichRequest(
 		entityKey := evaluation.Subject.Category + ":" + evaluation.Subject.ID
 		subjectEntity, ok := entities[entityKey]
 		if !ok {
-			resolvedEntity, err := s.entityService.GetEntity(ctx, evaluation.Subject.ID)
+			resolvedEntity, err := s.entityService.GetEntityProfile(ctx, evaluation.Subject.ID)
 			if err != nil {
 				if !errors.Is(err, entity.ErrEntityNotFound) {
 					return providers.AccessEvaluationsRequest{}, &tidcommon.InternalServerError
@@ -332,6 +332,7 @@ func toEngineAccessEvaluationsRequest(request providers.AccessEvaluationsRequest
 				Name:       evaluation.Permission.Name,
 				Properties: evaluation.Permission.Properties,
 			},
+			OUID:    evaluation.OUID,
 			Context: evaluation.Context,
 		})
 	}

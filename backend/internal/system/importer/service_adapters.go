@@ -7,11 +7,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 
 	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 
+	"github.com/thunder-id/thunderid/internal/agent"
 	agentmodel "github.com/thunder-id/thunderid/internal/agent/model"
+	authzdetailmgt "github.com/thunder-id/thunderid/internal/authzdetail/mgt"
 	layoutmgt "github.com/thunder-id/thunderid/internal/design/layout/mgt"
 	thememgt "github.com/thunder-id/thunderid/internal/design/theme/mgt"
 	"github.com/thunder-id/thunderid/internal/entitytype"
@@ -24,6 +28,7 @@ import (
 	serverconst "github.com/thunder-id/thunderid/internal/system/constants"
 	i18nmgt "github.com/thunder-id/thunderid/internal/system/i18n/mgt"
 	"github.com/thunder-id/thunderid/internal/system/log"
+	"github.com/thunder-id/thunderid/internal/user"
 	"github.com/thunder-id/thunderid/internal/vc/credential"
 	"github.com/thunder-id/thunderid/internal/vc/presentation"
 )
@@ -55,23 +60,37 @@ func (s *importService) resolveImportOUHandle(
 	return ouID, nil
 }
 
+// documentState returns a document's top-level state and whether it has a non-empty one.
+func documentState(doc parsedDocument) (string, bool) {
+	for i := 0; i+1 < len(doc.Node.Content); i += 2 {
+		if doc.Node.Content[i].Value != "state" {
+			continue
+		}
+		value := doc.Node.Content[i+1]
+		return value.Value, value.Value != "" || len(value.Content) > 0
+	}
+	return "", false
+}
+
 type roleDeclarativeYAML struct {
-	ID          string                     `yaml:"id"`
-	Name        string                     `yaml:"name"`
-	Description string                     `yaml:"description,omitempty"`
-	OUID        string                     `yaml:"ouId,omitempty"`
-	OUHandle    string                     `yaml:"ouHandle,omitempty"`
-	Permissions []role.ResourcePermissions `yaml:"permissions"`
-	Assignments []role.RoleAssignment      `yaml:"assignments,omitempty"`
+	ID              string                     `yaml:"id"`
+	Name            string                     `yaml:"name"`
+	Description     string                     `yaml:"description,omitempty"`
+	OUID            string                     `yaml:"ouId,omitempty"`
+	OUHandle        string                     `yaml:"ouHandle,omitempty"`
+	Permissions     []role.ResourcePermissions `yaml:"permissions"`
+	SharingPolicies []sharing.PolicyRequest    `yaml:"sharingPolicies,omitempty"`
+	Assignments     []role.RoleAssignment      `yaml:"assignments,omitempty"`
 }
 
 type userDeclarativeYAML struct {
-	ID          string                 `yaml:"id"`
-	Type        string                 `yaml:"type"`
-	OUID        string                 `yaml:"ouId,omitempty"`
-	OUHandle    string                 `yaml:"ouHandle,omitempty"`
-	Attributes  map[string]interface{} `yaml:"attributes"`
-	Credentials map[string]interface{} `yaml:"credentials,omitempty"`
+	ID              string                  `yaml:"id"`
+	Type            string                  `yaml:"type"`
+	OUID            string                  `yaml:"ouId,omitempty"`
+	OUHandle        string                  `yaml:"ouHandle,omitempty"`
+	Attributes      map[string]interface{}  `yaml:"attributes"`
+	Credentials     map[string]interface{}  `yaml:"credentials,omitempty"`
+	SharingPolicies []sharing.PolicyRequest `yaml:"sharingPolicies,omitempty"`
 }
 
 type entityTypeDeclarativeYAML struct {
@@ -105,6 +124,7 @@ type layoutDeclarativeYAML struct {
 // notificationTemplateDeclarativeYAML is the import shape for a notification template.
 // It mirrors the API create model with an added channel discriminator.
 type notificationTemplateDeclarativeYAML struct {
+	ID          string `yaml:"id,omitempty"`
 	Channel     string `yaml:"channel"`
 	Handle      string `yaml:"handle"`
 	OUID        string `yaml:"ouId,omitempty"`
@@ -324,13 +344,14 @@ func (s *importService) importRole(
 	}
 	req.OUID = resolvedOUID
 
+	// Assignments are added once the sharing policies are in place, since one may be made in an
+	// organization unit only a policy lets the role reach.
 	createReq := role.RoleCreationDetail{
 		ID:          req.ID,
 		Name:        req.Name,
 		Description: req.Description,
 		OUID:        req.OUID,
 		Permissions: req.Permissions,
-		Assignments: req.Assignments,
 	}
 	updateReq := role.RoleUpdateDetail{
 		Name:        req.Name,
@@ -361,16 +382,12 @@ func (s *importService) importRole(
 			if updateErr != nil {
 				return serviceErrorOutcome(resourceTypeRole, req.ID, req.Name, operationUpdate, updateErr)
 			}
-			if len(req.Assignments) > 0 {
-				if s.roleAssignmentService == nil {
-					return serviceErrorOutcome(resourceTypeRole, updated.ID, updated.Name, operationUpdate,
-						tidcommon.CustomServiceError(tidcommon.InternalServerError,
-							tidcommon.I18nMessage{DefaultValue: "roleAssignmentService not configured"}))
-				}
-				assignErr := s.roleAssignmentService.AddAssignments(ctx, updated.ID, req.Assignments)
-				if assignErr != nil {
-					return serviceErrorOutcome(resourceTypeRole, updated.ID, updated.Name, operationUpdate, assignErr)
-				}
+			if outcome := s.applySharingPolicies(ctx, role.RoleSharingType, resourceTypeRole,
+				updated.ID, updated.Name, updated.OUID, req.SharingPolicies, operationUpdate); outcome != nil {
+				return *outcome
+			}
+			if assignErr := s.addRoleAssignments(ctx, updated.ID, req.Assignments); assignErr != nil {
+				return serviceErrorOutcome(resourceTypeRole, updated.ID, updated.Name, operationUpdate, assignErr)
 			}
 			return successOutcome(resourceTypeRole, updated.ID, updated.Name, operationUpdate)
 		}
@@ -384,7 +401,41 @@ func (s *importService) importRole(
 	if svcErr != nil {
 		return serviceErrorOutcome(resourceTypeRole, req.ID, req.Name, operationCreate, svcErr)
 	}
+
+	// A policy names the role it governs, so the policies are replayed once the role exists, and the
+	// assignments after them. A refusal of either undoes the create, so a retry does not meet a
+	// half-imported role.
+	outcome := s.applySharingPolicies(ctx, role.RoleSharingType, resourceTypeRole,
+		created.ID, created.Name, created.OUID, req.SharingPolicies, operationCreate)
+	if outcome == nil {
+		if assignErr := s.addRoleAssignments(ctx, created.ID, req.Assignments); assignErr != nil {
+			refused := serviceErrorOutcome(resourceTypeRole, created.ID, created.Name, operationCreate, assignErr)
+			outcome = &refused
+		}
+	}
+	if outcome != nil {
+		if delErr := s.roleService.DeleteRole(ctx, created.ID); delErr != nil {
+			log.GetLogger().Error(ctx, "Failed to remove a role whose sharing policies or assignments were refused",
+				log.String("roleID", created.ID), log.String("code", delErr.Code))
+		}
+		return *outcome
+	}
 	return successOutcome(resourceTypeRole, created.ID, created.Name, operationCreate)
+}
+
+// addRoleAssignments adds a role document's assignments, each in the organization unit it names or,
+// when it names none, in the one owning its assignee.
+func (s *importService) addRoleAssignments(
+	ctx context.Context, roleID string, assignments []role.RoleAssignment,
+) *tidcommon.ServiceError {
+	if len(assignments) == 0 {
+		return nil
+	}
+	if s.roleAssignmentService == nil {
+		return tidcommon.CustomServiceError(tidcommon.InternalServerError,
+			tidcommon.I18nMessage{DefaultValue: "roleAssignmentService not configured"})
+	}
+	return s.roleAssignmentService.AddAssigneesToRoles(ctx, assignments, []string{roleID})
 }
 
 func (s *importService) importGroup(
@@ -690,8 +741,39 @@ func (s *importService) importLayout(
 	return successOutcome(resourceTypeLayout, created.ID, created.DisplayName, operationCreate)
 }
 
+// credentialsToWrite is a document's credentials as the user service takes them, or nil when there
+// are none to write. For an update, a credential the document carries no value for is left out.
+func credentialsToWrite(credentials map[string]interface{}, update bool) (json.RawMessage, error) {
+	kept := make(map[string]interface{}, len(credentials))
+	for name, value := range credentials {
+		if text, ok := value.(string); ok && text == "" && update {
+			continue
+		}
+		kept[name] = value
+	}
+	if len(kept) == 0 {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(kept)
+	if err != nil {
+		return nil, err
+	}
+	return encoded, nil
+}
+
+// userSharingReplay is a user's sharing policies that mandate roles, replayed once the import's roles are in.
+type userSharingReplay struct {
+	// resultIndex is the user's outcome, which a refusal replaces.
+	resultIndex int
+	userID      string
+	owningOUID  string
+	policies    []sharing.PolicyRequest
+	operation   string
+}
+
+// importUser imports a user, deferring the sharing policies that mandate roles to mandating.
 func (s *importService) importUser(
-	ctx context.Context, doc parsedDocument, options *ImportOptions, dryRun bool,
+	ctx context.Context, doc parsedDocument, options *ImportOptions, dryRun bool, mandating *[]userSharingReplay,
 ) ImportItemOutcome {
 	if s.userService == nil {
 		return unsupportedAdapterOutcome(resourceTypeUser, "user")
@@ -722,7 +804,16 @@ func (s *importService) importUser(
 		Attributes: attributesJSON,
 	}
 
-	credentialsJSON, err := json.Marshal(req.Credentials)
+	credentialsJSON, err := credentialsToWrite(req.Credentials, false)
+	if err != nil {
+		return ImportItemOutcome{ResourceType: resourceTypeUser, ResourceID: req.ID, Status: statusFailed,
+			Code: ErrorInvalidYAMLContent.Code, Message: fmt.Sprintf("failed to marshal user credentials: %v", err)}
+	}
+	// A credential the document names but carries no value for is left as the user has it: a stored
+	// credential is a hash that never leaves an export, so a server importing its own export, or one
+	// that fills the placeholder with nothing, has nothing new to set. A new user is different:
+	// without a credential they could never sign in, so an empty one is refused on a create.
+	credentialsToKeep, err := credentialsToWrite(req.Credentials, true)
 	if err != nil {
 		return ImportItemOutcome{ResourceType: resourceTypeUser, ResourceID: req.ID, Status: statusFailed,
 			Code: ErrorInvalidYAMLContent.Code, Message: fmt.Sprintf("failed to marshal user credentials: %v", err)}
@@ -746,11 +837,11 @@ func (s *importService) importUser(
 	if options.IsUpsertEnabled() && req.ID != "" {
 		updated, svcErr := s.userService.UpdateUser(ctx, req.ID, userReq)
 		if svcErr == nil {
-			if len(credentialsJSON) > 0 && string(credentialsJSON) != "null" && string(credentialsJSON) != "{}" {
+			if credentialsToKeep != nil {
 				if credErr := s.userService.UpdateUserCredentials(
 					ctx,
 					req.ID,
-					json.RawMessage(credentialsJSON),
+					credentialsToKeep,
 				); credErr != nil {
 					// Profile is already committed; emit a clear partial-failure outcome.
 					return ImportItemOutcome{
@@ -764,6 +855,17 @@ func (s *importService) importUser(
 					}
 				}
 			}
+			// Replaying such policies without their roles first would strip the mandates of a share that is already
+			// there, so the whole replay waits.
+			if mandatesRoles(req.SharingPolicies) {
+				*mandating = append(*mandating, userSharingReplay{userID: updated.ID, owningOUID: updated.OUID,
+					policies: req.SharingPolicies, operation: operationUpdate})
+				return successOutcome(resourceTypeUser, updated.ID, "", operationUpdate)
+			}
+			if outcome := s.applySharingPolicies(ctx, user.UserSharingType, resourceTypeUser,
+				updated.ID, "", updated.OUID, req.SharingPolicies, operationUpdate); outcome != nil {
+				return *outcome
+			}
 			return successOutcome(resourceTypeUser, updated.ID, "", operationUpdate)
 		}
 
@@ -776,11 +878,11 @@ func (s *importService) importUser(
 	if svcErr != nil {
 		return serviceErrorOutcome(resourceTypeUser, req.ID, "", operationCreate, svcErr)
 	}
-	if len(credentialsJSON) > 0 && string(credentialsJSON) != "null" && string(credentialsJSON) != "{}" {
+	if credentialsJSON != nil {
 		if credErr := s.userService.UpdateUserCredentials(
 			ctx,
 			created.ID,
-			json.RawMessage(credentialsJSON),
+			credentialsJSON,
 		); credErr != nil {
 			if rollbackErr := s.userService.DeleteUser(ctx, created.ID); rollbackErr != nil {
 				combinedErr := &tidcommon.ServiceError{
@@ -812,7 +914,129 @@ func (s *importService) importUser(
 		}
 	}
 
+	// The policies come after the user exists, because a policy names the user it governs. A refusal
+	// therefore undoes the create, so a retry does not meet a half-imported user. Policies mandating roles are
+	// replayed now without them, so the user already reaches its units when a role later in the import is
+	// assigned to it there, and in full once the roles are in.
+	policies := req.SharingPolicies
+	deferred := mandatesRoles(policies)
+	if deferred {
+		policies = withoutMandatedRoles(policies)
+	}
+	if outcome := s.applySharingPolicies(ctx, user.UserSharingType, resourceTypeUser,
+		created.ID, "", created.OUID, policies, operationCreate); outcome != nil {
+		s.undoUserCreate(ctx, created.ID)
+		return *outcome
+	}
+	if deferred {
+		*mandating = append(*mandating, userSharingReplay{userID: created.ID, owningOUID: created.OUID,
+			policies: req.SharingPolicies, operation: operationCreate})
+	}
+
 	return successOutcome(resourceTypeUser, created.ID, "", operationCreate)
+}
+
+// replayMandatingUserSharing replays the role-mandating user shares after the roles, returning how many failed.
+func (s *importService) replayMandatingUserSharing(
+	ctx context.Context, mandating []userSharingReplay, results []ImportItemOutcome,
+) int {
+	refused := 0
+	for _, r := range mandating {
+		outcome := s.applySharingPolicies(ctx, user.UserSharingType, resourceTypeUser,
+			r.userID, "", r.owningOUID, r.policies, r.operation)
+		if outcome == nil {
+			continue
+		}
+		if r.operation == operationCreate {
+			s.undoUserCreate(ctx, r.userID)
+		}
+		results[r.resultIndex] = *outcome
+		refused++
+	}
+	return refused
+}
+
+// undoUserCreate removes a user whose sharing policies were refused.
+func (s *importService) undoUserCreate(ctx context.Context, userID string) {
+	if delErr := s.userService.DeleteUser(ctx, userID); delErr != nil {
+		log.GetLogger().Error(ctx, "Failed to remove a user whose sharing policies were refused",
+			log.MaskedString(log.LoggerKeyUserID, userID), log.String("code", delErr.Code))
+	}
+}
+
+// mandatesRoles reports whether any of a user's sharing policies carries a roles rule.
+func mandatesRoles(policies []sharing.PolicyRequest) bool {
+	for _, p := range policies {
+		for _, rules := range overlayRuleSets(p) {
+			if _, ok := rules[user.RolesFieldKey]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// overlayRuleSets lists every set of overlay rules a policy carries, section by section and unit by unit.
+func overlayRuleSets(p sharing.PolicyRequest) []map[string]sharing.OverlayRule {
+	var sets []map[string]sharing.OverlayRule
+	if p.AllUnits != nil {
+		sets = append(sets, p.AllUnits.OverlayRules)
+	}
+	if p.ChildUnits != nil {
+		sets = append(sets, p.ChildUnits.OverlayRules)
+		for _, u := range p.ChildUnits.Units {
+			sets = append(sets, u.OverlayRules)
+		}
+	}
+	if p.OtherTreeRoots != nil {
+		sets = append(sets, p.OtherTreeRoots.OverlayRules)
+		for _, u := range p.OtherTreeRoots.Units {
+			sets = append(sets, u.OverlayRules)
+		}
+	}
+	return sets
+}
+
+// withoutMandatedRoles returns copies of the policies with every roles rule left out.
+func withoutMandatedRoles(policies []sharing.PolicyRequest) []sharing.PolicyRequest {
+	out := make([]sharing.PolicyRequest, len(policies))
+	for i, p := range policies {
+		if p.AllUnits != nil {
+			all := *p.AllUnits
+			all.OverlayRules = withoutRolesRule(all.OverlayRules)
+			p.AllUnits = &all
+		}
+		if p.ChildUnits != nil {
+			child := *p.ChildUnits
+			child.OverlayRules = withoutRolesRule(child.OverlayRules)
+			child.Units = slices.Clone(child.Units)
+			for j := range child.Units {
+				child.Units[j].OverlayRules = withoutRolesRule(child.Units[j].OverlayRules)
+			}
+			p.ChildUnits = &child
+		}
+		if p.OtherTreeRoots != nil {
+			roots := *p.OtherTreeRoots
+			roots.OverlayRules = withoutRolesRule(roots.OverlayRules)
+			roots.Units = slices.Clone(roots.Units)
+			for j := range roots.Units {
+				roots.Units[j].OverlayRules = withoutRolesRule(roots.Units[j].OverlayRules)
+			}
+			p.OtherTreeRoots = &roots
+		}
+		out[i] = p
+	}
+	return out
+}
+
+// withoutRolesRule returns rules less the roles rule, leaving the given map unchanged.
+func withoutRolesRule(rules map[string]sharing.OverlayRule) map[string]sharing.OverlayRule {
+	if _, ok := rules[user.RolesFieldKey]; !ok {
+		return rules
+	}
+	out := maps.Clone(rules)
+	delete(out, user.RolesFieldKey)
+	return out
 }
 
 func (s *importService) importTranslation(ctx context.Context, doc parsedDocument, dryRun bool) ImportItemOutcome {
@@ -844,13 +1068,14 @@ func (s *importService) importTranslation(ctx context.Context, doc parsedDocumen
 	return successOutcome(resourceTypeTranslation, "", req.Language, operationUpdate)
 }
 
-// importResourceServerChildren creates resources and actions nested under a resource server.
-// It first computes permission strings via ProcessResourceServer, then calls the resource service
-// for each resource and action.  Existing resources/actions (on upsert paths) are silently skipped.
+// importResourceServerChildren creates the actions of a resource server and the resources and actions
+// nested under it. It first computes permission strings via ProcessResourceServer, then calls the
+// resource service for each resource and action.  Existing resources/actions (on upsert paths) are
+// silently skipped.
 func (s *importService) importResourceServerChildren(
 	ctx context.Context, serverID string, rs providers.ResourceServer,
 ) *tidcommon.ServiceError {
-	if len(rs.Resources) == 0 {
+	if len(rs.Actions) == 0 && len(rs.Resources) == 0 {
 		return nil
 	}
 
@@ -862,6 +1087,12 @@ func (s *importService) importResourceServerChildren(
 			Error: tidcommon.I18nMessage{
 				DefaultValue: fmt.Sprintf("failed to process resource server children: %v", err),
 			},
+		}
+	}
+
+	for j := range rs.Actions {
+		if svcErr := s.importResourceServerAction(ctx, serverID, nil, rs.Actions[j]); svcErr != nil {
+			return svcErr
 		}
 	}
 
@@ -914,14 +1145,24 @@ func (s *importService) importResourceServerChildren(
 		pathToID[res.Permission] = created.ID
 
 		for j := range res.Actions {
-			action := res.Actions[j]
-			_, actionErr := s.resourceService.CreateAction(ctx, serverID, &created.ID, action)
-			if actionErr != nil && actionErr.Code != resource.ErrorHandleConflict.Code {
-				return actionErr
+			if svcErr := s.importResourceServerAction(ctx, serverID, &created.ID, res.Actions[j]); svcErr != nil {
+				return svcErr
 			}
 		}
 	}
 
+	return nil
+}
+
+// importResourceServerAction creates an action of a resource, or of the resource server itself when
+// resourceID is nil. An action whose handle already exists there is skipped.
+func (s *importService) importResourceServerAction(
+	ctx context.Context, serverID string, resourceID *string, action providers.Action,
+) *tidcommon.ServiceError {
+	_, svcErr := s.resourceService.CreateAction(ctx, serverID, resourceID, action)
+	if svcErr != nil && svcErr.Code != resource.ErrorHandleConflict.Code {
+		return svcErr
+	}
 	return nil
 }
 
@@ -1041,6 +1282,18 @@ func (s *importService) importAgent(
 		InboundAuthProfileReq: req.InboundAuthProfileReq,
 		InboundAuthConfig:     req.InboundAuthConfig,
 	}
+	// An import restores the lifespan as exported, an expired one included; an absent one leaves an
+	// existing agent's unchanged. A malformed value is reported by the dry run as well.
+	if req.ValidUntil != "" {
+		if svcErr := agent.ValidateLifespanFormat(req.ValidUntil); svcErr != nil {
+			return serviceErrorOutcome(resourceTypeAgent, req.ID, "", operationCreate, svcErr)
+		}
+		validUntil := req.ValidUntil
+		rawValidUntil, _ := json.Marshal(validUntil)
+		createReq.ValidUntil = &validUntil
+		updateReq.ValidUntil = rawValidUntil
+	}
+	ctx = agent.WithLifespanRestore(ctx)
 
 	if dryRun {
 		if options.IsUpsertEnabled() && req.ID != "" {
@@ -1348,6 +1601,7 @@ func (s *importService) importNotificationTemplate(
 		design = &notificationtemplate.TemplateDesign{ColorScheme: raw.Design.ColorScheme}
 	}
 	createReq := notificationtemplate.CreateTemplateRequest{
+		ID:          raw.ID,
 		Handle:      raw.Handle,
 		OUID:        raw.OUID,
 		DisplayName: raw.DisplayName,
@@ -1439,4 +1693,92 @@ func (s *importService) importNotificationTemplate(
 		return serviceErrorOutcome(resourceTypeNotificationTemplate, existingID, raw.Handle, operationUpdate, updErr)
 	}
 	return successOutcome(resourceTypeNotificationTemplate, updated.ID, updated.Handle, operationUpdate)
+}
+
+// importAuthorizationDetailType imports an authorization_detail_type document.
+func (s *importService) importAuthorizationDetailType(
+	ctx context.Context, doc parsedDocument, options *ImportOptions, dryRun bool,
+) ImportItemOutcome {
+	if s.authorizationDetailTypeService == nil {
+		return unsupportedAdapterOutcome(resourceTypeAuthorizationDetailType, "authorization details type")
+	}
+
+	id, name := extractDocumentIdentity(doc)
+	t, err := authzdetailmgt.ParseAuthorizationDetailTypeNode(doc.Node)
+	if err != nil {
+		return decodeErrorOutcome(resourceTypeAuthorizationDetailType, id, name, err)
+	}
+
+	if dryRun {
+		return s.dryRunAuthorizationDetailType(ctx, t, options)
+	}
+
+	if options.IsUpsertEnabled() && t.ID != "" {
+		updated, svcErr := s.authorizationDetailTypeService.UpdateAuthorizationDetailType(ctx, t.ID, *t)
+		if svcErr == nil {
+			return successOutcome(resourceTypeAuthorizationDetailType, updated.ID, updated.Name, operationUpdate)
+		}
+
+		if !isNotFoundServiceError(svcErr) {
+			return serviceErrorOutcome(resourceTypeAuthorizationDetailType, t.ID, t.Name, operationUpdate, svcErr)
+		}
+	}
+
+	created, svcErr := s.authorizationDetailTypeService.CreateAuthorizationDetailType(ctx, *t)
+	if svcErr != nil {
+		return serviceErrorOutcome(resourceTypeAuthorizationDetailType, t.ID, t.Name, operationCreate, svcErr)
+	}
+	return successOutcome(resourceTypeAuthorizationDetailType, created.ID, created.Name, operationCreate)
+}
+
+// dryRunAuthorizationDetailType predicts the outcome of importing a type, refusing it in the order the
+// real update or create would.
+func (s *importService) dryRunAuthorizationDetailType(ctx context.Context, t *providers.AuthorizationDetailType,
+	options *ImportOptions) ImportItemOutcome {
+	var existing *providers.AuthorizationDetailType
+	if t.ID != "" {
+		found, svcErr := s.authorizationDetailTypeService.GetAuthorizationDetailType(ctx, t.ID)
+		if svcErr != nil && !isNotFoundServiceError(svcErr) {
+			return serviceErrorOutcome(resourceTypeAuthorizationDetailType, t.ID, t.Name, operationUpdate, svcErr)
+		}
+		existing = found
+	}
+	if existing != nil && options.IsUpsertEnabled() {
+		if existing.IsReadOnly {
+			return serviceErrorOutcome(resourceTypeAuthorizationDetailType, t.ID, t.Name, operationUpdate,
+				&authzdetailmgt.ErrorImmutableType)
+		}
+		if existing.Type != t.Type {
+			return serviceErrorOutcome(resourceTypeAuthorizationDetailType, t.ID, t.Name, operationUpdate,
+				&authzdetailmgt.ErrorTypeValueImmutable)
+		}
+		if svcErr := s.authorizationDetailTypeService.ValidateAuthorizationDetailType(ctx, *t); svcErr != nil {
+			return serviceErrorOutcome(resourceTypeAuthorizationDetailType, t.ID, t.Name, operationUpdate, svcErr)
+		}
+		return successOutcome(resourceTypeAuthorizationDetailType, t.ID, t.Name, operationUpdate)
+	}
+
+	if authzdetailmgt.IsDeclarativeModeEnabled() {
+		return serviceErrorOutcome(resourceTypeAuthorizationDetailType, t.ID, t.Name, operationCreate,
+			&authzdetailmgt.ErrorDeclarativeModeCreateNotAllowed)
+	}
+	// A create takes the credential as sent, so it is not checked against a stored type that holds the id.
+	candidate := *t
+	candidate.ID = ""
+	if svcErr := s.authorizationDetailTypeService.ValidateAuthorizationDetailType(ctx, candidate); svcErr != nil {
+		return serviceErrorOutcome(resourceTypeAuthorizationDetailType, t.ID, t.Name, operationCreate, svcErr)
+	}
+	byValue, svcErr := s.authorizationDetailTypeService.GetAuthorizationDetailTypeByValue(ctx, t.Type)
+	if svcErr != nil {
+		return serviceErrorOutcome(resourceTypeAuthorizationDetailType, t.ID, t.Name, operationCreate, svcErr)
+	}
+	if byValue != nil {
+		return serviceErrorOutcome(resourceTypeAuthorizationDetailType, t.ID, t.Name, operationCreate,
+			&authzdetailmgt.ErrorTypeConflict)
+	}
+	if existing != nil {
+		return serviceErrorOutcome(resourceTypeAuthorizationDetailType, t.ID, t.Name, operationCreate,
+			&authzdetailmgt.ErrorTypeIDConflict)
+	}
+	return successOutcome(resourceTypeAuthorizationDetailType, t.ID, t.Name, operationCreate)
 }

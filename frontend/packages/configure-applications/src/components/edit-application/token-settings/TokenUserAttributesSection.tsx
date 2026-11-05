@@ -1,7 +1,7 @@
 // Copyright 2025-2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import {SettingsCard} from '@thunderid/components';
+import {QueryErrorNotice, SettingsCard} from '@thunderid/components';
 import {
   Box,
   Stack,
@@ -28,7 +28,7 @@ import {
 import {ChevronDown} from '@wso2/oxygen-ui-icons-react';
 import type React from 'react';
 import type {ReactNode} from 'react';
-import {useState} from 'react';
+import {useCallback, useState} from 'react';
 import {useTranslation} from 'react-i18next';
 import JwtPreview from './JwtPreview';
 import TokenConstants from '../../../constants/token-constants';
@@ -170,24 +170,62 @@ interface TokenUserAttributesSectionProps {
    */
   actorSub?: string;
   /**
-   * Scope-to-claims mapping UI, rendered once beneath the ID Token and User Info tab panels.
-   * The mapping feeds both, so it is a single shared instance rather than a copy per tab, and it
-   * is not shown on the Access Token tab, whose attributes are not scope-driven.
+   * Scope-to-claims mapping UI, rendered once on the combined ID Token and User Info tab, above
+   * their panels. The mapping feeds both, so it is a single shared instance rather than a copy per
+   * panel, and it is not shown on the Access Token tab, whose attributes are not scope-driven.
+   * With `accessTokenOnly` it is rendered below the access token instead.
    */
   scopeMapping?: ReactNode;
+  /**
+   * In OAuth mode, whether only the access token applies, for an entity whose grants issue an
+   * access token alone (token exchange, JWT bearer). The access token is then shown on its own,
+   * without the ID token tab and its response format settings. Defaults to false.
+   */
+  accessTokenOnly?: boolean;
+  /**
+   * Whether to show the access token's attribute picker and preview (OAuth mode). Pass false when
+   * the grants never put a user attribute in the access token. Defaults to true.
+   */
+  showAccessTokenAttributes?: boolean;
+  /**
+   * Note shown above the access token attributes (OAuth mode), e.g. to say where a grant takes
+   * the attribute values from.
+   */
+  accessTokenNote?: ReactNode;
+  /**
+   * Whether ID-JAG issuance is on (OAuth mode). The ID token tab then says that its attributes, except
+   * roles and groups, also go into the identity assertions the entity requests. Defaults to false.
+   */
+  idJagEnabled?: boolean;
+  /**
+   * Which user type schemas `userAttributes` came from, so the hint shown when there are none
+   * points at the right fix. Defaults to 'allowedUserTypes'.
+   */
+  userAttributeSource?: 'allowedUserTypes' | 'allUserTypes';
+  /**
+   * Why the user attributes could not all be loaded, if they could not. Shown in place of the
+   * no-attributes hint, with a retry; any attributes that did load are still offered.
+   */
+  userAttributesError?: Error | null;
+  /** Retries loading the user attributes after {@link userAttributesError}. */
+  onRetryUserAttributes?: () => void;
 }
 
 /**
  * Section component for managing user attributes in JWT tokens.
  *
- * Renders in one of two layouts depending on the mode:
- * - **OAuth mode** (`accessTokenAttributes` provided): a single `SettingsCard` containing
- *   three MUI tabs — Access Token, ID Token, and User Info Endpoint — each with a
- *   two-column JWT preview + attribute-selection layout. The ID Token tab also shows
- *   the configured OAuth2 scopes. The User Info tab includes a toggle to either inherit
- *   attributes from the ID token or configure them independently.
+ * Renders in one of three layouts depending on the mode:
+ * - **OAuth mode** (`accessTokenAttributes` provided): a single `SettingsCard` with two tabs. The
+ *   Access Token tab has a two-column JWT preview and attribute selection. The second tab,
+ *   "ID token & user info" ("ID token" when `showUserInfoTab` is false), shows the scope mapping
+ *   above ID Token and User Info sub-tabs, each with its response format and attribute selection.
+ *   The User Info sub-tab includes a toggle to either inherit attributes from the ID token or
+ *   configure them independently.
  * - **Native mode** (`sharedAttributes` provided): a single-panel layout with no tabs,
  *   reusing the same two-column JWT preview + attribute-selection layout.
+ * - **Access token only** (OAuth mode with `accessTokenOnly`): the access token panel on its own,
+ *   with no tabs, followed by the scope mapping. Without `showAccessTokenAttributes` the panel
+ *   holds only the note, and the card is titled for the access token rather than its attributes.
  *
  * @param props - Component props
  * @returns User attributes configuration UI within a SettingsCard
@@ -224,8 +262,23 @@ export default function TokenUserAttributesSection({
   showActorClaim = false,
   actorSub = '<agent-id>',
   scopeMapping = undefined,
+  accessTokenOnly = false,
+  showAccessTokenAttributes = true,
+  accessTokenNote = undefined,
+  idJagEnabled = false,
+  userAttributeSource = 'allowedUserTypes',
+  userAttributesError = null,
+  onRetryUserAttributes = undefined,
 }: TokenUserAttributesSectionProps) {
   const {t} = useTranslation();
+  // Resolves a user type read failure through the `userTypes` catalog (e.g. errors.USRS-1002). `t`
+  // defaults to the `common` namespace, so this forwards explicit `ns:` prefixes unchanged and
+  // prefixes bare keys with `userTypes:`, per getErrorMessage's namespace-resolution contract.
+  const tForUserTypeErrors = useCallback(
+    (key: string, options?: Record<string, unknown>): string =>
+      t(key.includes(':') ? key : `userTypes:${key}`, options),
+    [t],
+  );
   // Which of the two sinks the combined tab was last showing, so switching away to Access Token
   // and back returns to the same one.
   const [lastUserSinkTab, setLastUserSinkTab] = useState<'id' | 'userinfo'>('id');
@@ -415,13 +468,34 @@ export default function TokenUserAttributesSection({
               })}
             </Stack>
           )}
-          {!isLoadingUserAttributes && userAttributes.length === 0 && (
+          {!isLoadingUserAttributes && userAttributesError && (
+            // Spaced from the chips above, which still list what loaded on a partial failure.
+            <Box sx={{mt: userAttributes.length > 0 || currentAttrs.length > 0 ? 2 : 0}}>
+              <QueryErrorNotice
+                error={userAttributesError}
+                t={tForUserTypeErrors}
+                variant="inline"
+                fallbackKey="applications:edit.token.user_attributes_load_error"
+                fallbackDefaultValue="Failed to load the user attributes."
+                onRetry={onRetryUserAttributes}
+              />
+            </Box>
+          )}
+          {/* userAttributesError is only set for 'allUserTypes', where the hint waits until everything
+              has loaded without error; the default source shows it once its list has loaded. */}
+          {!isLoadingUserAttributes && !userAttributesError && userAttributes.length === 0 && (
             <Alert severity="info">
-              {t(
-                'applications:edit.token.no_user_attributes',
-                'No user attributes available. Configure allowed user types for this {{entity}}.',
-                {entity: entityLabel},
-              )}
+              {/* With every user type as the source, allowed user types are not the fix. */}
+              {userAttributeSource === 'allUserTypes'
+                ? t(
+                    'applications:edit.token.no_user_attributes.allUserTypes',
+                    'No user type defines any attributes yet. Add attributes to a user type to select them here.',
+                  )
+                : t(
+                    'applications:edit.token.no_user_attributes',
+                    'No user attributes available. Configure allowed user types for this {{entity}}.',
+                    {entity: entityLabel},
+                  )}
             </Alert>
           )}
         </CardContent>
@@ -442,7 +516,7 @@ export default function TokenUserAttributesSection({
             sx={{px: 0, minHeight: 'auto', '& .MuiAccordionSummary-content': {my: 1}}}
           >
             <Typography variant="body2">
-              {t('applications:edit.token.configure_attributes.toggle', 'Allowed Attributes ({{count}})', {
+              {t('applications:edit.token.configure_attributes.toggle', 'Allowed attributes ({{count}})', {
                 count: currentAttrs.length,
               })}
             </Typography>
@@ -455,7 +529,7 @@ export default function TokenUserAttributesSection({
     return (
       <Box>
         <Typography variant="body2" sx={{mb: 1}}>
-          {t('applications:edit.token.configure_attributes', 'Add or Remove Attributes')}
+          {t('applications:edit.token.configure_attributes', 'Add or remove attributes')}
         </Typography>
         <Typography variant="body2" color="text.disabled" sx={{mb: 2}}>
           {t('applications:edit.token.configure_attributes.hint', 'Click on user attributes to add them to the token.')}
@@ -496,9 +570,17 @@ export default function TokenUserAttributesSection({
   // title and description rather than the multi-token, multi-response wording.
   const resolveCardTitle = (): string => {
     if (!isOAuthMode) {
-      return t('applications:edit.token.token_profile_card.title.native', 'Token Attributes');
+      return t('applications:edit.token.token_profile_card.title.native', 'Token attributes');
     }
-    return t('applications:edit.token.token_profile_card.title', 'Token Attributes & Response');
+    // The access token has no response format settings, so the title drops "& response", and
+    // drops "attributes" too when the grants put none in it.
+    if (accessTokenOnly && !showAccessTokenAttributes) {
+      return t('applications:edit.token.token_profile_card.title.accessTokenWithoutAttributes', 'Access token');
+    }
+    if (accessTokenOnly) {
+      return t('applications:edit.token.token_profile_card.title.accessTokenOnly', 'Access token attributes');
+    }
+    return t('applications:edit.token.token_profile_card.title', 'Token attributes & response');
   };
 
   const resolveCardDescription = (): string => {
@@ -506,6 +588,20 @@ export default function TokenUserAttributesSection({
       return t(
         'applications:edit.token.token_profile_card.description.native',
         'Choose the attributes included in the token issued to this {{entity}}.',
+        {entity: entityLabel},
+      );
+    }
+    if (accessTokenOnly && !showAccessTokenAttributes) {
+      return t(
+        'applications:edit.token.token_profile_card.description.accessTokenWithoutAttributes',
+        'The access token issued to this {{entity}} on behalf of a user.',
+        {entity: entityLabel},
+      );
+    }
+    if (accessTokenOnly) {
+      return t(
+        'applications:edit.token.token_profile_card.description.accessTokenOnly',
+        'The user attributes in the access token issued to this {{entity}} on behalf of a user.',
         {entity: entityLabel},
       );
     }
@@ -524,6 +620,31 @@ export default function TokenUserAttributesSection({
 
   const cardTitle = resolveCardTitle();
   const cardDescription = resolveCardDescription();
+
+  const accessTokenAttributePanel = showAccessTokenAttributes
+    ? renderAttributePanel(accessTokenAttributes ?? [], 'access')
+    : null;
+  // Wrapped only when there is a note to stack above it, so the panel renders as before otherwise.
+  const accessTokenPanel = accessTokenNote ? (
+    <Stack spacing={3}>
+      <Alert severity="info">{accessTokenNote}</Alert>
+      {accessTokenAttributePanel}
+    </Stack>
+  ) : (
+    accessTokenAttributePanel
+  );
+
+  if (isOAuthMode && accessTokenOnly) {
+    return (
+      <SettingsCard title={cardTitle} description={cardDescription}>
+        <Stack spacing={3}>
+          {accessTokenPanel}
+          {scopeMapping}
+        </Stack>
+      </SettingsCard>
+    );
+  }
+
   if (isOAuthMode) {
     // The ID token and UserInfo share one scope-to-claims mapping, so they live under a single
     // top-level tab with the mapping above them: rendering the mapping inside either tab panel
@@ -541,19 +662,19 @@ export default function TokenUserAttributesSection({
             }}
             sx={{borderBottom: 1, borderColor: 'divider'}}
           >
-            <Tab label={t('applications:edit.token.tabs.access_token', 'Access Token')} />
+            <Tab label={t('applications:edit.token.tabs.access_token', 'Access token')} />
             <Tab
               label={
                 showUserInfoTab
-                  ? t('applications:edit.token.tabs.id_token_and_user_info', 'ID Token & User Info')
-                  : t('applications:edit.token.tabs.id_token', 'ID Token')
+                  ? t('applications:edit.token.tabs.id_token_and_user_info', 'ID token & user info')
+                  : t('applications:edit.token.tabs.id_token', 'ID token')
               }
             />
           </Tabs>
 
           <Box sx={{p: 3}}>
             {/* Access Token Tab Panel */}
-            {activeTab === 'access' && <Box>{renderAttributePanel(accessTokenAttributes ?? [], 'access')}</Box>}
+            {activeTab === 'access' && <Box>{accessTokenPanel}</Box>}
 
             {isUserSinkTab && (
               <Stack spacing={3} sx={{mb: 3}}>
@@ -569,8 +690,8 @@ export default function TokenUserAttributesSection({
                     }}
                     sx={{borderBottom: 1, borderColor: 'divider'}}
                   >
-                    <Tab label={t('applications:edit.token.tabs.id_token', 'ID Token')} />
-                    <Tab label={t('applications:edit.token.tabs.user_info_endpoint', 'User Info Endpoint')} />
+                    <Tab label={t('applications:edit.token.tabs.id_token', 'ID token')} />
+                    <Tab label={t('applications:edit.token.tabs.user_info_endpoint', 'User info endpoint')} />
                   </Tabs>
                 )}
               </Stack>
@@ -591,7 +712,7 @@ export default function TokenUserAttributesSection({
                         {/* Response Format */}
                         <Box>
                           <Typography variant="subtitle2" sx={{mb: 1}}>
-                            {t('applications:edit.token.id_token.response_format_heading', 'Response Format')}
+                            {t('applications:edit.token.id_token.response_format_heading', 'Response format')}
                           </Typography>
                           <Typography variant="body2" color="text.disabled" sx={{mb: 2}}>
                             {t(
@@ -603,7 +724,7 @@ export default function TokenUserAttributesSection({
                             {/* Row 1: Response Type (full width) */}
                             <FormControl size="small" fullWidth>
                               <FormLabel>
-                                {t('applications:edit.token.id_token.response_type', 'Response Type')}
+                                {t('applications:edit.token.id_token.response_type', 'Response type')}
                               </FormLabel>
                               <Select
                                 displayEmpty
@@ -667,7 +788,7 @@ export default function TokenUserAttributesSection({
                               <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
                                 <FormControl size="small" sx={{flex: 1, minWidth: 140}}>
                                   <FormLabel>
-                                    {t('applications:edit.token.id_token.encryption_alg', 'Encryption Algorithm')}
+                                    {t('applications:edit.token.id_token.encryption_alg', 'Encryption algorithm')}
                                   </FormLabel>
                                   <Select
                                     displayEmpty
@@ -697,7 +818,7 @@ export default function TokenUserAttributesSection({
 
                                 <FormControl size="small" sx={{flex: 1, minWidth: 140}}>
                                   <FormLabel>
-                                    {t('applications:edit.token.id_token.encryption_enc', 'Content Encryption')}
+                                    {t('applications:edit.token.id_token.encryption_enc', 'Content encryption')}
                                   </FormLabel>
                                   <Select
                                     displayEmpty
@@ -729,6 +850,15 @@ export default function TokenUserAttributesSection({
                           </Stack>
                         </Box>
                         <Divider />
+                        {idJagEnabled && (
+                          <Alert severity="info">
+                            {t(
+                              'applications:edit.token.id_token.id_jag_note',
+                              'Identity assertions (ID-JAG) this {{entity}} requests also include the allowed attributes below, except roles and groups, whenever the ID token carries them.',
+                              {entity: entityLabel},
+                            )}
+                          </Alert>
+                        )}
                         {renderAttributeChips(idAttrs, 'id')}
                       </Stack>
                     </Grid>
@@ -759,7 +889,7 @@ export default function TokenUserAttributesSection({
                         {/* Response Format */}
                         <Box>
                           <Typography variant="subtitle2" sx={{mb: 1}}>
-                            {t('applications:edit.token.user_info.response_format_heading', 'Response Format')}
+                            {t('applications:edit.token.user_info.response_format_heading', 'Response format')}
                           </Typography>
                           <Typography variant="body2" color="text.disabled" sx={{mb: 2}}>
                             {t(
@@ -771,7 +901,7 @@ export default function TokenUserAttributesSection({
                             {/* Row 1: Response Type (full width) */}
                             <FormControl size="small" fullWidth>
                               <FormLabel>
-                                {t('applications:edit.token.user_info.response_type', 'Response Type')}
+                                {t('applications:edit.token.user_info.response_type', 'Response type')}
                               </FormLabel>
                               <Select
                                 displayEmpty
@@ -836,7 +966,7 @@ export default function TokenUserAttributesSection({
                               <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
                                 <FormControl size="small" sx={{flex: 1, minWidth: 140}}>
                                   <FormLabel>
-                                    {t('applications:edit.token.user_info.encryption_alg', 'Encryption Algorithm')}
+                                    {t('applications:edit.token.user_info.encryption_alg', 'Encryption algorithm')}
                                   </FormLabel>
                                   <Select
                                     displayEmpty
@@ -866,7 +996,7 @@ export default function TokenUserAttributesSection({
 
                                 <FormControl size="small" sx={{flex: 1, minWidth: 140}}>
                                   <FormLabel>
-                                    {t('applications:edit.token.user_info.encryption_enc', 'Content Encryption')}
+                                    {t('applications:edit.token.user_info.encryption_enc', 'Content encryption')}
                                   </FormLabel>
                                   <Select
                                     displayEmpty
@@ -917,7 +1047,7 @@ export default function TokenUserAttributesSection({
                                 <Typography variant="body2" fontWeight={500}>
                                   {t(
                                     'applications:edit.token.inherit_from_id_token',
-                                    'Use same attributes as ID Token',
+                                    'Use same attributes as ID token',
                                   )}
                                 </Typography>
                                 <Typography variant="caption" color="text.secondary">

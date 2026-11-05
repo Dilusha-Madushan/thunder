@@ -8,7 +8,7 @@ import {ComponentType, JSX, useState} from 'react';
 import EntryIcon from './EntryIcon';
 import {CodeCard, Cta, Pill, RailHeading, TabStrip} from './primitives';
 import Section from './sections';
-import {DEFAULT_ACCENT, toneColour, useInk} from './theme';
+import {DEFAULT_ACCENT, useCyan, useInk, useToneColour} from './theme';
 import SdkQuickstartDownload from '../../SdkQuickstartDownload';
 import {artifactOf, entryHref, originOf, packageLabel} from '../presentation';
 import useEntryFacts from '../useEntryFacts';
@@ -98,6 +98,8 @@ function HeroAside({aside, accent}: {aside: EcosystemHeroAside; accent: string})
 
 function Hero({entry, accent, version = undefined}: {entry: EcosystemEntry; accent: string; version?: string}): JSX.Element {
   const ink = useInk();
+  const cyan = useCyan();
+  const toneColour = useToneColour();
   const facts = useEntryFacts(entry);
   const official = originOf(entry) === 'official';
   const hero = entry.hero;
@@ -144,8 +146,8 @@ function Hero({entry, accent, version = undefined}: {entry: EcosystemEntry; acce
             icon={official ? <Check size={10} strokeWidth={3} /> : <Users size={10} strokeWidth={2.4} />}
             sx={{
               height: 22,
-              color: official ? '#8bf9fa' : '#fbbf24',
-              borderColor: official ? '#8bf9fa' : 'rgba(251,191,36,0.6)',
+              color: official ? cyan : '#fbbf24',
+              borderColor: official ? cyan : 'rgba(251,191,36,0.6)',
               '& .MuiChip-icon': {color: 'inherit', ml: '6px'},
             }}
           />
